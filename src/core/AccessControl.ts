@@ -33,7 +33,6 @@ import type { QueryOptions } from "@classytic/repo-core/repository";
 import { DEFAULT_ID_FIELD } from "../constants.js";
 import { arcLog } from "../logger/index.js";
 import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
-import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -43,6 +42,7 @@ import type {
 import { createDomainError } from "../utils/errors.js";
 import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
 import { toRepositoryFilter } from "./repositoryFilter.js";
+import { resolveTenancy } from "./tenancy.js";
 
 const log = arcLog("access-control");
 
@@ -157,12 +157,13 @@ export class AccessControl {
     // Tenancy is not being dropped here: the route opted in, and the resource's row policy is
     // still conjoined above, which is what states who may see what once the tenant stops being
     // the answer.
-    const crossTenantRead =
-      (arcContext as ArcInternalMetadata | undefined)?._crossTenantRead === true;
-    const scope = arcContext?._scope;
-    const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (this.tenantField && orgId && !crossTenantRead) {
-      filter = conjoinPolicyFilters(filter, { [this.tenantField]: orgId }) as AnyRecord;
+    //
+    // The decision itself is `resolveTenancy`'s now, the one rule every layer
+    // switches on — so a fifth way to scope a read cannot be taught to three
+    // layers and missed by this one again.
+    const tenancy = resolveTenancy(arcContext as ArcInternalMetadata | undefined, this.tenantField);
+    if (tenancy.mode === "scoped") {
+      filter = conjoinPolicyFilters(filter, { [tenancy.field]: tenancy.orgId }) as AnyRecord;
     }
 
     // Normalize to portable Filter IR when the compound carries `$`-operators
@@ -264,24 +265,18 @@ export class AccessControl {
     item: AnyRecord | null,
     arcContext: ArcInternalMetadata | RequestContext | undefined,
   ): boolean {
-    // Platform-universal resources (tenantField: false) skip org scope check entirely
-    if (!this.tenantField) return true;
-    // A cross-tenant read (`multiTenantPreset({ crossTenant: ['get'] })`) is allowed to return
-    // another tenant's row, so re-checking the org here would 404 the very document the route was
-    // configured to serve. What a stranger may see is the resource's row policy to state, and
-    // `checkPolicyFilters` below still enforces it.
-    if ((arcContext as ArcInternalMetadata | undefined)?._crossTenantRead === true) return true;
-    const scope = (arcContext as ArcInternalMetadata | undefined)?._scope;
-    const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    // No item, or no active org scope (including elevated admins viewing
-    // across tenants) → skip. The elevated-without-org case is already
-    // covered by `!orgId` here, no separate branch needed.
-    if (!item || !orgId) return true;
-    const itemOrgId = item[this.tenantField];
+    // Only a SCOPED read has an organization to check against. Every unscoped
+    // reason passes: an untenanted resource, a declared cross-tenant read
+    // (re-checking would 404 the very row the route was configured to serve —
+    // the resource's row policy, enforced by `checkPolicyFilters`, says what a
+    // stranger may see), an elevated platform view, or a caller with no org.
+    const tenancy = resolveTenancy(arcContext as ArcInternalMetadata | undefined, this.tenantField);
+    if (tenancy.mode !== "scoped" || !item) return true;
+    const itemOrgId = item[tenancy.field];
     // SECURITY: Deny records missing the tenant field when org scope is active.
     // This prevents legacy/unscoped records from leaking across orgs.
     if (!itemOrgId) return false;
-    return String(itemOrgId) === String(orgId);
+    return String(itemOrgId) === String(tenancy.orgId);
   }
 
   /** Check ownership for update/delete (ownedByUser preset) */

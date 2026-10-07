@@ -130,6 +130,25 @@ When a module reads another's export it must compose AFTER it; encoding that by 
 
 **Cross-module contracts are PORTS, never lookups.** The consumer declares a port in its deps (`LedgerBridge`, `CatalogBridge`); the host adapts the producer's export to it. A container lookup would weld modules together and kill the service-boundary property — a port can be re-implemented over HTTP/events without the consumer knowing.
 
+## The module graph (2.42)
+
+A module states its shape, and arc resolves, verifies and publishes it at boot:
+
+```ts
+defineModule({ name: 'order', publishes: ['order:placed', 'order:cancelled'] });
+defineModule({ name: 'order-accounting', kind: 'bridge', dependsOn: ['order', 'accounting'],
+  eventHandlers: [{ event: 'order:placed', handler: postSale }] });
+
+createApp({ modules, moduleGraph: { events: 'strict', externalEvents: ['auth:*'] } });
+```
+
+- **`kind: 'bridge'` joins two domains and owns every process between them.** It activates only when every `dependsOn` module is composed. When one is missing, the bridge drops out before ordering (logged, never an error), so switching a domain off needs no gate code, and a bridge built on a dropped bridge drops too. A thunk must run before its `dependsOn` is known; a `LazyBridge` (`{ kind: 'bridge', name, dependsOn, load }`) is decided on its declaration, so a dropped one is never imported.
+- **An event has ONE owner, inside its namespace.** A module's namespace is its name unless it sets `eventNamespace`. `verifyModuleGraph` reports `duplicate-owner`, `outside-namespace` (a domain publishing another domain's events, which is a bridge's job) and `no-publisher` (a consumed event that no active module publishes and that `externalEvents` does not cover).
+- **`events`**: `'strict'` refuses to boot, `'warn'` logs each issue, and `'off'` (the default) skips verification.
+- **Owned without declaring.** A module owns its resources' CRUD auto-events (only the mounted mutations) and the resource names as namespaces. A prefix owns `ns:x` and a kernel's `ns.x`; `eventNamespace` may list several. A host adds the facts IT emits with `extendModule(mod, { publishes })`.
+- **Views over one analysis.** `dependentsOf(graph, m)` is the blast radius of switching `m` off; `eventTopology(graph)` gives event `cycles` and dependency `layers`.
+- **The graph is data.** `fastify.arc.moduleGraph` holds the nodes, with each node's `consumes` taken from its handlers, not declared separately. `renderModuleGraph(graph)` renders it as Markdown. Generate the file from it and don't hand-write a module map, which drifts.
+
 ## Events + outbox
 
 Contract lives in `@classytic/primitives` `/events` + `/outbox`; runtime lives in arc (`EventOutbox` relay, backoff, stores, transports). Modules receive `eventTransport` (and optionally an `OutboxStore`) via deps, publish in domain verbs, and subscribe via `eventHandlers`. The outbox relay belongs to the app — `createOutboxModule` owns the slot and its schedule arm. See [[events]] and [[delivery-guarantees]].

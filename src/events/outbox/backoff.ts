@@ -53,9 +53,9 @@ export interface ExponentialBackoffOptions {
  * @example Tuning for a faster transport
  * ```typescript
  * exponentialBackoff({ attempt: 3, baseMs: 250, maxMs: 10_000, jitter: 0.3 });
- * // attempt=1 → ~250ms   ±30%
- * // attempt=2 → ~500ms   ±30%
- * // attempt=3 → ~1000ms  ±30%
+ * // attempt=1 → 250–325ms   (+0–30%: jitter only ever DELAYS, never schedules early)
+ * // attempt=2 → 500–650ms
+ * // attempt=3 → 1000–1300ms
  * // attempt=10 → capped at 10_000ms
  * ```
  */

@@ -328,7 +328,7 @@ describe("RouteSchemaOptions.fieldRules MongoKit alignment", () => {
         password: { systemManaged: true },
         email: { immutableAfterCreate: true },
       },
-      query: { allowedPopulate: ["author"], allowedLookups: ["categories"] },
+      query: { allowedPopulate: ["author"], allowedLookups: { categories: { scope: () => ({}) } } },
     };
 
     expect(options.hiddenFields).toContain("password");

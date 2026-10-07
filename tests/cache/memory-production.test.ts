@@ -57,6 +57,62 @@ describe("MemoryCacheStore — production scenarios", () => {
     expect(await store.get("k-49")).toBe(payload);
   });
 
+  it("evicts down to the WATERMARK, not merely back under the budget", async () => {
+    const store = track(
+      new MemoryCacheStore<string>({
+        maxEntries: 10_000,
+        maxMemoryBytes: 2_000,
+        evictionWatermark: 0.5,
+      }),
+    );
+    // Stopping at the budget left usage pinned at ~2000 so every later write
+    // evicted again; the watermark exists to buy headroom.
+    for (let i = 0; i < 50; i++) await store.set(`k-${i}`, "x".repeat(180));
+    expect(store.stats().memoryBytes).toBeLessThanOrEqual(2_000);
+
+    const before = store.stats().evictions;
+    let crossed = false;
+    for (let i = 50; i < 200 && !crossed; i++) {
+      await store.set(`k-${i}`, "x".repeat(180));
+      if (store.stats().evictions > before) {
+        crossed = true;
+        expect(store.stats().memoryBytes).toBeLessThanOrEqual(1_000);
+      }
+    }
+    expect(crossed).toBe(true);
+  });
+
+  it("increment() honours the memory budget, not only maxEntries", () => {
+    const store = track(new MemoryCacheStore<number>({ maxEntries: 10_000, maxMemoryBytes: 100 }));
+    for (let i = 0; i < 50; i++) store.increment(`counter-${i}`, 1, 60);
+    expect(store.stats().memoryBytes).toBeLessThanOrEqual(100);
+    expect(store.stats().evictions).toBeGreaterThan(0);
+    // The most recent counter survives eviction.
+    expect(store.increment("counter-49", 1, 60)).toBe(2);
+  });
+
+  it("counts key bytes toward the budget — long keys are not free", async () => {
+    const store = track(new MemoryCacheStore<number>({ maxEntries: 10_000 }));
+    await store.set("k", 1);
+    const short = store.stats().memoryBytes;
+    await store.clear();
+    await store.set("k".repeat(500), 1);
+    expect(store.stats().memoryBytes - short).toBe(499);
+  });
+
+  it.each([
+    ["maxEntries", Number.NaN],
+    ["maxEntryBytes", Number.POSITIVE_INFINITY],
+    ["maxMemoryBytes", Number.NaN],
+    ["evictionWatermark", Number.NaN],
+    ["cleanupIntervalMs", Number.NaN],
+    ["defaultTtlSeconds", Number.NaN],
+  ])("rejects a non-finite %s at construction instead of silently disabling it", (name, value) => {
+    expect(() => new MemoryCacheStore({ [name]: value })).toThrow(
+      new RegExp(`${name} must be a finite number`),
+    );
+  });
+
   // ── High-volume LRU pressure ──
 
   it("maintains a bounded entry count under sustained writes", async () => {

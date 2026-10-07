@@ -71,6 +71,11 @@ export interface PressureOptions {
   thresholds?: PressureThresholds;
   /** Sampling cadence in ms. Default 1000. */
   intervalMs?: number;
+  /**
+   * How long one signal read may take before it counts as "cannot measure" (reported as 0, like a
+   * throwing reader). A stuck read is never restarted while pending. Default: `intervalMs`.
+   */
+  readTimeoutMs?: number;
   /** Include the built-in event-loop-utilisation signal. Default true. */
   eventLoopUtilization?: boolean;
   /** Fired when the state CHANGES — not on every sample. */
@@ -154,6 +159,29 @@ export const pressurePlugin: FastifyPluginAsync<PressureOptions> = async (
   const broken = new Set<string>();
   let snapshot: PressureSnapshot = { state: "ok", worst: undefined, signals: {} };
 
+  const intervalMs = options.intervalMs ?? 1000;
+  const readTimeoutMs = options.readTimeoutMs ?? intervalMs;
+  /** A signal whose read has not settled is not read again — the next sample waits on the same read. */
+  const pendingReads = new Map<string, Promise<number>>();
+  const readSignal = (signal: PressureSignal): Promise<number> => {
+    let read = pendingReads.get(signal.name);
+    if (!read) {
+      read = Promise.resolve()
+        .then(() => signal.read())
+        .finally(() => pendingReads.delete(signal.name));
+      pendingReads.set(signal.name, read);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`read exceeded ${readTimeoutMs}ms`)),
+        readTimeoutMs,
+      );
+      timer.unref?.();
+    });
+    return Promise.race([read, timeout]).finally(() => clearTimeout(timer));
+  };
+
   async function sample(): Promise<void> {
     const values: Record<string, number> = {};
     let worst: { name: string; value: number } | undefined;
@@ -161,7 +189,7 @@ export const pressurePlugin: FastifyPluginAsync<PressureOptions> = async (
     for (const signal of signals) {
       let value = 0;
       try {
-        value = clamp(await signal.read());
+        value = clamp(await readSignal(signal));
         broken.delete(signal.name);
       } catch (error) {
         // A failed reader reports 0, never 1: treating "cannot measure" as
@@ -190,9 +218,15 @@ export const pressurePlugin: FastifyPluginAsync<PressureOptions> = async (
     }
   }
 
+  // One sample at a time: a slow tick is skipped, never stacked.
+  let sampling = false;
   const timer = setInterval(() => {
-    void sample();
-  }, options.intervalMs ?? 1000);
+    if (sampling) return;
+    sampling = true;
+    void sample().finally(() => {
+      sampling = false;
+    });
+  }, intervalMs);
   timer.unref?.();
   fastify.addHook("onClose", async () => clearInterval(timer));
 

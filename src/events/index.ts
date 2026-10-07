@@ -53,6 +53,8 @@ export {
   type CrudEventSuffix,
   crudEventType,
 } from "./eventTypes.js";
+export type { OutboxHealth, OutboxHealthStore } from "./outbox/health.js";
+export { DEFAULT_RELAY_LAG_UNHEALTHY_MS, readOutboxHealth } from "./outbox/health.js";
 // Transactional Outbox — arc ships the RUNTIME only. The outbox CONTRACT
 // (`OutboxStore`, `OutboxWriteOptions` / claim / ack / fail option types,
 // `OutboxFailurePolicy`, `OutboxOwnershipError`, `InvalidOutboxEventError`)
@@ -69,7 +71,11 @@ export type {
   RelayResult,
 } from "./outbox.js";
 export { EventOutbox, exponentialBackoff, MemoryOutboxStore } from "./outbox.js";
-export type { OutboxModuleExports, OutboxModuleOptions } from "./outbox-module.js";
+export type {
+  OutboxDrainResult,
+  OutboxModuleExports,
+  OutboxModuleOptions,
+} from "./outbox-module.js";
 /**
  * The outbox as a MODULE — the store becomes a `dependsOn` slot instead of a value the host
  * threads into every consumer by hand. Two hosts independently missed one consumer that way and
@@ -95,6 +101,7 @@ export type { RetryOptions } from "./retry.js";
 // Retry & Dead Letter Queue (transport-agnostic)
 export { createDeadLetterPublisher, withRetry } from "./retry.js";
 export type {
+  FastifyEventBus,
   PayloadOf,
   WrapWithBoundaryOptions,
   WrapWithSchemaOptions,

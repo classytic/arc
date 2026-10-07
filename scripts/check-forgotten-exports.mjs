@@ -63,19 +63,12 @@ const ROOT = process.cwd();
 const DIST = path.join(ROOT, "dist");
 
 /**
- * Down-only ratchet. Twenty-eight of these predate the check, spread across
- * fifteen entries — converting them all is a public-surface change that does not
- * belong in a release, and a gate that blocks every commit gets deleted rather
- * than satisfied. Non-growth is enforceable today and converges.
- *
- * LOWER as they are fixed. At 0 the rule is absolute and this constant can go.
- * Do not raise it: a rise means a NEW public signature is unnameable.
+ * TypeScript/ES/web-platform built-ins — cheap pre-filter. The web globals
+ * matter: arc declares an OpenAPI `Response` interface, so without this the
+ * global `Response` that `toFetchHandler` returns read as a local type.
  */
-const BASELINE = 25;
-
-/** TypeScript/ES built-ins never declared by us — cheap pre-filter. */
 const BUILTIN =
-  /^(Array|Awaited|BigInt|Boolean|Buffer|Capitalize|Date|Error|Exclude|Extract|Function|InstanceType|Iterable|AsyncIterable|IterableIterator|Map|NonNullable|Number|Object|Omit|Parameters|Partial|Pick|Promise|PromiseLike|Readonly|ReadonlyArray|ReadonlyMap|ReadonlySet|Record|RegExp|Required|Return[A-Za-z]*|Set|String|Symbol|This[A-Za-z]*|Uint8Array|WeakMap|WeakSet|NoInfer|Uppercase|Lowercase)$/;
+  /^(Response|Request|Headers|URL|URLSearchParams|AbortSignal|ReadableStream|Array|Awaited|BigInt|Boolean|Buffer|Capitalize|Date|Error|Exclude|Extract|Function|InstanceType|Iterable|AsyncIterable|IterableIterator|Map|NonNullable|Number|Object|Omit|Parameters|Partial|Pick|Promise|PromiseLike|Readonly|ReadonlyArray|ReadonlyMap|ReadonlySet|Record|RegExp|Required|Return[A-Za-z]*|Set|String|Symbol|This[A-Za-z]*|Uint8Array|WeakMap|WeakSet|NoInfer|Uppercase|Lowercase)$/;
 
 function distFiles(dir, out = []) {
   for (const entry of readdirSync(dir)) {
@@ -180,27 +173,14 @@ for (const [name, { owner, file }] of findings) {
   console.error(`    ${name} — in ${owner}, ${path.relative(ROOT, file)}, but never exported`);
 }
 
-if (findings.size > BASELINE) {
+if (findings.size > 0) {
   console.error(
-    `\n✖ Forgotten exports: ${findings.size} (baseline ${BASELINE}).\n\n` +
+    `\n✖ Forgotten exports: ${findings.size}.\n\n` +
       "A type in a public parameter or return position must be importable, or callers\n" +
       "can pass a literal but cannot declare a variable for it. Export it from the entry\n" +
-      "(alias it if the name would collide).\n",
+      "(alias it if the name would collide), or narrow the signature to a public type.\n",
   );
   process.exit(1);
 }
 
-if (findings.size < BASELINE) {
-  console.log(
-    `check:forgotten-exports — ${findings.size} (baseline ${BASELINE}). ` +
-      `Progress: LOWER BASELINE to ${findings.size} to lock it in.`,
-  );
-  process.exit(0);
-}
-
-console.log(
-  findings.size === 0
-    ? `✔ No forgotten exports — ${files.length} declaration file(s) scanned.`
-    : `check:forgotten-exports — ${findings.size}, at baseline. No growth. ` +
-        `(${files.length} declaration file(s) scanned.)`,
-);
+console.log(`✔ No forgotten exports — ${files.length} declaration file(s) scanned.`);

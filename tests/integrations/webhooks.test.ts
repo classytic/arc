@@ -252,6 +252,21 @@ describe("Webhook Plugin", () => {
       expect(urls).not.toContain("https://c.com");
     });
 
+    it("matches `:`-namespaced events (`order:*`), the transports' convention", async () => {
+      // A local matcher only knew `prefix.*`, so `order:*` never fired.
+      const fetchMock = okFetch();
+      app = await createWebhookApp(fetchMock);
+      await app.webhooks.register({
+        id: "wh-colon",
+        url: "https://colon.com",
+        events: ["order:*"],
+        secret: "s",
+      });
+      await app.events.publish("order:placed", { id: "1" });
+      await waitForDelivery(app, 1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it("one subscriber failure does NOT block delivery to others", async () => {
       let callCount = 0;
       const fetchMock = vi.fn().mockImplementation((url: string) => {

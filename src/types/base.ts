@@ -43,13 +43,18 @@ declare module "fastify" {
     /**
      * This read is deliberately NOT scoped to a tenant — a marketplace listing.
      *
-     * Set by `multiTenantPreset({ crossTenant: [...] })`. Tenancy is applied in four separate
-     * places for a read (the preset middleware, `QueryResolver`, `buildTenantRepoOptions` and the
-     * post-fetch `checkOrgScope`), each deriving the org from the scope on its own, so a decision
-     * made in one of them is silently re-made by the other three. This flag is how that decision
-     * travels. Never set from user input.
+     * Set by `multiTenantPreset({ crossTenant: [...] })`, read by `resolveTenancy`
+     * (`core/tenancy.ts`) — the one rule every read-scoping layer switches on.
+     * Never set from user input.
      */
     _crossTenantRead?: boolean;
+    /**
+     * Resolved tenant dimensions (`{ organizationId, teamId, … }`) from
+     * `multiTenantPreset`'s multi-field specs. Forwarded to the repository as
+     * top-level options by `buildTenantRepoOptions`, for kits whose tenant
+     * plugin reads `context.<field>`. Never set from user input.
+     */
+    _tenantFields?: Record<string, unknown>;
   }
 }
 

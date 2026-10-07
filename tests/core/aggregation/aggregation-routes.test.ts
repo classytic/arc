@@ -460,7 +460,7 @@ describe("aggregation routes — executionHints", () => {
           permissions: allowPublic(),
           timeout: 5_000,
         }),
-        // indexHint.leadingKeys → executionHints.indexHint as { field: 1, ... }
+        // indexHint.leadingKeys → executionHints.indexHint as the declared expectation
         hinted: defineAggregation({
           groupBy: "status",
           measures: { count: "count" },
@@ -499,11 +499,11 @@ describe("aggregation routes — executionHints", () => {
     expect(req.executionHints.maxTimeMs).toBe(5_000);
   });
 
-  it("indexHint.leadingKeys → executionHints.indexHint as { field: 1 }", async () => {
+  it("indexHint.leadingKeys → executionHints.indexHint as { leadingKeys } (checked by the kit, never forced)", async () => {
     aggregateStub.mockClear();
     await app.inject({ method: "GET", url: "/orders-hints/aggregations/hinted" });
     const req = aggregateStub.mock.calls[0][0];
-    expect(req.executionHints?.indexHint).toEqual({ organizationId: 1, status: 1 });
+    expect(req.executionHints?.indexHint).toEqual({ leadingKeys: ["organizationId", "status"] });
   });
 
   it("no hints → executionHints absent from request", async () => {

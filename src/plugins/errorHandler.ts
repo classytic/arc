@@ -277,8 +277,15 @@ async function errorHandlerPluginFn(
       if (status >= 500 && wire.code === "arc.internal_error" && !exposeInternalMessages) {
         wire.message = "Internal Server Error";
       }
-      if (status >= 500) {
+      // A DECLARED 503 (a coded ArcError — an open circuit, a shed request)
+      // is the server refusing on purpose, not a defect. Logging it at error
+      // level with a stack once per refused call buries real 5xx during
+      // exactly the outage that produces thousands of them.
+      const deliberateUnavailable = status === 503 && wire.code !== "arc.internal_error";
+      if (status >= 500 && !deliberateUnavailable) {
         request.log.error({ err: error, status }, "Server error");
+      } else if (deliberateUnavailable) {
+        request.log.warn({ code: wire.code, status }, "Service unavailable");
       } else if (status >= 400) {
         request.log.warn({ err: error, status }, "Client error");
       }
@@ -290,9 +297,33 @@ async function errorHandlerPluginFn(
         request.log[causeLevel]({ cause: error.cause }, "Error cause chain");
       }
 
+      // `Retry-After` from any thrown error that knows it (`RateLimitError`,
+      // `CircuitBreakerError`, or a host error with a numeric `retryAfter` in
+      // seconds). Both carried the number and neither ever reached the
+      // header, so clients — and every SDK's built-in retry logic — retried on
+      // their own schedule. Only for 429/503, where RFC 9110/6585 give it
+      // meaning.
+      if (status === 429 || status === 503) {
+        const retryAfter = retryAfterSeconds(error);
+        if (retryAfter !== undefined) void reply.header("retry-after", String(retryAfter));
+      }
+
       return reply.status(status).send(wire);
     },
   );
+}
+
+/**
+ * Seconds to put in `Retry-After`, read from the thrown error's own
+ * `retryAfter` property (the convention `RateLimitError` set). Whole seconds,
+ * never below 1 — `0` would tell every client to retry immediately, which is
+ * the stampede the header exists to prevent.
+ */
+function retryAfterSeconds(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const value = (error as { retryAfter?: unknown }).retryAfter;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.max(1, Math.ceil(value));
 }
 
 /**

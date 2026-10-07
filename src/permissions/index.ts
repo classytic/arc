@@ -53,6 +53,7 @@ export { scopeOf } from "./context.js";
 // Core primitives — auth/role/ownership + combinators
 // ──────────────────────────────────────────────────────────────────────
 export {
+  type AllowPublicOptions,
   allOf,
   allow,
   allowPublic,
@@ -60,6 +61,7 @@ export {
   deny,
   denyAll,
   not,
+  type PublicPolicy,
   requireAuth,
   requireOwnership,
   requirePlatformRole,
@@ -95,6 +97,7 @@ export type {
   FieldPermission,
   FieldPermissionMap,
   FieldPermissionType,
+  FieldWritePermissionResult,
 } from "./fields.js";
 export {
   applyFieldReadPermissions,
@@ -157,6 +160,7 @@ export {
   authenticated,
   fullPublic,
   ownerWithAdminBypass,
+  type PermissionOverrides,
   permissionMatrix,
   publicRead,
   publicReadAdminWrite,

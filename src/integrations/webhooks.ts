@@ -16,7 +16,7 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { createChildEvent } from "@classytic/primitives/events";
+import { createChildEvent, matchEventPattern } from "@classytic/primitives/events";
 import type { OutboxFailurePolicy, OutboxStore } from "@classytic/primitives/outbox";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
@@ -70,24 +70,15 @@ export interface WebhookPluginOptions {
   timeout?: number;
   /** Max delivery log entries kept in memory (default: 1000) */
   maxLogEntries?: number;
-  /**
-   * Max concurrent deliveries per event (default: 5). Set to 1 for
-   * sequential. Must be >= 1 — the plugin throws at registration otherwise
-   * (a zero would make the delivery loop spin forever without progress).
-   */
+  /** Max concurrent deliveries per event, integer >= 1 (default: 5). */
   concurrency?: number;
   /**
-   * In-process retry for failed deliveries. Default: single attempt.
-   * Retries fire on network errors, timeouts, 429 and 5xx — NOT on other
-   * 4xx (the receiver rejected the payload; repeating it can't succeed).
-   * Each attempt is re-signed with a fresh timestamp so the receiver's
-   * replay-tolerance window applies per attempt; `x-arc-webhook-delivery`
-   * stays constant, which is exactly what receiver-side dedup keys on.
+   * In-process retry (default: single attempt) on network errors, timeouts,
+   * 429 and 5xx — not other 4xx. Each attempt is re-signed with a fresh
+   * timestamp; `x-arc-webhook-delivery` stays constant for receiver dedup.
    *
-   * This is BEST-EFFORT: attempts live in this process, so a crash or
-   * deploy drops the remaining ones. Guaranteed delivery is a durable-job
-   * concern (queue keyed by subscription + delivery id) — pair the events
-   * outbox with a worker if you need it.
+   * BEST-EFFORT: a crash or deploy drops remaining attempts. Use `durable`
+   * for guaranteed delivery.
    */
   retry?: {
     /** Total attempts including the first. Must be an integer >= 1. */
@@ -96,39 +87,24 @@ export interface WebhookPluginOptions {
     backoffMs?: number;
   };
   /**
-   * URL policy hook — the SSRF seam for tenant-registered URLs. Throw to
-   * reject. Pass {@link defaultWebhookUrlPolicy} to require HTTPS and block
-   * localhost / link-local / private-network / cloud-metadata destinations,
-   * or supply your own (allowlists, per-tenant rules).
+   * URL policy — the SSRF seam for tenant-registered URLs; throw to reject.
+   * Pass {@link defaultWebhookUrlPolicy} or your own. No policy applies by
+   * default (internal webhooks to private services are legitimate).
    *
-   * Enforcement points when set:
-   *  - `register()` — new subscriptions are validated BEFORE saving.
-   *  - Plugin init — every PERSISTED subscription is re-validated; failures
-   *    are excluded from dispatch and logged (they stay in the store for
-   *    the host to fix), so pre-policy rows and out-of-band store writes
-   *    can't bypass the policy.
-   *  - Delivery — `fetch` runs with `redirect: "manual"`, so an allowed
-   *    public URL can't 302 into a blocked private/metadata target; a 3xx
-   *    records as a failed delivery.
-   *
-   * Arc deliberately ships no DEFAULT policy — deployments differ (internal
-   * webhooks to private services are legitimate), and DNS-rebinding
-   * protection belongs at the actual outbound network boundary, not in the
-   * framework.
+   * When set it is enforced:
+   *  - on `register()`, before saving;
+   *  - at init on every PERSISTED subscription — failures are excluded from
+   *    dispatch and logged, so pre-policy / out-of-band rows can't bypass it;
+   *  - at delivery via `redirect: "manual"`, so an allowed URL can't 302 into
+   *    a blocked target (a 3xx records as failed).
    */
   validateUrl?: (url: URL, subscription: WebhookSubscription) => void | Promise<void>;
   /**
-   * DURABLE delivery — the outbox→worker composition. When set, a matching
-   * event no longer POSTs inline: each (event × subscription) pair becomes ONE
-   * durable row in the given outbox store, and `createDurableWebhookModule`'s
-   * relay claims, delivers, retries with backoff, and dead-letters — all
-   * surviving crash and deploy, which the in-process `retry` cannot.
-   *
-   * The row id is deterministic (`<event id>:wh:<subscription id>`) and the
-   * save carries it as `dedupeKey`, so an at-least-once upstream (Redis
-   * Streams, an events outbox) redelivering the same event enqueues each
-   * delivery exactly once. Mutually exclusive with `retry` — the retry axis
-   * moves to the relay's failure policy.
+   * Durable delivery: each (event × subscription) becomes one outbox row that
+   * `createDurableWebhookModule`'s relay delivers, retries and dead-letters,
+   * surviving crash and deploy. The row id `<event id>:wh:<subscription id>`
+   * doubles as `dedupeKey`, so an at-least-once upstream enqueues each
+   * delivery once. Mutually exclusive with `retry`.
    */
   durable?: {
     /** Outbox store the delivery rows are written to — share it with the module. */
@@ -142,16 +118,9 @@ export type WebhookSubscriptionPublic = Omit<WebhookSubscription, "secret">;
 export interface WebhookManager {
   register(sub: WebhookSubscription): Promise<void> | void;
   unregister(id: string): Promise<void> | void;
-  /**
-   * Enumerate subscriptions WITHOUT their secrets — safe to surface in
-   * admin UIs / API responses. Use {@link WebhookManager.getSecret} for
-   * the privileged retrieval path.
-   */
+  /** Subscriptions WITHOUT secrets — safe for admin UIs / API responses. */
   list(): WebhookSubscriptionPublic[];
-  /**
-   * Privileged secret retrieval — separate from `list()` so enumerating
-   * subscriptions never leaks signing material into logs or UIs.
-   */
+  /** Privileged secret retrieval, kept out of `list()` so enumeration never leaks it. */
   getSecret(id: string): string | undefined;
   deliveryLog(limit?: number): WebhookDeliveryRecord[];
 }
@@ -163,29 +132,15 @@ declare module "fastify" {
 }
 
 // ============================================================================
-// HMAC Signing & Verification
-// ============================================================================
-
-// The legacy body-only signing format (`signPayload` → `x-webhook-signature`)
-// was REMOVED in 2.24: it allowed indefinite replay of a captured request and
-// carried the event id on an unsigned header. Arc emits ONLY the v1 contract
-// (`x-arc-webhook-*`, timestamp + delivery-id bound — `signWebhook` /
-// `verifyWebhook` below). `verifySignature` stays as a generic INBOUND
-// verifier for third-party `sha256=<hex>` webhooks arc receives.
-
-// ============================================================================
 // v1 signing contract — replay-bounded, delivery-id-bound
 // ============================================================================
 
 /**
- * Signed-string layout for the v1 webhook contract:
+ * Sign a v1 webhook. Signed string: `v1.<timestampMs>.<deliveryId>.<body>`.
  *
- *     v1.<timestampMs>.<deliveryId>.<body>
- *
- * Binding the timestamp bounds replay to the verifier's tolerance window,
- * and binding the delivery id lets receivers deduplicate redeliveries on an
- * AUTHENTICATED value (the legacy `x-webhook-id` header was unsigned — an
- * attacker replaying a captured request could change it and defeat dedup).
+ * The timestamp bounds replay to the verifier's tolerance window; the
+ * delivery id is signed so receivers dedupe on an AUTHENTICATED value (an
+ * unsigned id header could be altered on replay to defeat dedup).
  *
  * Wire headers:
  *   - `x-arc-webhook-signature: v1=<hex hmac-sha256>`
@@ -286,19 +241,15 @@ export function verifyWebhook(input: VerifyWebhookInput): VerifyWebhookResult {
 // URL policy — opt-in SSRF guard for tenant-registered webhook URLs
 // ============================================================================
 
-/**
- * Opt-in URL policy for tenant-registered webhooks: requires HTTPS and
- * rejects loopback, link-local, private-network, and cloud-metadata
- * destinations. Pass as `validateUrl: defaultWebhookUrlPolicy`.
- *
- * Scope note: this validates the URL LITERAL at registration time. It does
- * not resolve DNS — rebinding/level-2 SSRF protection belongs at the actual
- * outbound network boundary (egress proxy, network policy), where the real
- * connection target is known. Internal deployments that legitimately POST
- * to private services should write their own narrower policy instead.
- */
 const BLOCKED_V4 = /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|169\.254\.|0\.)/; // loopback, RFC1918, link-local (incl. 169.254.169.254 metadata), unspecified
 
+/**
+ * Opt-in URL policy: requires HTTPS and rejects loopback, link-local,
+ * private-network and cloud-metadata hosts. Pass as `validateUrl`.
+ *
+ * Validates the URL LITERAL only — no DNS resolution. Rebinding protection
+ * belongs at the outbound network boundary (egress proxy / network policy).
+ */
 export function defaultWebhookUrlPolicy(url: URL): void {
   if (url.protocol !== "https:") {
     throw new Error(`Webhook URL must use https (got ${url.protocol}//)`);
@@ -310,11 +261,8 @@ export function defaultWebhookUrlPolicy(url: URL): void {
   const blockedName =
     host === "localhost" || host.endsWith(".localhost") || host === "metadata.google.internal";
 
-  // IPv6 literals: loopback/unspecified, unique-local fc00::/7, link-local
-  // fe80::/10, and IPv4-mapped — police the embedded v4, it reaches the
-  // same private/metadata targets the v4 rules block. WHATWG URL
-  // CANONICALIZES `::ffff:169.254.169.254` into hex groups
-  // (`::ffff:a9fe:a9fe`), so decode both spellings back to dotted-quad.
+  // IPv4-mapped IPv6 reaches the same targets, so police the embedded v4.
+  // WHATWG URL canonicalizes it to hex groups (`::ffff:a9fe:a9fe`) — decode both spellings.
   const isV6 = host.includes(":");
   const mappedV4 = isV6 ? decodeMappedV4(host) : undefined;
   const blockedV6 =
@@ -362,46 +310,24 @@ export interface VerifySignatureOptions {
 }
 
 /**
- * Verify an INBOUND third-party webhook signature using timing-safe
- * comparison — for webhooks arc RECEIVES (GitHub, Stripe, ...), not for
- * arc-to-arc delivery. Arc's own outbound contract is v1
- * (`x-arc-webhook-*`) — receivers of arc webhooks use {@link verifyWebhook}.
+ * Timing-safe verification of an INBOUND third-party webhook (GitHub,
+ * Stripe, ...). Defaults to `sha256=<hex>`; prefix/algorithm configurable.
+ * Receivers of arc's own webhooks use {@link verifyWebhook}.
  *
- * Defaults to the common `sha256=<hex>` format; configurable for any HMAC
- * scheme via options.
+ * ⚠ `body` must be the exact signed bytes: opt the route into
+ * `config: { rawBody: true }` (arc registers fastify-raw-body with
+ * `global: false`) and pass `req.rawBody` — re-serialised JSON won't match.
  *
- * ⚠ The `body` argument must be the exact bytes the sender signed. Fastify
- * parses JSON bodies by default and the re-serialised object will NOT match
- * the original signature. Register `fastify-raw-body` (arc's createApp does
- * this automatically with `global: false`) and opt the route in via
- * `config: { rawBody: true }`, then pass `req.rawBody` here.
- *
- * @param body      - Raw request body (string or Buffer — must be the exact bytes the sender signed)
- * @param secret    - Shared secret between sender and receiver
- * @param signature - The signature header value (e.g. `req.headers['x-webhook-signature']`)
- * @param options   - Override prefix/algorithm for non-Arc senders
- * @returns `true` if valid, `false` otherwise — never throws
+ * @returns `true` if valid, `false` otherwise. Throws `TypeError` only when
+ *   `body` is not a string/Buffer.
  *
  * @example
  * ```typescript
- * import { verifySignature } from '@classytic/arc/integrations/webhooks';
- *
- * // `config: { rawBody: true }` is REQUIRED — arc registers
- * // fastify-raw-body with `global: false`, so routes opt in per-route;
- * // without it `req.rawBody` is undefined and verifySignature throws a
- * // TypeError.
- *
- * // GitHub-style sender (sha256=<hex>)
  * fastify.post('/webhooks/github', { config: { rawBody: true } }, async (req, reply) => {
  *   const sig = req.headers['x-hub-signature-256'] as string;
  *   if (!verifySignature(req.rawBody, secret, sig)) {
  *     return reply.status(401).send({ error: 'Invalid signature' });
  *   }
- * });
- *
- * // Stripe-style (bare hex, different header)
- * const valid = verifySignature(body, stripeSecret, req.headers['stripe-signature'], {
- *   prefix: '',
  * });
  * ```
  */
@@ -411,10 +337,7 @@ export function verifySignature(
   signature: string | undefined,
   options?: VerifySignatureOptions,
 ): boolean {
-  // Guard against the most common footgun: passing `req.body` (a parsed object)
-  // instead of `req.rawBody` (the exact bytes the sender signed). Fastify
-  // re-serialises JSON, so the HMAC would never match and the failure would
-  // look like a wrong secret. Throw so the misuse surfaces at the call site.
+  // A parsed `req.body` would never match and look like a wrong secret — throw instead.
   if (typeof body !== "string" && !Buffer.isBuffer(body)) {
     throw new TypeError(
       "verifySignature: body must be a string or Buffer (the exact bytes the sender signed). " +
@@ -428,43 +351,32 @@ export function verifySignature(
   const prefix = options?.prefix ?? "sha256=";
   const algorithm = options?.algorithm ?? "sha256";
 
-  // Validate prefix
   if (prefix && !signature.startsWith(prefix)) return false;
 
   const providedHex = signature.slice(prefix.length);
   if (!providedHex) return false;
 
-  // Compute expected
   const hmac = createHmac(algorithm, secret);
   hmac.update(typeof body === "string" ? body : body);
   const expectedHex = hmac.digest("hex");
 
-  // Length check before timing-safe compare (lengths leaking is acceptable —
-  // a wrong-length hex is already an invalid signature, not a partial match)
+  // timingSafeEqual needs equal lengths; leaking a length mismatch reveals nothing.
   if (providedHex.length !== expectedHex.length) return false;
 
   try {
     return timingSafeEqual(Buffer.from(providedHex, "hex"), Buffer.from(expectedHex, "hex"));
   } catch {
-    // Malformed hex → not a valid signature
     return false;
   }
 }
 
 // ============================================================================
-// Pattern matching (shared with MemoryEventTransport)
+// Pattern matching
 // ============================================================================
 
+/** The transports' own matcher — a local copy missed `order:*` (the `:` convention). */
 function matchesPattern(patterns: string[], eventType: string): boolean {
-  for (const pattern of patterns) {
-    if (pattern === "*") return true;
-    if (pattern === eventType) return true;
-    if (pattern.endsWith(".*")) {
-      const prefix = pattern.slice(0, -2);
-      if (eventType.startsWith(`${prefix}.`)) return true;
-    }
-  }
-  return false;
+  return patterns.some((pattern) => matchEventPattern(pattern, eventType));
 }
 
 // ============================================================================
@@ -497,9 +409,7 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   opts: WebhookPluginOptions = {},
 ) => {
   const store = opts.store ?? new MemoryWebhookStore();
-  // Runtime capability: the default store keeps subscriptions AND the
-  // delivery log in this process — a second replica sees neither. A
-  // host-supplied store is presumed shared (it exists to be).
+  // A host-supplied store is presumed shared across replicas.
   declareRuntimeCapability(fastify, {
     subsystem: "webhooks.store",
     durability: opts.store ? "shared" : "memory",
@@ -509,8 +419,7 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   const timeout = opts.timeout ?? 10000;
   const maxLogEntries = opts.maxLogEntries ?? 1000;
   const concurrency = opts.concurrency ?? 5;
-  // A concurrency of 0 (or negative/NaN) would make the delivery loop below
-  // splice empty batches forever — fail at boot, not at first delivery.
+  // < 1 would make the delivery loop splice empty batches forever.
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new Error(
       `webhookPlugin: concurrency must be an integer >= 1 (got ${String(opts.concurrency)})`,
@@ -523,8 +432,7 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       `webhookPlugin: retry.attempts must be an integer >= 1 (got ${String(opts.retry?.attempts)})`,
     );
   }
-  // Two retry axes on one delivery would double-attempt every failure —
-  // durable mode owns retries via the relay's failure policy.
+  // Two retry axes would double-attempt every failure.
   if (opts.durable && opts.retry) {
     throw new Error(
       "webhookPlugin: `durable` and `retry` are mutually exclusive — durable delivery " +
@@ -533,17 +441,11 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
   }
   const durableStore = opts.durable?.store;
 
-  // In-memory cache of subscriptions (loaded from store on init)
   let subscriptions: WebhookSubscription[] = [];
   const log: WebhookDeliveryRecord[] = [];
 
-  // Load persisted subscriptions — and re-apply the URL policy to EVERY one.
-  // `register()` validates new entries, but rows written before the policy
-  // existed (or by another writer sharing the store) would otherwise bypass
-  // it entirely. Failing boot on one poisoned row would turn a bad DB write
-  // into an outage, so invalid entries are EXCLUDED from dispatch and logged
-  // loudly instead — they stay in the store for the host to fix or
-  // unregister.
+  // Re-apply the URL policy to every persisted row. Invalid rows are excluded
+  // and logged rather than failing boot — one bad DB write must not be an outage.
   subscriptions = await store.getAll();
   if (opts.validateUrl) {
     const admitted: WebhookSubscription[] = [];
@@ -562,18 +464,12 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
     subscriptions = admitted;
   }
 
-  // -------------------------------------------------------------------
-  // Dispatch a single event to all matching subscriptions
-  // -------------------------------------------------------------------
-
   async function dispatchEvent(event: DomainEvent): Promise<void> {
     const matching = subscriptions.filter((s) => matchesPattern(s.events, event.type));
     if (matching.length === 0) return;
 
-    // Durable mode: enqueue one row per (event × subscription) and stop —
-    // the relay owns the POST. A thrown save PROPAGATES so an upstream
-    // durable chain (events outbox → raw transport) observes the failure
-    // and retries the business row instead of losing the delivery.
+    // Durable mode: enqueue rows; the relay owns the POST. A thrown save
+    // PROPAGATES so an upstream durable chain retries instead of losing it.
     if (durableStore) {
       for (const sub of matching) {
         const deliveryId = `${event.meta.id}:wh:${sub.id}`;
@@ -586,9 +482,6 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
           } satisfies WebhookDeliveryPayload,
           { id: deliveryId },
         );
-        // Deterministic id + dedupeKey: repository stores swallow the
-        // dup-key, the memory store dedups on the key — either way an
-        // at-least-once upstream enqueues each delivery exactly once.
         await durableStore.save(delivery, { dedupeKey: deliveryId });
       }
       return;
@@ -600,8 +493,6 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       meta: event.meta,
     });
 
-    // Bounded concurrency — one slow endpoint doesn't block the rest.
-    // Default: 5 concurrent deliveries. Set concurrency: 1 for sequential.
     async function deliverToSubscription(sub: WebhookSubscription): Promise<void> {
       const record: WebhookDeliveryRecord = {
         subscriptionId: sub.id,
@@ -615,11 +506,7 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
         delete record.status;
         delete record.error;
         try {
-          // v1 contract: timestamp + delivery id are INSIDE the signed
-          // string, so replay is bounded by the receiver's tolerance window
-          // and dedup runs on an authenticated id. Each attempt is re-signed
-          // with a fresh timestamp; the delivery id stays constant so
-          // receiver-side dedup treats retries as the same delivery.
+          // Fresh timestamp per attempt; the delivery id stays constant for receiver dedup.
           const timestamp = Date.now();
           const v1Signature = signWebhook(body, sub.secret, {
             timestamp,
@@ -640,11 +527,8 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
               },
               body,
               signal: ac.signal,
-              // With a URL policy active, following redirects would let an
-              // ALLOWED public URL 302 into a blocked private/metadata target
-              // — the policy validated the literal, not the redirect chain.
-              // `manual` surfaces the 3xx as a failed delivery instead.
-              // Without a policy the platform default (follow) is kept.
+              // The policy validated the literal, not the redirect chain — don't
+              // let an allowed URL 302 into a blocked target.
               ...(opts.validateUrl ? { redirect: "manual" as const } : {}),
             });
 
@@ -658,23 +542,19 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
         }
 
         if (record.success) break;
-        // Retry only transient failures: network errors/timeouts (no
-        // status) and 429/5xx. Other statuses — 4xx rejections, 3xx under
-        // redirect: "manual" — are final for this payload.
+        // Transient: no status (network/timeout), 429, 5xx. Anything else is final.
         const transient =
           record.status === undefined || record.status === 429 || record.status >= 500;
         if (!transient || attempt === retryAttempts) break;
         await new Promise((r) => setTimeout(r, retryBackoffMs * 2 ** (attempt - 1)));
       }
 
-      // Append to log (ring buffer)
       log.push(record);
       if (log.length > maxLogEntries) {
         log.splice(0, log.length - maxLogEntries);
       }
     }
 
-    // Execute with bounded concurrency
     const pending = [...matching];
     while (pending.length > 0) {
       const batch = pending.splice(0, concurrency);
@@ -682,25 +562,15 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
     }
   }
 
-  // -------------------------------------------------------------------
-  // Auto-subscribe to Arc events (wildcard — we filter internally)
-  // Track unsubscribe handle for lifecycle cleanup (mirrors websocket.ts)
-  // -------------------------------------------------------------------
-
+  // Wildcard subscription; matching happens in dispatchEvent.
   let unsubscribe: (() => void) | undefined;
 
   if (fastify.events) {
     unsubscribe = await fastify.events.subscribe("*", dispatchEvent);
   }
 
-  // -------------------------------------------------------------------
-  // Decorate fastify.webhooks
-  // -------------------------------------------------------------------
-
   const manager: WebhookManager = {
     async register(sub: WebhookSubscription): Promise<void> {
-      // URL must at least parse; the host-supplied policy (SSRF guard,
-      // allowlists) runs on the parsed URL and rejects by throwing.
       let parsed: URL;
       try {
         parsed = new URL(sub.url);
@@ -710,7 +580,6 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
       if (opts.validateUrl) await opts.validateUrl(parsed, sub);
 
       await store.save(sub);
-      // Update in-memory cache
       subscriptions = subscriptions.filter((s) => s.id !== sub.id);
       subscriptions.push(sub);
     },
@@ -721,8 +590,6 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
     },
 
     list(): WebhookSubscriptionPublic[] {
-      // Secrets never leave via enumeration — admin UIs and API responses
-      // consume list() wholesale; getSecret() is the privileged path.
       return subscriptions.map(({ secret: _secret, ...pub }) => pub);
     },
 
@@ -738,8 +605,6 @@ const webhookPlugin: FastifyPluginAsync<WebhookPluginOptions> = async (
 
   fastify.decorate("webhooks", manager);
 
-  // Cleanup on server close — release wildcard listener to prevent leaks
-  // in hot-reload, test runners, or multi-app processes
   fastify.addHook("onClose", async () => {
     if (unsubscribe) {
       unsubscribe();
@@ -760,11 +625,8 @@ export { webhookPlugin };
 // Durable delivery — the outbox→worker composition
 // ============================================================================
 //
-// No second queue: a webhook delivery IS an outbox event. The plugin (durable
-// mode) writes one row per (event × subscription); `createDurableWebhookModule`
-// wraps `createOutboxModule` with a publish-only transport whose `publish()`
-// performs the signed POST — so lease, claim, fencing, failure policy, DLQ,
-// and the relay schedule arm (kind: 'relay') all apply unchanged.
+// A webhook delivery IS an outbox event: the relay's transport `publish()`
+// performs the signed POST, so lease, fencing, failure policy and DLQ apply unchanged.
 
 /** Event type carried by durable webhook delivery rows. */
 export const WEBHOOK_DELIVERY_EVENT = "arc.webhook.delivery";
@@ -777,10 +639,8 @@ export interface WebhookDeliveryPayload {
 }
 
 /**
- * A failed webhook POST, classified for the failure policy: `transient`
- * failures (network error, timeout, 429, 5xx) are worth retrying; the rest
- * (4xx rejection, 3xx under `redirect: "manual"`, URL-policy rejection,
- * malformed row) are final for this payload and dead-letter immediately.
+ * A failed webhook POST. `transient` (network, timeout, 429, 5xx) retries;
+ * anything else (4xx, 3xx, URL-policy rejection, malformed row) dead-letters.
  */
 export class WebhookDeliveryError extends Error {
   readonly status?: number;
@@ -796,9 +656,8 @@ export class WebhookDeliveryError extends Error {
 
 export interface WebhookDeliveryTransportOptions {
   /**
-   * Resolve a subscription (WITH secret) at delivery time — fresh URL and
-   * secret apply to every attempt, and an unregistered id is an acknowledged
-   * no-op (the delivery is moot, not an error).
+   * Resolve a subscription (WITH secret) per attempt. `undefined` (unregistered)
+   * acknowledges the delivery as moot.
    */
   getSubscription: (
     id: string,
@@ -808,10 +667,8 @@ export interface WebhookDeliveryTransportOptions {
   /** Per-POST timeout in ms (default: 10000). */
   timeout?: number;
   /**
-   * URL policy — same seam as {@link WebhookPluginOptions.validateUrl}, but
-   * enforced at DELIVERY time (covers rows enqueued before a policy existed
-   * and out-of-band store writes). When set, `redirect: "manual"` applies so
-   * an allowed URL can't 302 into a blocked target; a rejection is permanent.
+   * Same seam as {@link WebhookPluginOptions.validateUrl}, enforced at
+   * DELIVERY time (with `redirect: "manual"`); a rejection is permanent.
    */
   validateUrl?: (url: URL, subscription: WebhookSubscription) => void | Promise<void>;
   /** Resolve private auth headers at delivery time; reserved Arc headers cannot be replaced. */
@@ -822,15 +679,12 @@ export interface WebhookDeliveryTransportOptions {
 }
 
 /**
- * Publish-only `EventTransport` whose `publish()` IS the webhook POST —
- * plugged into an outbox relay, delivery inherits the relay's guarantees.
- * Throws {@link WebhookDeliveryError} on failure so the relay observes it
- * (fail → policy → retryAt/deadLetter); returns normally on 2xx and on
- * unregistered subscriptions (acknowledge).
+ * Publish-only `EventTransport` whose `publish()` IS the webhook POST, for an
+ * outbox relay. Throws {@link WebhookDeliveryError} on failure; returns on
+ * 2xx or an unregistered subscription.
  *
- * The wire contract is IDENTICAL to inline dispatch: v1 signing, and
- * `x-arc-webhook-delivery` carries the ORIGINAL event's `meta.id` — stable
- * across retries, so receiver-side dedup is unchanged.
+ * Same wire contract as inline dispatch: `x-arc-webhook-delivery` is the
+ * ORIGINAL event's `meta.id`, stable across retries.
  */
 export function createWebhookDeliveryTransport(
   options: WebhookDeliveryTransportOptions,
@@ -931,10 +785,9 @@ export interface WebhookDeliveryPolicyOptions {
 }
 
 /**
- * Default failure policy for durable webhook delivery: permanent failures
- * ({@link WebhookDeliveryError} with `transient: false`) dead-letter on the
- * first attempt — repeating a rejected payload can't succeed; transient ones
- * retry on exponential backoff until `maxAttempts`, then dead-letter.
+ * Default durable-delivery policy: non-transient {@link WebhookDeliveryError}s
+ * dead-letter immediately; others retry with exponential backoff until
+ * `maxAttempts`.
  */
 export function webhookDeliveryFailurePolicy(
   options: WebhookDeliveryPolicyOptions = {},
@@ -975,11 +828,9 @@ export interface DurableWebhookModuleOptions
  * });
  * ```
  *
- * The relay arm is `kind: 'relay'`, so `role: 'relay'` deployments run
- * delivery and `role: 'api'` deployments only enqueue. The delivering process
- * must ALSO register `webhookPlugin` (with the shared subscription store) —
- * subscriptions resolve through `fastify.webhooks` at delivery time, which is
- * boot-checked, not discovered on the first row.
+ * `role: 'relay'` deployments deliver; `role: 'api'` only enqueues. The
+ * delivering process must ALSO register `webhookPlugin` with the shared
+ * subscription store (boot-checked).
  */
 export function createDurableWebhookModule(
   options: DurableWebhookModuleOptions,

@@ -1,3 +1,4 @@
+import { evictToSize } from "../collections/boundedMap.js";
 import type { CacheLogger, CacheStats, CacheStore } from "./interface.js";
 
 interface MemoryEntry<TValue> {
@@ -19,9 +20,11 @@ export interface MemoryCacheStoreOptions {
    */
   maxEntryBytes?: number;
   /**
-   * Total memory budget in bytes (default: 50 MiB).
-   * When exceeded, LRU entries are evicted until usage drops below watermark.
-   * Set to 0 to disable (rely on maxEntries only).
+   * Total budget in bytes (default: 50 MiB), counted as serialized value
+   * bytes plus key bytes — an estimate of payload, NOT a heap limit (Map
+   * and object overhead are not counted). When exceeded, LRU entries are
+   * evicted until usage drops to the watermark. Set to 0 to disable (rely
+   * on maxEntries only).
    */
   maxMemoryBytes?: number;
   /**
@@ -58,14 +61,29 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
   private _evictions = 0;
 
   constructor(options: MemoryCacheStoreOptions = {}) {
-    this.defaultTtlSeconds = options.defaultTtlSeconds ?? 60;
-    this.maxEntries = clamp(options.maxEntries ?? 1000, 1, 100_000);
-    this.maxEntryBytes = clamp(options.maxEntryBytes ?? 256 * 1024, 1024, 10 * 1024 * 1024);
-    this.maxMemoryBytes = options.maxMemoryBytes ?? 50 * 1024 * 1024; // 50 MiB
-    this.evictionWatermark = clamp(options.evictionWatermark ?? 0.9, 0.5, 1);
+    this.defaultTtlSeconds = finite("defaultTtlSeconds", options.defaultTtlSeconds ?? 60);
+    this.maxEntries = clamp("maxEntries", options.maxEntries ?? 1000, 1, 100_000);
+    this.maxEntryBytes = clamp(
+      "maxEntryBytes",
+      options.maxEntryBytes ?? 256 * 1024,
+      1024,
+      10 * 1024 * 1024,
+    );
+    this.maxMemoryBytes = clamp(
+      "maxMemoryBytes",
+      options.maxMemoryBytes ?? 50 * 1024 * 1024,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    );
+    this.evictionWatermark = clamp("evictionWatermark", options.evictionWatermark ?? 0.9, 0.5, 1);
     this.logger = options.logger ?? console;
 
-    const cleanupIntervalMs = clamp(options.cleanupIntervalMs ?? 30_000, 1000, 10 * 60 * 1000);
+    const cleanupIntervalMs = clamp(
+      "cleanupIntervalMs",
+      options.cleanupIntervalMs ?? 30_000,
+      1000,
+      10 * 60 * 1000,
+    );
     this.cleanupTimer = setInterval(() => this.cleanupExpired(), cleanupIntervalMs);
     if (this.cleanupTimer.unref) this.cleanupTimer.unref();
   }
@@ -95,13 +113,14 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     if (!Number.isFinite(effectiveTtlSeconds) || effectiveTtlSeconds <= 0) return;
     const ttlMs = effectiveTtlSeconds * 1000;
 
-    const size = this.estimateSize(value);
-    if (size > this.maxEntryBytes) {
+    const valueBytes = this.estimateSize(value);
+    if (valueBytes > this.maxEntryBytes) {
       this.logger.warn(
-        `[MemoryCacheStore] Skipping oversized entry for key '${key}' (${size} bytes > ${this.maxEntryBytes} bytes)`,
+        `[MemoryCacheStore] Skipping oversized entry for key '${key}' (${valueBytes} bytes > ${this.maxEntryBytes} bytes)`,
       );
       return;
     }
+    const size = valueBytes + keyBytes(key);
 
     // Remove existing entry first (adjust bytes)
     const existing = this.cache.get(key);
@@ -112,9 +131,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
 
     this.cache.set(key, { value, size, expiresAt: Date.now() + ttlMs });
     this.currentBytes += size;
-
-    this.evictToLimit();
-    if (this.maxMemoryBytes > 0) this.evictToMemoryLimit();
+    this.enforceLimits();
   }
 
   async delete(key: string): Promise<void> {
@@ -143,7 +160,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     const effectiveTtlSeconds = ttlSeconds ?? this.defaultTtlSeconds;
     if (entry) this.currentBytes -= entry.size;
     this.cache.delete(key);
-    const size = 8; // a bare number — no need to JSON-stringify for sizing
+    const size = 8 + keyBytes(key); // a bare number — no need to JSON-stringify for sizing
     this.cache.set(key, {
       // `increment` is only meaningful on numeric keys; the store-wide
       // generic can't express "this one entry is a number".
@@ -154,7 +171,7 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
       expiresAt: live ? entry.expiresAt : now + Math.max(1, effectiveTtlSeconds) * 1000,
     });
     this.currentBytes += size;
-    this.evictToLimit();
+    this.enforceLimits();
     return next;
   }
 
@@ -191,27 +208,22 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
     this.currentBytes -= entry.size;
   }
 
-  private evictToLimit(): void {
-    while (this.cache.size > this.maxEntries) {
-      const oldestKey = this.cache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      const entry = this.cache.get(oldestKey);
-      if (!entry) break;
-      this.removeEntry(oldestKey, entry);
-      this._evictions++;
-    }
-  }
-
-  private evictToMemoryLimit(): void {
+  /** Every write path ends here, so no path can skip a limit. */
+  private enforceLimits(): void {
+    // The shared helper removes the entry; the callback keeps byte accounting in step.
+    this._evictions += evictToSize(this.cache, this.maxEntries, (_key, entry) => {
+      this.currentBytes -= entry.size;
+    });
+    // Over budget → evict down to the watermark, not merely back under the
+    // budget; stopping at the budget made every following write evict again.
+    if (this.maxMemoryBytes <= 0 || this.currentBytes <= this.maxMemoryBytes) return;
     const target = this.maxMemoryBytes * this.evictionWatermark;
-    while (this.currentBytes > this.maxMemoryBytes && this.cache.size > 0) {
-      const oldestKey = this.cache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      const entry = this.cache.get(oldestKey);
-      if (!entry) break;
+    while (this.currentBytes > target) {
+      const oldest = this.cache.entries().next();
+      if (oldest.done) break;
+      const [oldestKey, entry] = oldest.value;
       this.removeEntry(oldestKey, entry);
       this._evictions++;
-      if (this.currentBytes <= target) break;
     }
   }
 
@@ -235,8 +247,22 @@ export class MemoryCacheStore<TValue = unknown> implements CacheStore<TValue> {
   }
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
+/** A non-finite option is a configuration bug — `Math.max(min, NaN)` is NaN, which silently disabled the cap. */
+function finite(name: string, value: number): number {
+  if (!Number.isFinite(value)) {
+    throw new Error(
+      `[arc] MemoryCacheStore ${name} must be a finite number, got ${String(value)}.`,
+    );
+  }
+  return value;
+}
+
+function clamp(name: string, value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, finite(name, value)));
+}
+
+function keyBytes(key: string): number {
+  return Buffer.byteLength(key, "utf8");
 }
 
 /**

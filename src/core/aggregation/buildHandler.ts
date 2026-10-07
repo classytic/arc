@@ -265,7 +265,7 @@ export function buildAggregationHandler(
     // Row-level policy installed on the request by the permission middleware
     // (`applyAuthorizationDecision` → `request._policyFilters`). Threaded into the
     // executor so aggregation enforcement matches CRUD/actions.
-    const policyFilter = (request as { _policyFilters?: Record<string, unknown> })._policyFilters;
+    const policyFilter = request._policyFilters;
 
     const result = await executeAggregation(normalized, deps, {
       query,

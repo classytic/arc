@@ -30,11 +30,7 @@ export type { OpenApiBuildOptions, OpenApiOptions, OpenApiSpec } from "./openapi
 export {
   buildOpenApiSpec,
   default as openApiPlugin,
-  openApiPlugin as openApiPluginFn,
 } from "./openapi.js";
 export type { ScalarOptions } from "./scalar.js";
 // Scalar UI
-export {
-  default as scalarPlugin,
-  scalarPlugin as scalarPluginFn,
-} from "./scalar.js";
+export { default as scalarPlugin } from "./scalar.js";

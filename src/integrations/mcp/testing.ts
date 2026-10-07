@@ -195,7 +195,7 @@ export async function createTestMcpClient(
   const serverName = options.serverName ?? "test-mcp";
 
   // Build tools from resources — share `filterResourcesForMcp` with the
-  // Fastify plugin so the same `expose` / `include` / `exclude` precedence
+  // Fastify plugin so the same `expose` / `exclude` precedence
   // applies (including the throw on conflicting combinations).
   const overrides = pluginOpts.overrides ?? {};
   const enabledResources = filterResourcesForMcp(pluginOpts.resources ?? [], {

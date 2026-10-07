@@ -108,6 +108,13 @@ export interface ArcCore {
    * or hand to tooling.
    */
   moduleDescriptors?: readonly import("../factory/module/index.js").ResolvedModuleDescriptor[];
+  /** Active modules, the events each owns and consumes, and the bridges left inactive. */
+  moduleGraph?: import("../factory/module/graph.js").ModuleGraph;
+  /**
+   * Event types actually published with no declared owner (and no external source) — observed
+   * at the transport while `moduleGraph.events` is on. A test asserts it empty after a flow.
+   */
+  undeclaredEvents?: ReadonlySet<string>;
   /**
    * Module-contributed recurring schedules, resolved once in dependency order
    * and frozen after bootstraps. The same definitions are executed by Arc's
@@ -259,7 +266,7 @@ const arcCorePlugin: FastifyPluginAsync<ArcCorePluginOptions> = async (
   // Cleanup on close
   fastify.addHook("onClose", async () => {
     actualHookSystem.clear();
-    actualRegistry._clear();
+    actualRegistry.reset();
   });
 
   fastify.log?.debug?.("Arc core plugin enabled (instance-scoped hooks & registry)");

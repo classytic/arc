@@ -22,6 +22,7 @@
  * ```
  */
 
+import { createRequire } from "node:module";
 import { createEvent, type DomainEvent } from "./EventTransport.js";
 
 // ============================================================================
@@ -35,10 +36,24 @@ export interface EventSchema {
   [key: string]: unknown;
 }
 
+/** A zod (v4) schema — the one way to author an event payload. Structural: arc never imports zod for it. */
+export interface ZodPayloadSchema {
+  readonly _zod: { readonly output: unknown };
+  safeParse(value: unknown): {
+    success: boolean;
+    error?: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> };
+  };
+}
+
 export interface EventDefinitionInput {
   /** Event type name (e.g., 'order.created') */
   name: string;
-  /** JSON Schema for payload validation */
+  /**
+   * The payload as a zod schema — preferred. arc derives the JSON Schema (registry, AsyncAPI,
+   * contract snapshots) and the payload TYPE from it, and validates with it.
+   */
+  payload?: ZodPayloadSchema;
+  /** Raw JSON Schema, for definitions that do not use zod (kernels with no zod dependency). */
   schema?: EventSchema;
   /** Event version for schema evolution (default: 1) */
   version?: number;
@@ -49,8 +64,10 @@ export interface EventDefinitionInput {
 export interface EventDefinitionOutput<T = unknown> {
   /** Event type name */
   readonly name: string;
-  /** JSON Schema for payload validation */
+  /** JSON Schema for payload validation — generated from `payload` when that was given. */
   readonly schema?: EventSchema;
+  /** The zod schema the payload was declared with, when it was — the registry validates with it. */
+  readonly payloadSchema?: ZodPayloadSchema;
   /** Event version */
   readonly version: number;
   /** Human-readable description */
@@ -128,12 +145,23 @@ export interface EventRegistry {
  *
  * const event = OrderCreated.create({ orderId: '123' });
  */
+export function defineEvent<S extends ZodPayloadSchema>(
+  input: EventDefinitionInput & { payload: S; schema?: never },
+): EventDefinitionOutput<S["_zod"]["output"]>;
+export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefinitionOutput<T>;
 export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefinitionOutput<T> {
-  const { name, schema, version = 1, description } = input;
+  const { name, payload, version = 1, description } = input;
+  if (payload && input.schema) {
+    throw new Error(
+      `[arc] event "${name}" declares both \`payload\` and \`schema\` — declare the payload once.`,
+    );
+  }
+  const schema = payload ? payloadToJsonSchema(name, payload) : input.schema;
 
   return {
     name,
     schema,
+    ...(payload ? { payloadSchema: payload } : {}),
     version,
     description,
     create(payload: T, meta?: Partial<DomainEvent["meta"]>): DomainEvent<T> {
@@ -147,6 +175,30 @@ export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefi
       return createEvent(name, payload, { schemaVersion: version, ...meta });
     },
   };
+}
+
+/**
+ * The payload's JSON Schema, via zod's own converter — loaded only here, so an app that never
+ * declares a zod payload never loads zod. A payload JSON cannot carry fails AT DEFINITION.
+ */
+function payloadToJsonSchema(name: string, payload: ZodPayloadSchema): EventSchema {
+  let zod: { toJSONSchema?: (schema: unknown) => unknown };
+  try {
+    zod = createRequire(import.meta.url)("zod") as typeof zod;
+  } catch {
+    throw new Error(`[arc] event "${name}" declares a zod \`payload\` but zod is not installed.`);
+  }
+  if (typeof zod.toJSONSchema !== "function") {
+    throw new Error(`[arc] event "${name}": \`payload\` needs zod v4 (\`z.toJSONSchema\`).`);
+  }
+  try {
+    return zod.toJSONSchema(payload) as EventSchema;
+  } catch (err) {
+    throw new Error(
+      `[arc] event "${name}": its payload cannot travel as JSON — ${(err as Error).message}. ` +
+        "An event crosses a transport as JSON: send dates as ISO strings (`z.string()`).",
+    );
+  }
 }
 
 // ============================================================================
@@ -237,6 +289,18 @@ export function createEventRegistry(options?: EventRegistryOptions): EventRegist
 
       // Unknown event (or unknown version) — registry is opt-in. Pass.
       if (!target) return { valid: true };
+      // Declared with zod — validate with zod itself: nested shapes, enums, refinements.
+      if (target.payloadSchema) {
+        const parsed = target.payloadSchema.safeParse(payload);
+        return parsed.success
+          ? { valid: true }
+          : {
+              valid: false,
+              errors: (parsed.error?.issues ?? []).map(
+                (i) => `${i.path.map(String).join(".") || "(payload)"}: ${i.message}`,
+              ),
+            };
+      }
       // Events without a schema declaration — pass (schema is optional).
       if (!target.schema) return { valid: true };
 

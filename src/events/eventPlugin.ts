@@ -192,8 +192,39 @@ declare module "fastify" {
       transportName: string;
       /** Event registry for introspection (undefined when no registry configured) */
       registry?: EventRegistry;
+      /**
+       * Watch every event that reaches the transport — a live publish or an outbox relay.
+       * Read-only: a listener cannot change or stop delivery, and one that throws is ignored.
+       */
+      observe: (listener: (event: DomainEvent) => void) => () => void;
     };
   }
+}
+
+const OBSERVERS = Symbol.for("arc.events.observers");
+
+/** Notify `fastify.events.observe` listeners. Internal: the plugin and the outbox relay call it. */
+export function emitObserved(
+  events: FastifyInstance["events"] | undefined,
+  event: DomainEvent,
+): void {
+  const listeners = (events as { [OBSERVERS]?: Set<(e: DomainEvent) => void> } | undefined)?.[
+    OBSERVERS
+  ];
+  if (!listeners) return;
+  for (const listener of listeners) {
+    try {
+      listener(event);
+    } catch {
+      /* an observer never affects delivery */
+    }
+  }
+}
+
+/** A consumer that can register subscriptions now and start consuming later (`RedisStreamTransport`). */
+function isHoldable(transport: object): transport is { hold(): void; start(): Promise<void> } {
+  const t = transport as { hold?: unknown; start?: unknown };
+  return typeof t.hold === "function" && typeof t.start === "function";
 }
 
 const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
@@ -225,6 +256,22 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     warnOnDuplicate: rawWarnOnDuplicate,
   } = opts;
 
+  /** A host telemetry callback — isolated like an observer, so it can never change delivery. */
+  const notify = (
+    hook: "onPublish" | "onPublishError",
+    run: () => void,
+    eventType: string,
+  ): void => {
+    try {
+      run();
+    } catch (error) {
+      fastify.log?.warn?.(
+        { hook, eventType, error },
+        "[Arc Events] publish telemetry callback threw — ignored",
+      );
+    }
+  };
+
   // Default validateMode: 'warn' when registry is provided, 'off' otherwise
   const validateMode = rawValidateMode ?? (registry ? "warn" : "off");
 
@@ -251,7 +298,15 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
   };
 
   // Decorate fastify with event utilities
+  const observers = new Set<(event: DomainEvent) => void>();
   fastify.decorate("events", {
+    [OBSERVERS]: observers,
+    observe: (listener: (event: DomainEvent) => void) => {
+      observers.add(listener);
+      return () => {
+        observers.delete(listener);
+      };
+    },
     publish: async <T>(
       type: string,
       payload: T,
@@ -353,15 +408,19 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
         if (wal?.acknowledge && !isInternalEvent) {
           await wal.acknowledge(event.meta.id);
         }
-        onPublish?.(event);
       } catch (error) {
         fastify.log?.error?.(
           { transport: transport.name, eventType: type, error },
           "[Arc Events] Failed to publish event",
         );
-        onPublishError?.(event, error as Error);
+        notify("onPublishError", () => onPublishError?.(event, error as Error), type);
         if (!failOpen) throw error;
+        return;
       }
+      // Telemetry runs AFTER delivery and outside it: a throwing callback never turns a
+      // delivered event into a reported failure.
+      notify("onPublish", () => onPublish?.(event), type);
+      emitObserved(fastify.events, event);
     },
 
     subscribe: async (pattern: string, handler: EventHandler): Promise<() => void> => {
@@ -390,15 +449,14 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
       // publish-only transport can't register a handler: fail clearly rather
       // than throw a cryptic "not a function". Backward-compatible with 0.13
       // (subscribe always present there).
+      // An impossible TOPOLOGY, not a runtime outage — `failOpen` never applies: a no-op here
+      // is a handler that silently never runs.
       if (typeof transport.subscribe !== "function") {
-        const error = new Error(
+        throw new Error(
           `[Arc Events] transport '${transport.name}' is publish-only (no subscribe) — ` +
             `cannot register a handler for '${pattern}'. Use MemoryEventTransport / ` +
             `RedisEventTransport, or a transport that implements subscribe().`,
         );
-        fastify.log?.error?.({ transport: transport.name, pattern }, error.message);
-        if (!failOpen) throw error;
-        return () => {};
       }
       try {
         return await transport.subscribe(pattern, wrappedHandler);
@@ -440,6 +498,15 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
    * if a host's graph ends up with two arc copies.
    */
   fastify.decorate(ARC_EVENT_TRANSPORT, transport);
+
+  // A consumer that can defer is held for the whole boot and started once every module's
+  // handlers exist — otherwise an entry for a later module is acknowledged with no handler.
+  if (isHoldable(transport)) {
+    transport.hold();
+    fastify.addHook("onReady", async () => {
+      await transport.start();
+    });
+  }
 
   // Cleanup on close
   fastify.addHook("onClose", async () => {

@@ -26,11 +26,11 @@ import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by SoftDeleteMixin. */
 export interface SoftDeleteExt {
-  getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginationResult<AnyRecord>>>;
-  restore(req: IRequestContext): Promise<IControllerResponse<AnyRecord>>;
+  getDeleted(req: IRequestContext): Promise<IControllerResponse<PaginationResult<object>>>;
+  restore(req: IRequestContext): Promise<IControllerResponse<object>>;
 }
 
-export function SoftDeleteMixin<TBase extends MixinConstructor<BaseCrudController>>(
+export function SoftDeleteMixin<TBase extends MixinConstructor<BaseCrudController<object>>>(
   Base: TBase,
 ): TBase & MixinConstructor<SoftDeleteExt> {
   return class SoftDeleteController extends Base {

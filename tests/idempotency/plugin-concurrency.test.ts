@@ -6,7 +6,7 @@
  * Idempotency-Key via `Promise.all(app.inject(...))` and verifies:
  *
  *  1. Exactly one request enters the handler (single side-effect)
- *  2. The remaining `N-1` callers get a 409 `IDEMPOTENCY_CONFLICT`
+ *  2. The remaining `N-1` callers get a 409 `arc.idempotency_conflict`
  *     with `Retry-After` — i.e. the lock is honoured, not silently skipped
  *  3. A follow-up request with the same key (after the first completes)
  *     gets the cached response, proving lock→result handoff is correct
@@ -82,8 +82,13 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
 
     for (const conflict of conflicts) {
       expect(conflict.headers["retry-after"]).toBeDefined();
-      const body = conflict.json() as { code?: string };
-      expect(body.code).toBe("IDEMPOTENCY_CONFLICT");
+      // The canonical ErrorContract; `retryAfter` rides in `meta`.
+      expect(conflict.json()).toEqual({
+        code: "arc.idempotency_conflict",
+        message: "Request with this idempotency key is already in progress",
+        status: 409,
+        meta: { retryAfter: Number(conflict.headers["retry-after"]) },
+      });
     }
   });
 

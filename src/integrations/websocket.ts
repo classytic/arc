@@ -27,6 +27,8 @@
 // (Redis-backed pushRef stores, etc.) extend `PushRefStore` directly.
 export type { WebSocketAdapter } from "./websocket/adapter.js";
 export { LocalWebSocketAdapter } from "./websocket/adapter.js";
+// A custom `PushRefStore` persists `SerializedEntry.deadQueue`, so it needs the entry shape.
+export type { DeadQueueEntry } from "./websocket/dead-queue.js";
 export type { GeoPoint, GeoPublishOpts, GeoRoomOptions } from "./websocket/geo-room.js";
 export { GeoRoom } from "./websocket/geo-room.js";
 export { websocketPlugin } from "./websocket/plugin.js";

@@ -1,33 +1,22 @@
 /**
  * Cleanup orchestration service — the framework's use-case core.
  *
- * Split into a REQUEST path and a WORKER path so the durability guarantees the
- * ports promise actually hold:
+ * REQUEST path vs WORKER path:
  *
- *   preview()      → re-plan, seal a digest, surface blockers/retains/confirmation
- *   execute()      → validate (availability, digest, confirmation, reason,
- *                    blockers, limits), ATOMICALLY create the run (admission
- *                    guard by concurrencyKey), persist the sealed operation,
- *                    ENQUEUE `{ runId }`, and RETURN. It does NOT run the recipe.
- *   processRun()   → the worker entrypoint. Takes an EXCLUSIVE LEASE on the run
- *                    (`claim` — a live lease refuses duplicate workers), then
- *                    branches: a `finalizing` run RECOVERS finalization from the
- *                    persisted payload (never re-executes); a `queued` run (or a
- *                    crashed `running` run whose lease expired) executes the
- *                    recipe with cooperative cancellation, verifies, persists
- *                    the finalization payload, and finalizes idempotently.
- *   cancel()       → durable cancel request (+ actor/reason audit) + CAS a
- *                    not-yet-running run straight to `cancelled` WITH evidence.
- *                    A running run stops cooperatively and leaves evidence of
- *                    the committed chunks.
- *   retry()        → reload the SAME sealed operation, re-check availability +
- *                    recipe version + digest against a fresh plan (refuse if the
- *                    world changed), re-arm ATOMICALLY under the same admission
- *                    guard as creation, re-enqueue.
+ *   preview()    → re-plan and seal a digest.
+ *   execute()    → validate, ATOMICALLY create the run (admission guard by
+ *                  concurrencyKey), ENQUEUE `{ runId }`, return. Never runs the recipe.
+ *   processRun() → worker entrypoint. Takes an EXCLUSIVE lease; a `finalizing`
+ *                  run only replays finalization from the persisted payload
+ *                  (never re-executes); a `queued` or lease-expired `running`
+ *                  run executes, verifies, persists the payload, finalizes.
+ *   cancel()     → durable, audited request; a not-yet-running run goes straight
+ *                  to `cancelled` WITH evidence, a running one stops cooperatively.
+ *   retry()      → re-validate the SAME sealed operation against a fresh plan
+ *                  (refuse if it changed), re-arm atomically under the same guard.
  *
- * Every status change goes through `compareAndTransition` (CAS) carrying the
- * worker's lease token, so a late `completed` write from a stalled ex-owner can
- * never clobber the new owner's `cancelled`/`running` state.
+ * Every status change is a CAS carrying the lease token, so a stalled ex-owner's
+ * late write can never clobber the new owner's state.
  */
 
 import { createPurgeEvidence } from "@classytic/primitives/retention";
@@ -64,12 +53,11 @@ export interface CleanupServiceDeps {
   registry: CleanupRegistry;
   runStore: CleanupRunStore;
   evidenceStore: CleanupEvidenceStore;
-  /** Optional write fence (§8). No-op when absent. */
+  /** Optional write fence. No-op when absent. */
   writeFence?: CleanupWriteFence | undefined;
   /**
-   * Durable job queue (§8). Defaults to a microtask-deferred in-process queue
-   * that calls `processRun` off the request path (single-process only). Inject
-   * BullMQ / SQS / repo-backed for cross-process durability + restart recovery.
+   * Durable job queue. Default: an in-process microtask queue (single-process,
+   * no restart recovery) — inject BullMQ / SQS / repo-backed for durability.
    */
   jobQueue?: CleanupJobQueue | undefined;
   /** Framework size caps. Defaults to {@link DEFAULT_CLEANUP_LIMITS}. */
@@ -173,20 +161,9 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
   const generateId = deps.generateId ?? (() => globalThis.crypto.randomUUID());
   const now = deps.now ?? (() => new Date());
   /**
-   * Undefined-valued keys are DROPPED, not spread.
-   *
-   * `limits` is `Partial<CleanupLimits>`, which permits an EXPLICIT `undefined`
-   * — and a plain spread lets that overwrite the default rather than fall back
-   * to it. Every limit is then read in a comparison, and `n > undefined` is
-   * always `false`, so `{ limits: { maxPlanItems: undefined } }` did not raise
-   * the cap: it silently REMOVED it, on a framework whose whole job is deleting
-   * data. Same for `maxReasonLength` / `maxParamDepth`, and `maxResults` turned
-   * `slice(0, undefined)` into "keep everything".
-   *
-   * A host reaches this by forwarding an optional config through
-   * (`limits: { maxPlanItems: cfg.planCap }`) — no cast, no obvious mistake.
-   * `permissions/presets.ts` already filters for exactly this reason; this is
-   * the same rule applied to the destructive path.
+   * Undefined-valued keys are DROPPED, not spread: an explicit `undefined`
+   * would overwrite the default, and `n > undefined` is always false — so the
+   * cap would silently disappear on the path that deletes data.
    */
   const limits: CleanupLimits = {
     ...DEFAULT_CLEANUP_LIMITS,
@@ -233,14 +210,8 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
         `${items.length} items > maxPlanItems ${limits.maxPlanItems}`,
       );
     }
-    /**
-     * Partition by DISPOSITION — a protective guard's count is not damage.
-     *
-     * This was one `reduce` over every item, so a guard reporting the 173 posted
-     * journal entries it defends pushed the "records to remove" headline to 540
-     * on a plan that removes 367. Absent disposition means `'remove'`, so every
-     * pre-existing recipe is unchanged.
-     */
+    // Partition by disposition (absent = 'remove'): a protective guard's count
+    // must not inflate the "records to remove" total.
     const estimatedTotal = items.reduce(
       (sum, i) => sum + ((i.disposition ?? "remove") === "remove" ? i.estimated : 0),
       0,
@@ -291,10 +262,8 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     try {
       await jobQueue.enqueue({ runId: run.id });
     } catch (err) {
-      // No orphaned `queued` runs: an enqueue failure is recorded as the run's
-      // failure so the operator sees it and can retry (which re-enqueues).
-      // If the message WAS actually delivered despite the throw, the worker's
-      // claim refuses non-queued runs, so the failed mark stays authoritative.
+      // No orphaned `queued` runs: mark failed (retryable). If the message was
+      // delivered anyway, claim refuses non-queued runs, so `failed` stands.
       await runStore.compareAndTransition(run.id, ["queued"], "failed", {
         completedAt: now(),
         failureReason: `enqueue failed: ${errMsg(err)}`,
@@ -307,7 +276,6 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     const recipe = registry.get(input.recipeId);
     const ctx = context(input);
 
-    // Input limits (bounded documents).
     if ((input.reason ?? "").length > limits.maxReasonLength) {
       throw CleanupErrors.planTooLarge(`reason length > ${limits.maxReasonLength}`);
     }
@@ -315,7 +283,7 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
       throw CleanupErrors.planTooLarge(`parameters nested deeper than ${limits.maxParamDepth}`);
     }
 
-    // Availability + digest re-check + confirmation + reason (fail before write).
+    // All validation fails before any write.
     await ensureAvailable(recipe, ctx);
     const sealed = await seal(recipe, input, ctx);
     if (sealed.digest !== input.planDigest) {
@@ -327,7 +295,7 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     if (!input.reason || input.reason.trim().length === 0) {
       throw CleanupErrors.reasonRequired();
     }
-    // Blockers are a HARD STOP (§4.4) — never confirmable through the normal flow.
+    // Blockers are a HARD STOP — never confirmable.
     if (sealed.blockers.length > 0) {
       throw CleanupErrors.blocked(sealed.blockers);
     }
@@ -353,7 +321,7 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
       queuedAt: now(),
     };
 
-    // ATOMIC admission guard (§8) — conditional insert by concurrencyKey.
+    // Atomic admission guard: conditional insert by concurrencyKey.
     const created = await runStore.createIfPermitted(run);
     if (!created.created) throw CleanupErrors.alreadyRunning(created.activeRunId);
 
@@ -443,13 +411,7 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     let processed = 0;
     let steps = 0;
     let failed = 0;
-    /**
-     * Per-step lifecycle, keyed by `stepId` and ordered by first sight.
-     *
-     * Seeded from the run's existing progress so a RESUMED run (crash recovery,
-     * retry) keeps the states it already recorded instead of presenting an
-     * operator with a blank pipeline for work that demonstrably happened.
-     */
+    // Per-step lifecycle by `stepId`, seeded so a RESUMED run keeps recorded states.
     const stepStates = new Map<string, CleanupStepProgress>(
       (run.progress?.stepProgress ?? []).map((s) => [s.stepId, s]),
     );
@@ -494,9 +456,8 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
           heartbeatAt: now(),
         };
         lastSummary = summary;
-        // Throttled persistence: every persisted write ALSO renews the lease
-        // (heartbeat) and re-reads the durable cancel flag. Failed steps are
-        // never throttled.
+        // Each persisted write also renews the lease and re-reads the cancel
+        // flag. Failed steps bypass the throttle.
         const nowMs = now().getTime();
         if (!step.ok || progressThrottleMs === 0 || nowMs - lastPersistMs >= progressThrottleMs) {
           lastPersistMs = nowMs;
@@ -505,18 +466,9 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
         }
       },
       /**
-       * Upsert one step's lifecycle state, preserving FIRST-SEEN order.
-       *
-       * A `Map` keyed by `stepId` is what keeps this bounded and idempotent: a
-       * step transitioning running → completed updates its entry rather than
-       * appending, so the array length is the step count and never the
-       * transition count. Insertion order is the execution order, which is what
-       * an operator reads down the list.
-       *
-       * Persisted on the NEXT `onStep` (or the terminal write) rather than
-       * immediately — a lifecycle transition is not itself a committed chunk,
-       * and writing on every one would defeat the progress throttle that exists
-       * to keep a long run from hammering the store.
+       * Upsert a step's state (bounded: one entry per step, first-seen order).
+       * Persisted with the NEXT `onStep` or terminal write, so transitions
+       * don't bypass the progress throttle.
        */
       async onStepState(state: CleanupStepProgress) {
         stepStates.set(state.stepId, state);
@@ -859,15 +811,14 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     if (CLEANUP_TERMINAL_STATUSES.includes(run.status)) {
       throw CleanupErrors.invalidAction("cancel", run.status);
     }
-    // Durable request first (source of truth for a running executor) + audit.
+    // Durable request first — the source of truth for a running executor.
     await runStore.requestCancel(id, {
       actor: input?.actor,
       reason: input?.reason,
       requestedAt: now(),
     });
-    // A not-yet-running run can be cancelled outright; a running one stops
-    // cooperatively at its next step and settles itself WITH evidence. For the
-    // never-started case the request path records the (empty) evidence here.
+    // Not yet running: cancel outright and record (empty) evidence here. A
+    // running run settles itself with evidence at its next step.
     const immediate = await runStore.compareAndTransition(id, ["queued", "planned"], "cancelled", {
       completedAt: now(),
     });
@@ -907,13 +858,9 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
     }
     const recipe = registry.get(run.recipeId);
     const ctx: CleanupContext = { actor: run.actor, now: now(), ambient: run.ambient, logger };
-    // A recipe disabled since the original run (e.g. business went live) must
-    // not be re-runnable through retry.
     await ensureAvailable(recipe, ctx);
-    // Re-validate the SAME sealed operation against a fresh plan: if the world
-    // changed (or the recipe version moved), refuse — a retry must replay the
-    // authorized operation, never a materially different one under the old
-    // confirmation.
+    // A retry must replay the AUTHORIZED operation — refuse if the recipe
+    // version or fresh plan differs from what was confirmed.
     if ((recipe.version ?? "1") !== run.recipeVersion) {
       throw CleanupErrors.planChanged(recipe.version ?? "1", run.recipeVersion);
     }
@@ -931,8 +878,7 @@ export function createCleanupService(deps: CleanupServiceDeps): CleanupService {
       throw CleanupErrors.planChanged(fresh.digest, run.planDigest);
     }
 
-    // Re-arm ATOMICALLY under the SAME admission policy as creation — a retry
-    // must not slip a second destructive run past the global guard.
+    // Same admission guard as creation — no second destructive run slips past it.
     const requeued = await runStore.reArmIfPermitted(run.id, {
       queuedAt: now(),
       cancelRequested: false,

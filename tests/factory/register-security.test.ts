@@ -353,6 +353,7 @@ describe("registerUtilityPlugins — under-pressure load shedding", () => {
     const warn = vi.spyOn(app.log, "warn");
     await registerUtilityPlugins(app, {
       preset: "production",
+      runtime: "memory",
       underPressure: { exposeStatusRoute: true }, // monitoring-only
     });
     await app.ready();
@@ -365,6 +366,7 @@ describe("registerUtilityPlugins — under-pressure load shedding", () => {
     const warn = vi.spyOn(app.log, "warn");
     await registerUtilityPlugins(app, {
       preset: "production",
+      runtime: "memory",
       underPressure: { maxEventLoopDelay: 2000 },
     });
     await app.ready();

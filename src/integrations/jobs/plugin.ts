@@ -600,7 +600,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
       // one anyway would make `requireOrgRole("manager")` READ as tenant-scoped
       // while actually serving every org's jobs. Arc's semantics say a policy is
       // ENFORCED, so the honest choices are refuse or mislead.
-      const policy = (req as { _policyFilters?: Record<string, unknown> })._policyFilters;
+      const policy = req._policyFilters;
       if (policy && Object.keys(policy).length > 0) {
         fastify.log.error(
           "[arc/jobs] managementRoutes.operatorPermission returned a row-level policy, which this " +

@@ -7,7 +7,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { collectReadBlockedFields, isFieldReadable } from "../../src/core/fieldRulePredicates.js";
+import {
+  collectReadBlockedFields,
+  isFieldReadable,
+  pathTouchesBlocked,
+} from "../../src/core/fieldRulePredicates.js";
 
 describe("isFieldReadable", () => {
   it("treats undefined rule as readable (no entry → no rule)", () => {
@@ -40,6 +44,24 @@ describe("isFieldReadable", () => {
 
   it("`hidden: true` AND `systemManaged: true` still blocks", () => {
     expect(isFieldReadable({ hidden: true, systemManaged: true })).toBe(false);
+  });
+});
+
+describe("pathTouchesBlocked — the one path rule", () => {
+  const blocked = new Set(["secret", "profile.ssn"]);
+  it("blocks the field itself and ANY-depth descendants of it", () => {
+    expect(pathTouchesBlocked("secret", blocked)).toBe(true);
+    expect(pathTouchesBlocked("secret.a.b.c", blocked)).toBe(true);
+    expect(pathTouchesBlocked("profile.ssn.last4", blocked)).toBe(true);
+  });
+  it("is by SEGMENT, not string prefix", () => {
+    expect(pathTouchesBlocked("secretary", blocked)).toBe(false);
+    expect(pathTouchesBlocked("profile.ssnx", blocked)).toBe(false);
+  });
+  it("treats a parent of a blocked field as blocked only where values come back raw", () => {
+    expect(pathTouchesBlocked("profile", blocked)).toBe(false);
+    expect(pathTouchesBlocked("profile", blocked, { descendants: true })).toBe(true);
+    expect(pathTouchesBlocked("profile.name", blocked, { descendants: true })).toBe(false);
   });
 });
 

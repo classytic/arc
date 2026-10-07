@@ -290,6 +290,73 @@ describe("SSE Org-Scoped Filtering", () => {
     // Event had org context but client has no org — should be dropped
     expect(result.body).not.toContain('"orderId":"1"');
   });
+
+  /**
+   * The DEFAULT is what leaked. `orgScoped` defaulted to `false`, so with the
+   * default `patterns: ['*']` a signed-in member of one tenant received every
+   * other tenant's events — and CRUD events carry the full document. These
+   * cases pin the default itself, not the opt-in.
+   */
+  async function streamAs(
+    scope: Record<string, unknown>,
+    options: Record<string, unknown>,
+    publish: (a: FastifyInstance) => Promise<void>,
+  ): Promise<string> {
+    app = Fastify({ logger: false });
+    await app.register(eventPlugin);
+    app.addHook("onRequest", async (request) => {
+      (request as unknown as { scope: unknown }).scope = scope;
+    });
+    await app.register(ssePlugin, { requireAuth: false, heartbeat: 60000, ...options });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as { port: number };
+    const pending = fetchSSE(`http://127.0.0.1:${port}/events/stream`, 500);
+    await new Promise((r) => setTimeout(r, 100));
+    await publish(app);
+    return (await pending).body;
+  }
+
+  const member = { kind: "member", organizationId: "org-123", orgRoles: ["member"] };
+  const twoTenants = async (a: FastifyInstance) => {
+    await a.events.publish("order.created", { orderId: "mine" }, { organizationId: "org-123" });
+    await a.events.publish("order.created", { orderId: "theirs" }, { organizationId: "org-other" });
+  };
+
+  it("filters by organization BY DEFAULT — no option needed", async () => {
+    const body = await streamAs(member, {}, twoTenants);
+    expect(body).toContain('"orderId":"mine"');
+    expect(body).not.toContain('"orderId":"theirs"');
+  });
+
+  it("still delivers events with NO organization — single-tenant apps are unaffected", async () => {
+    const body = await streamAs(member, {}, async (a) => {
+      await a.events.publish("system.heartbeat", { note: "untenanted" });
+    });
+    expect(body).toContain('"note":"untenanted"');
+  });
+
+  it("an elevated admin with no active org sees every tenant — the platform view", async () => {
+    // Same rule `checkOrgScope` applies to elevated reads: elevation is an
+    // explicit, audited step.
+    const body = await streamAs({ kind: "elevated", elevatedBy: "admin-1" }, {}, twoTenants);
+    expect(body).toContain('"orderId":"mine"');
+    expect(body).toContain('"orderId":"theirs"');
+  });
+
+  it("an elevated admin WITH an active org is scoped to it", async () => {
+    const body = await streamAs(
+      { kind: "elevated", elevatedBy: "admin-1", organizationId: "org-123" },
+      {},
+      twoTenants,
+    );
+    expect(body).toContain('"orderId":"mine"');
+    expect(body).not.toContain('"orderId":"theirs"');
+  });
+
+  it("orgScoped: false is still available for a deliberately cross-tenant stream", async () => {
+    const body = await streamAs(member, { orgScoped: false }, twoTenants);
+    expect(body).toContain('"orderId":"theirs"');
+  });
 });
 
 // ============================================================================

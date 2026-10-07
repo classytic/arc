@@ -241,6 +241,8 @@ export interface ControllerConfigurableOptions {
    * `configure()` like `writes`.
    */
   transactional?: boolean;
+  /** Optimistic concurrency — see `ResourceConfig.concurrency`. */
+  concurrency?: { versionField?: string };
 }
 
 /**

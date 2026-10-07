@@ -5,6 +5,7 @@
  */
 
 export type {
+  AnyAsyncFn,
   CircuitBreakerOptions,
   CircuitBreakerSharedState,
   CircuitBreakerStats,
@@ -75,7 +76,6 @@ export {
   bareListResponse,
   deleteResponse,
   errorContractSchema,
-  errorDetailSchema,
   getDefaultCrudSchemas,
   getListQueryParams,
   keysetListResponse,
@@ -85,13 +85,11 @@ export {
   queryParams,
   responses,
 } from "./responseSchemas.js";
-// Cross-runtime scheduling helper
-export { scheduleBackground } from "./runtime.js";
 export {
   declareRuntimeCapability,
   type RuntimeCapabilityDeclaration,
 } from "./runtimeCapabilities.js";
-export type { JsonSchemaTarget, SchemaIo } from "./schemaConverter.js";
+export type { JsonSchemaTarget, SchemaIo, UnconvertibleMode } from "./schemaConverter.js";
 // Schema Converter
 export {
   convertOpenApiSchemas,

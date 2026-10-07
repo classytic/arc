@@ -1,3 +1,4 @@
+import type { IoredisKeyValueCommands, UpstashKeyValueCommands } from "../utils/redisShapes.js";
 import type { CacheStats, CacheStore } from "./interface.js";
 
 export interface RedisCacheClient {
@@ -204,19 +205,13 @@ export class RedisCacheStore<TValue = unknown> implements CacheStore<TValue> {
 // ============================================================================
 
 /**
- * Minimal ioredis shape we depend on. We don't import ioredis itself so the
- * cache subpath stays peer-dep-free. The `scan` tail is `unknown[]` so a real
- * ioredis `Redis` (overloads with literal tokens + optional callback) is
- * assignable — see the same note on the idempotency `IoredisLike`.
+ * Minimal ioredis shape the cache depends on — the shared key/value commands
+ * (`utils/redisShapes.ts`, where the `unknown[]`-tail rule is explained) plus
+ * the cache's own extras. Not importing ioredis keeps the subpath peer-dep-free.
  */
-export interface IoredisLike {
-  get(key: string): Promise<string | null>;
-  set(...args: unknown[]): Promise<string | null>;
-  del(...keys: string[]): Promise<number>;
-  scan(cursor: string | number, ...args: unknown[]): Promise<[string, string[]]>;
+export interface IoredisLike extends IoredisKeyValueCommands {
   pipeline?(): { del(key: string): unknown; exec(): Promise<unknown> };
   incrby?(key: string, by: number): Promise<number>;
-  eval?(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
 }
 
 /**
@@ -286,22 +281,12 @@ const EXPIRE_IF_ABSENT_LUA =
   "if redis.call('TTL', KEYS[1]) < 0 then return redis.call('EXPIRE', KEYS[1], ARGV[1]) else return 0 end";
 
 /**
- * Minimal `@upstash/redis` REST SDK shape we depend on.
- *
- * `@upstash/redis` is HTTP-based and works on edge runtimes (Cloudflare
- * Workers, Vercel Edge, Deno Deploy) where TCP connections — and thus
- * ioredis — are unavailable.
+ * Minimal `@upstash/redis` REST SDK shape the cache depends on — the shared
+ * key/value commands (`utils/redisShapes.ts`) plus `incrby`. HTTP-based, so it
+ * works on edge runtimes where ioredis cannot.
  */
-export interface UpstashRedisLike {
-  get(key: string): Promise<string | null | unknown>;
-  set(key: string, value: unknown, opts?: Record<string, unknown>): Promise<unknown>;
-  del(...keys: string[]): Promise<number>;
-  scan(
-    cursor: number | string,
-    opts?: { match?: string; count?: number },
-  ): Promise<[number, string[]] | [string, string[]]>;
+export interface UpstashRedisLike extends UpstashKeyValueCommands {
   incrby?(key: string, by: number): Promise<number>;
-  eval?(script: string, keys: string[], args: (string | number)[]): Promise<unknown>;
 }
 
 /**

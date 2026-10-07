@@ -34,7 +34,7 @@ export interface MockRepository<T> extends StandardRepo<T> {
  *
  * await mockRepo.getById('1'); // Returns mocked product
  */
-export function createMockRepository<T extends AnyRecord = AnyRecord>(
+export function createMockRepository<T extends object = AnyRecord>(
   overrides: Partial<MockRepository<T>> = {},
 ): MockRepository<T> {
   const defaultMock: MockRepository<T> = {

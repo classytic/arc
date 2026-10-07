@@ -65,8 +65,17 @@ export class ResourceRegistry {
     return this._adapters.get(name) as T | undefined;
   }
 
+  /** Set only by an explicit `strictResources: false`: a duplicate name keeps the FIRST entry. */
+  private _tolerateDuplicates = false;
+
+  /** Accept a duplicate resource name (the host opted out of `strictResources`; it was warned). */
+  tolerateDuplicateNames(): void {
+    this._tolerateDuplicates = true;
+  }
+
   /**
-   * Register a resource
+   * Register a resource. A duplicate name throws — a resource missing from the registry still
+   * serves traffic but vanishes from introspection, the permission matrix and MCP.
    */
   register(resource: ResourceDefinition<unknown>, options: RegisterOptions = {}): this {
     if (this._frozen) {
@@ -74,6 +83,7 @@ export class ResourceRegistry {
     }
 
     if (this._resources.has(resource.name)) {
+      if (this._tolerateDuplicates) return this;
       throw new Error(`Resource '${resource.name}' already registered.`);
     }
 
@@ -121,6 +131,8 @@ export class ResourceRegistry {
       // resource definition. `tenantField: undefined` is normalized to the
       // adapter-aware default at runtime; we pass it through verbatim here.
       tenantField: resource.tenantField,
+      idField: resource.idField,
+      versionField: resource.versionField,
       resolvedTenantPurge: resource.resolvedTenantPurge,
       updateMethod: resource.updateMethod,
       disabledRoutes: resource.disabledRoutes ? [...resource.disabledRoutes] : undefined,
@@ -384,16 +396,6 @@ export class ResourceRegistry {
     this._resources.clear();
     this._adapters.clear();
     this._frozen = false;
-  }
-
-  /** @internal Alias for unfreeze() */
-  _unfreeze(): void {
-    this.unfreeze();
-  }
-
-  /** @internal Alias for reset() */
-  _clear(): void {
-    this.reset();
   }
 
   /**

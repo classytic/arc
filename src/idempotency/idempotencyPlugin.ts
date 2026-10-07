@@ -24,8 +24,11 @@
 
 import { createHash } from "node:crypto";
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
+import { ARC_ERROR_CODES, type ErrorContract } from "@classytic/repo-core/errors";
+import { fingerprintRequest, IdempotencyError } from "@classytic/repo-core/idempotency";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { createDomainError } from "../utils/errors.js";
 import { requireSingleHeaderValue } from "../utils/headers.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import type { IdempotencyStore } from "./stores/interface.js";
@@ -99,8 +102,18 @@ declare module "fastify" {
     idempotencyKey?: string;
     /** Whether this response was replayed from cache */
     idempotencyReplayed?: boolean;
-    /** @internal Full key with fingerprint for store lookups */
+    /** @internal The operation's storage key */
     _idempotencyFullKey?: string;
+    /** @internal `fingerprintRequest` of this request's body, stored with its response */
+    _idempotencyFingerprint?: string;
+  }
+
+  interface FastifyContextConfig {
+    /**
+     * Per-route idempotency. `required: true` refuses a call with no idempotency key (400
+     * `arc.idempotency_key_required`) — set it on any route whose retry must not execute twice.
+     */
+    idempotency?: { required?: boolean };
   }
 
   interface FastifyInstance {
@@ -137,13 +150,6 @@ declare module "fastify" {
 
 const HEADER_IDEMPOTENCY_REPLAYED = "x-idempotency-replayed";
 const HEADER_IDEMPOTENCY_KEY = "x-idempotency-key";
-
-/**
- * Cap recursion depth in body fingerprinting. Real APIs almost never exceed
- * ~10 levels; the cap is generous so well-formed payloads are unaffected,
- * yet low enough to stop a `{"a":{"a":{...thousands deep...}}}` stack bomb.
- */
-const MAX_FINGERPRINT_DEPTH = 32;
 
 const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   fastify: FastifyInstance,
@@ -307,6 +313,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     fastify.decorateRequest("idempotencyKey", undefined);
     fastify.decorateRequest("idempotencyReplayed", false);
     fastify.decorateRequest("_idempotencyFullKey", undefined);
+    fastify.decorateRequest("_idempotencyFingerprint", undefined);
     fastify.log?.debug?.("Idempotency plugin disabled");
     return;
   }
@@ -316,6 +323,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   fastify.decorateRequest("idempotencyKey", undefined);
   fastify.decorateRequest("idempotencyReplayed", false);
   fastify.decorateRequest("_idempotencyFullKey", undefined);
+  fastify.decorateRequest("_idempotencyFingerprint", undefined);
 
   /**
    * Check if this request should use idempotency
@@ -342,80 +350,36 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   }
 
   /**
-   * Normalize body for consistent hashing (sort keys recursively).
+   * The OPERATION this key names — namespace, method, URL and caller. The body is NOT part of
+   * it: the same key with a different body is the same operation asked twice, which is refused
+   * (see `bodyFingerprint`), never executed again under a fresh storage key.
    *
-   * Recursion is bounded by `MAX_FINGERPRINT_DEPTH` to defeat a deep-nesting
-   * DoS: an attacker who sends a 1 MB JSON body of nested `{"a":{"a":...}}`
-   * would otherwise blow the call stack inside this hot path. The cap
-   * exceeds any sensible API shape (real bodies are <10 levels deep) while
-   * still being well under V8's default stack budget. At the limit we
-   * substitute a sentinel string so the hash still differs from siblings
-   * but recursion stops — the request is fingerprinted as if everything
-   * beyond the cap were `"<truncated>"`.
+   * Must run AFTER auth has populated `request.user`, or every caller shares `anon`.
    */
-  function normalizeBody(obj: unknown, depth = 0): unknown {
-    if (obj === null || typeof obj !== "object") {
-      return obj;
-    }
-    if (depth >= MAX_FINGERPRINT_DEPTH) {
-      // Beyond the cap, hash the subtree instead of collapsing to a shared
-      // sentinel — a bare "<truncated>" made ALL deep subtrees fingerprint
-      // identically, so two different over-deep bodies under the same key
-      // would false-MATCH and replay the wrong response. The hash is
-      // insertion-order-sensitive (no key sorting past the cap), which can
-      // only produce a false MISMATCH (422) — the fail-safe direction.
-      try {
-        return `<deep:${createHash("sha256").update(JSON.stringify(obj)).digest("hex").slice(0, 16)}>`;
-      } catch {
-        return "<truncated>"; // circular/unserializable — legacy sentinel
-      }
-    }
-
-    if (Array.isArray(obj)) {
-      return obj.map((item) => normalizeBody(item, depth + 1));
-    }
-
-    // Sort object keys
-    const sorted: Record<string, unknown> = {};
-    const keys = Object.keys(obj).sort();
-    for (const key of keys) {
-      sorted[key] = normalizeBody((obj as Record<string, unknown>)[key], depth + 1);
-    }
-    return sorted;
+  function operationIdentity(request: FastifyRequest): string {
+    const user = request.user as { id?: string; _id?: string } | undefined;
+    const userId = user?.id ?? user?._id ?? "anon";
+    const namespacePart = namespace ? `n=${namespace}:` : "";
+    return `${namespacePart}${request.method}:${request.url}:u=${userId}`;
   }
 
   /**
-   * Generate a fingerprint for the request (for key generation).
-   * Includes caller identity so the same idempotency key from different
-   * users doesn't replay one user's response to another.
-   *
-   * IMPORTANT: This must be called AFTER auth has populated request.user,
-   * otherwise userId falls back to 'anon' and cross-user replay is possible.
+   * `fingerprintRequest` from `@classytic/repo-core/idempotency` — the ONE body fingerprint
+   * every layer uses. A body too deep to fingerprint is refused, not truncated.
    */
-  function getRequestFingerprint(request: FastifyRequest): string {
-    // Combine method + URL + body hash + user identity for uniqueness
-    let bodyHash = "nobody";
-
-    if (request.body && typeof request.body === "object") {
-      // Normalize body (sort keys) for consistent hashing
-      const normalized = normalizeBody(request.body);
-      const bodyString = JSON.stringify(normalized);
-      bodyHash = createHash("sha256").update(bodyString).digest("hex").substring(0, 16);
-      // SECURITY: Only log hash, never log full body (can contain secrets)
-      if (request.log?.debug) {
-        request.log.debug({ bodyHash }, "Generated body hash");
+  function bodyFingerprint(request: FastifyRequest): string {
+    try {
+      return fingerprintRequest(request.body ?? null);
+    } catch (err) {
+      if (err instanceof IdempotencyError && err.code === "UNFINGERPRINTABLE") {
+        throw createDomainError(
+          ARC_ERROR_CODES.IDEMPOTENCY_BODY_UNFINGERPRINTABLE,
+          err.message,
+          400,
+        );
       }
+      throw err;
     }
-
-    // Scope to caller identity to prevent cross-user replay
-    const user = request.user as { id?: string; _id?: string } | undefined;
-    const userId = user?.id ?? user?._id ?? "anon";
-
-    // Namespace prefix prevents cross-deployment collisions on a shared store
-    // (prod vs canary, api vs jobs, etc.) without adding a second store layer.
-    const namespacePart = namespace ? `n=${namespace}:` : "";
-    const fingerprint = `${namespacePart}${request.method}:${request.url}:${bodyHash}:u=${userId}`;
-    return fingerprint;
   }
 
   // ---- Route-level middleware: check + lock (AFTER auth) ----
@@ -423,13 +387,23 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
-    if (!shouldApplyIdempotency(request)) {
-      return;
-    }
-
     // Get idempotency key from header
     const keyHeader = requireSingleHeaderValue(request.headers, headerName);
     const idempotencyKey = keyHeader?.trim();
+
+    // A route that declares `config.idempotency.required` refuses a keyless call — a retry
+    // of it would execute twice.
+    if (!idempotencyKey && request.routeOptions.config?.idempotency?.required === true) {
+      throw createDomainError(
+        ARC_ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
+        `This operation requires an '${headerName}' header, stable across retries of the same request.`,
+        400,
+      );
+    }
+
+    if (!shouldApplyIdempotency(request)) {
+      return;
+    }
 
     if (!idempotencyKey) {
       // No key provided - proceed normally
@@ -439,12 +413,20 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Store key on request for later use
     request.idempotencyKey = idempotencyKey;
 
-    // Create full key with request fingerprint (user is now populated by auth)
-    const fullKey = `${idempotencyKey}:${getRequestFingerprint(request)}`;
+    // The operation's storage key (user is now populated by auth) and the body it carries.
+    const fullKey = `${idempotencyKey}:${operationIdentity(request)}`;
+    const requestFingerprint = bodyFingerprint(request);
 
     // Check for cached result
     const cached = await store.get(fullKey);
     if (cached) {
+      if (cached.requestFingerprint && cached.requestFingerprint !== requestFingerprint) {
+        throw createDomainError(
+          ARC_ERROR_CODES.IDEMPOTENCY_KEY_REUSED,
+          `Idempotency key '${idempotencyKey}' was already used for a different request body. Use a new key for a new request.`,
+          422,
+        );
+      }
       // Replay cached response
       request.idempotencyReplayed = true;
 
@@ -467,16 +449,21 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     const lockAcquired = await store.tryLock(fullKey, request.id, lockTimeoutMs);
     if (!lockAcquired) {
       // Another request is processing this key
-      reply.code(409).header("Retry-After", retryAfterSeconds.toString()).send({
-        error: "Request with this idempotency key is already in progress",
-        code: "IDEMPOTENCY_CONFLICT",
-        retryAfter: retryAfterSeconds,
-      });
+      reply
+        .code(409)
+        .header("Retry-After", retryAfterSeconds.toString())
+        .send({
+          code: ARC_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+          message: "Request with this idempotency key is already in progress",
+          status: 409,
+          meta: { retryAfter: retryAfterSeconds },
+        } satisfies ErrorContract);
       return;
     }
 
     // Store full key for preSerialization (body cache) + onResponse (unlock)
     request._idempotencyFullKey = fullKey;
+    request._idempotencyFingerprint = requestFingerprint;
 
     // Echo the idempotency key on the response. Set here in the middleware —
     // NOT in a later hook — so it survives empty 2xx responses (204,
@@ -555,7 +542,13 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       body = payload;
     }
 
-    const result = createIdempotencyResult(statusCode, body, headersToCache, ttlMs);
+    const result = createIdempotencyResult(
+      statusCode,
+      body,
+      headersToCache,
+      ttlMs,
+      request._idempotencyFingerprint,
+    );
     await store.set(fullKey, result);
 
     return payload;

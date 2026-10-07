@@ -6,8 +6,6 @@ Lower-level testing utilities: app factory, request builder, mocks, and database
 import {
   createTestApp,
   createMinimalTestApp,
-  preloadResources,
-  preloadResourcesAsync,
   TestRequestBuilder,
   request,
   createTestAuth,
@@ -75,7 +73,7 @@ expect(res.json()).toEqual({ ok: true });
 
 ## Resource Preloading
 
-`loadResources()` works in production and most vitest setups, but it can fail when resources are evaluated through dynamic-import edge cases — Node `#path` subpath imports under tsx, transitive `.js → .ts` resolution inside nested `node_modules`, or modules that depend on top-level engine init. `preloadResources` sidesteps those paths by feeding Vite's compile-time `import.meta.glob` result through arc's resource normaliser so every match flows through vitest's transform pipeline like a static import.
+`loadResources()` works in production and most vitest setups, but it can fail when resources are evaluated through dynamic-import edge cases — Node `#path` subpath imports under tsx, transitive `.js → .ts` resolution inside nested `node_modules`, or modules that depend on top-level engine init. `preloadResources` (from `@classytic/arc/factory`) sidesteps those paths by feeding Vite's compile-time `import.meta.glob` result through arc's resource normaliser so every match flows through vitest's transform pipeline like a static import.
 
 ### preloadResources
 
@@ -83,7 +81,7 @@ Eager form — every resource is evaluated at import time of the preload file. U
 
 ```typescript
 // tests/setup/preload-resources.ts
-import { preloadResources } from '@classytic/arc/testing';
+import { preloadResources } from '@classytic/arc/factory';
 
 export const preloadedResources = preloadResources(
   import.meta.glob('../../src/resources/**/*.resource.ts', {
@@ -108,7 +106,7 @@ The helper accepts both `{ import: 'default' }` glob results (values are the res
 Lazy form — use when resources depend on prior bootstrap (engine init, account-model registration, etc.) and can't safely be evaluated at preload-file import time.
 
 ```typescript
-import { preloadResourcesAsync } from '@classytic/arc/testing';
+import { preloadResourcesAsync } from '@classytic/arc/factory';
 
 // Bootstrap first…
 await initAccountingEngine();

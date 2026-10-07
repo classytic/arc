@@ -71,6 +71,9 @@ export const DEFAULT_TENANT_FIELD = "organizationId" as const;
 /** Default HTTP method for update routes */
 export const DEFAULT_UPDATE_METHOD = "PATCH" as const;
 
+/** Default version field under `concurrency: {}` (optimistic concurrency) */
+export const DEFAULT_VERSION_FIELD = "__v" as const;
+
 /** System-managed fields that cannot be set via request body */
 export const SYSTEM_FIELDS = Object.freeze([
   "_id",

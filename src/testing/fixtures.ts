@@ -27,12 +27,12 @@ import type { AnyRecord } from "../types/index.js";
 // Types
 // ============================================================================
 
-export type FixtureFactory<T extends AnyRecord = AnyRecord> = (data: Partial<T>) => Promise<T>;
+export type FixtureFactory<T extends object = AnyRecord> = (data: Partial<T>) => Promise<T>;
 
 /** Delete hook invoked by `clear()` for records that were created through a factory. */
-export type FixtureDestroyer<T extends AnyRecord = AnyRecord> = (record: T) => Promise<void>;
+export type FixtureDestroyer<T extends object = AnyRecord> = (record: T) => Promise<void>;
 
-export interface FixtureRegistration<T extends AnyRecord = AnyRecord> {
+export interface FixtureRegistration<T extends object = AnyRecord> {
   create: FixtureFactory<T>;
   /** Optional cleanup. Defaults to a no-op; adapters that support deletion should provide one. */
   destroy?: FixtureDestroyer<T>;
@@ -40,14 +40,14 @@ export interface FixtureRegistration<T extends AnyRecord = AnyRecord> {
 
 export interface TestFixtures {
   /** Register a named factory. Later calls replace the earlier registration. */
-  register<T extends AnyRecord = AnyRecord>(
+  register<T extends object = AnyRecord>(
     name: string,
     factoryOrRegistration: FixtureFactory<T> | FixtureRegistration<T>,
   ): void;
   /** Create one record through the named factory. Tracked for cleanup. */
-  create<T extends AnyRecord = AnyRecord>(name: string, data?: Partial<T>): Promise<T>;
+  create<T extends object = AnyRecord>(name: string, data?: Partial<T>): Promise<T>;
   /** Create many records with a shared template. Tracked for cleanup. */
-  createMany<T extends AnyRecord = AnyRecord>(
+  createMany<T extends object = AnyRecord>(
     name: string,
     count: number,
     template?: Partial<T>,
@@ -60,7 +60,7 @@ export interface TestFixtures {
    */
   clear(): Promise<void>;
   /** All records ever created by a given factory name (read-only snapshot). */
-  all<T extends AnyRecord = AnyRecord>(name: string): readonly T[];
+  all<T extends object = AnyRecord>(name: string): readonly T[];
   /** Registered factory names. */
   readonly names: readonly string[];
 }

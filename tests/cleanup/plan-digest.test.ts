@@ -3,7 +3,8 @@
  * values a plain JSON-shaped stringify would silently mishash.
  */
 import { describe, expect, it } from "vitest";
-import { canonicalJson, computeManifestDigest } from "../../src/cleanup/index.js";
+import { canonicalJson } from "@classytic/primitives/canonical";
+import { computeManifestDigest } from "../../src/cleanup/index.js";
 
 describe("canonicalJson", () => {
   it("is key-order invariant", () => {

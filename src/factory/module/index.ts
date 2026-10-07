@@ -4,8 +4,9 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { ArcModule, ArcModuleRegistry } from "./types.js";
+import type { ArcModule, ArcModuleRegistry, PortName } from "./types.js";
 
+export { type AsyncApiCatalogEntry, type AsyncApiInfo, toAsyncApi } from "./asyncapi.js";
 export {
   collectModuleHealthChecks,
   collectModuleScheduledJobs,
@@ -27,8 +28,44 @@ export {
   type ModuleSetupContext,
 } from "./disposers.js";
 export { extendModule, type ModuleExtension } from "./extend.js";
+export {
+  activateBridges,
+  analyzeModuleGraph,
+  buildModuleGraph,
+  type CrudSurface,
+  crudEventsOf,
+  type DerivedPublishes,
+  dependentsOf,
+  eventTopology,
+  type ModuleGraph,
+  type ModuleGraphAnalysis,
+  type ModuleGraphIssue,
+  type ModuleGraphMode,
+  type ModuleGraphNode,
+  type ModuleGraphOptions,
+  type ModuleKind,
+  renderModuleGraph,
+  type SkippedBridge,
+  verifyModuleGraph,
+} from "./graph.js";
 export { subscribeModuleEventHandlers, unsubscribeModuleEventHandlers } from "./lifecycle.js";
 export { orderModules } from "./order.js";
+export {
+  assertComposable,
+  type ClosureNode,
+  type CompositionProblem,
+  compositionProblems,
+  type ModulePlan,
+  type PlanModulesOptions,
+  planModules,
+  resolveModuleClosure,
+} from "./plan.js";
+export {
+  createRelayNudge,
+  type RelayNudge,
+  type RelayOption,
+  withRelayNudge,
+} from "./relay-nudge.js";
 export { resolveContribution, resolveModule } from "./resolve.js";
 export {
   getModuleState,
@@ -39,29 +76,43 @@ export {
 } from "./state.js";
 export { createModuleTeardown } from "./teardown.js";
 export type {
+  ArcCompositionConfig,
   ArcModule,
   ArcModuleInput,
   ArcModuleRegistry,
+  ArcPortRegistry,
+  ArcPorts,
   EventHandlerDefinition,
+  LazyBridge,
   ModuleContribution,
+  ModuleName,
+  ModulePorts,
+  ModuleRequirements,
+  PortName,
 } from "./types.js";
 
 /**
  * Identity helper for authoring a typed module — mirrors `defineResource`.
  * Gives inference + a single obvious construction site; does no work.
  *
- * `TExports` is inferred from the `bootstrap` return value, so a module
- * author gets a typed public export for free:
+ * Everything is inferred: the export from `bootstrap`'s return, the port types from
+ * `requires` (declare `requires` BEFORE the phases that read `ports`):
  *
  * ```ts
- * export const accountingModule = (deps: Deps) =>
- *   defineModule({
- *     name: "accounting",
- *     bootstrap: async () => createAccountingEngine(deps), // TExports inferred
- *   });
+ * defineModule({
+ *   name: "accounting",
+ *   requires: { ports: ["outbox"], optionalPorts: ["calendar"] },
+ *   bootstrap: (f, { ports }) => createAccountingEngine(ports.outbox, ports.calendar),
+ * });
  * ```
  */
-export function defineModule<TExports = unknown>(module: ArcModule<TExports>): ArcModule<TExports> {
+export function defineModule<
+  TExports = unknown,
+  const TPorts extends PortName = never,
+  const TOptionalPorts extends PortName = never,
+>(
+  module: ArcModule<TExports, TPorts, TOptionalPorts>,
+): ArcModule<TExports, TPorts, TOptionalPorts> {
   return module;
 }
 

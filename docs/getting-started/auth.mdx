@@ -127,11 +127,11 @@ defineResource({
 **Custom permission:**
 
 ```typescript
-import type { PermissionCheck } from '@classytic/arc/permissions';
+import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
 
 const requirePremium = (): PermissionCheck => async (ctx) => {
-  if (!ctx.user) return { granted: false, reason: 'Unauthorized' };
-  return { granted: ctx.user.isPremium };
+  if (!ctx.user) return deny('Unauthorized');
+  return ctx.user.isPremium ? allow() : deny('Premium plan required');
 };
 ```
 

@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { runWithArcLogger } from "../../src/logger/index.js";
 import { QueryResolver } from "../../src/core/QueryResolver.js";
 import type { ArcInternalMetadata, IRequestContext } from "../../src/types/index.js";
 
@@ -144,13 +143,10 @@ describe("QueryResolver", () => {
       expect(result.limit).toBe(50);
     });
 
-    it("enforces minimum limit of 1", () => {
+    it("refuses a limit below 1 with a 400 — never silently clamped", () => {
       const resolver = createResolver();
       const req = createReq({ query: { limit: "0" } });
-
-      const result = resolver.resolve(req);
-
-      expect(result.limit).toBeGreaterThanOrEqual(1);
+      expect(() => resolver.resolve(req)).toThrow(expect.objectContaining({ statusCode: 400 }));
     });
 
     it("uses custom default limit when parser returns no limit", () => {
@@ -463,17 +459,9 @@ describe("QueryResolver", () => {
       });
       const req = createReq({ query: { select: "name createdAt status" } });
       const result = resolver.resolve(req);
-      // Space-separated form passes through unmodified — the resolver
-      // only strips when it identifies blocked fields, and there are
-      // none under the new contract.
-      expect(typeof result.select === "string" || Array.isArray(result.select)).toBe(true);
-      const projected =
-        typeof result.select === "string"
-          ? result.select.split(/\s+/)
-          : (result.select as string[]);
-      expect(projected).toContain("createdAt");
-      expect(projected).toContain("status");
-      expect(projected).toContain("name");
+      // Mongoose's space-separated form reads exactly like the comma form — one projection object —
+      // and no systemManaged field is stripped from a read.
+      expect(result.select).toEqual({ name: 1, createdAt: 1, status: 1 });
     });
 
     it("ALLOWS systemManaged fields when select is an array", () => {
@@ -680,85 +668,59 @@ describe("QueryResolver", () => {
   // Keyset pagination (after/cursor)
   // --------------------------------------------------------------------------
 
-  /**
-   * The join reaches another collection; arc's tenant filter scopes the base one. Nothing
-   * said so at the moment a deployment opens `allowedLookups`, which is when the decision
-   * is actually made — so it warns there, once per collection set.
-   */
-  describe("client-driven joins warn that the foreign side is unscoped", () => {
+  /** A join reaches another collection; its rows are filtered by the SERVER's policy, never the client's. */
+  describe("client-driven joins carry the resource's server-owned scope", () => {
     const lookup = { from: "orders", localField: "_id", foreignField: "customerId" };
+    /** A KIT parser — arc's own never emits `lookups`; mongokit's does, including a client `where`. */
+    const parserWith = (l: Record<string, unknown>) =>
+      ({ parse: () => ({ filters: {}, lookups: [l] }) }) as unknown as ConstructorParameters<
+        typeof QueryResolver
+      >[0]["queryParser"];
+    const orders = {
+      scope: ({ scope }: { scope: unknown }) => ({
+        organizationId: (scope as { organizationId?: string } | undefined)?.organizationId,
+        deletedAt: null,
+      }),
+    };
+    const member = {
+      _scope: { kind: "member", organizationId: "org-1", userId: "u1", orgRoles: [] },
+    } as never;
 
-    /**
-     * Through a KIT parser: arc's own never emits `lookups` at all, so a resolver built on
-     * it could not reach this path — mongokit is what produces them.
-     */
-    const lookupParser = {
-      parse: () => ({ filters: {}, lookups: [lookup] }),
-    } as unknown as ConstructorParameters<typeof QueryResolver>[0]["queryParser"];
-
-    /** Capture through arc's own writer seam; `console` is not where it necessarily goes. */
-    function warningsWhile(fn: () => void): string[] {
-      const warnings: string[] = [];
-      const suppressed = process.env.ARC_SUPPRESS_WARNINGS;
-      delete process.env.ARC_SUPPRESS_WARNINGS;
-      try {
-        runWithArcLogger(
-          {
-            writer: {
-              debug: () => undefined,
-              info: () => undefined,
-              warn: (...args: unknown[]) => warnings.push(args.join(" ")),
-              error: () => undefined,
-            },
-          },
-          fn,
-        );
-      } finally {
-        if (suppressed !== undefined) process.env.ARC_SUPPRESS_WARNINGS = suppressed;
-      }
-      return warnings;
-    }
-
-    it("warns, naming the joined collection", () => {
+    it("the joined side is filtered by the policy, for THIS caller's org", () => {
       const resolver = createResolver({
-        queryParser: lookupParser,
-        schemaOptions: { query: { allowedLookups: ["orders"] } },
+        queryParser: parserWith(lookup),
+        schemaOptions: { query: { allowedLookups: { orders } } },
       });
-
-      const warnings = warningsWhile(() => {
-        resolver.resolve(createReq());
-      });
-
-      expect(warnings.join(" ")).toMatch(/orders/);
+      expect(resolver.resolve(createReq(), member).lookups).toEqual([
+        { ...lookup, where: { organizationId: "org-1", deletedAt: null } },
+      ]);
     });
 
-    it("still RETURNS the lookup — this informs, it does not block a declared allowlist", () => {
+    it("a client-supplied where is REPLACED, never merged — it cannot widen the join", () => {
       const resolver = createResolver({
-        queryParser: lookupParser,
-        schemaOptions: { query: { allowedLookups: ["orders"] } },
+        queryParser: parserWith({ ...lookup, where: { organizationId: "org-2" } }),
+        schemaOptions: { query: { allowedLookups: { orders } } },
       });
-
-      let result: ReturnType<typeof resolver.resolve> | undefined;
-      warningsWhile(() => {
-        result = resolver.resolve(createReq());
+      expect(resolver.resolve(createReq(), member).lookups?.[0]?.where).toEqual({
+        organizationId: "org-1",
+        deletedAt: null,
       });
-
-      expect(result?.lookups).toHaveLength(1);
     });
 
-    it("says nothing when the collection is not allow-listed — it never joins", () => {
+    it("a collection outside the policy map never joins", () => {
       const resolver = createResolver({
-        queryParser: lookupParser,
-        schemaOptions: { query: { allowedLookups: ["invoices"] } },
+        queryParser: parserWith(lookup),
+        schemaOptions: { query: { allowedLookups: { invoices: orders } } },
       });
+      expect(resolver.resolve(createReq(), member).lookups).toBeUndefined();
+    });
 
-      let result: ReturnType<typeof resolver.resolve> | undefined;
-      const warnings = warningsWhile(() => {
-        result = resolver.resolve(createReq());
+    it("an inherited key is not an allowed collection", () => {
+      const resolver = createResolver({
+        queryParser: parserWith({ ...lookup, from: "constructor" }),
+        schemaOptions: { query: { allowedLookups: { orders } } },
       });
-
-      expect(result?.lookups).toBeUndefined();
-      expect(warnings.join(" ")).not.toMatch(/foreign side|JOINED side/);
+      expect(resolver.resolve(createReq(), member).lookups).toBeUndefined();
     });
   });
 
@@ -779,13 +741,10 @@ describe("QueryResolver", () => {
   // --------------------------------------------------------------------------
 
   describe("page normalization", () => {
-    it("ensures page is at least 1", () => {
+    it("refuses a page below 1 with a 400 — never silently clamped", () => {
       const resolver = createResolver();
       const req = createReq({ query: { page: "0" } });
-
-      const result = resolver.resolve(req);
-
-      expect(result.page).toBeGreaterThanOrEqual(1);
+      expect(() => resolver.resolve(req)).toThrow(expect.objectContaining({ statusCode: 400 }));
     });
 
     it("defaults page to 1 when not provided", () => {

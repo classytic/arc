@@ -46,7 +46,7 @@ async function fiveHundred(extra: Partial<CreateAppOptions> = {}) {
 
 describe("error disclosure defaults", () => {
   it("preset: production — masks the message AND omits the stack", async () => {
-    const body = await fiveHundred({ preset: "production" });
+    const body = await fiveHundred({ preset: "production", runtime: "memory" });
     expect(body).not.toContain(SECRET);
     expect(body).not.toContain("stack");
   });
@@ -85,6 +85,7 @@ describe("error disclosure defaults", () => {
     // derived options wholesale, silently re-enabling disclosure in production.
     const body = await fiveHundred({
       preset: "production",
+      runtime: "memory",
       errorHandler: { errorMappers: [] },
     } as Partial<CreateAppOptions>);
     expect(body).not.toContain(SECRET);
@@ -94,6 +95,7 @@ describe("error disclosure defaults", () => {
   it("an EXPLICIT host opt-in still wins — deliberate widening stays possible", async () => {
     const body = await fiveHundred({
       preset: "production",
+      runtime: "memory",
       errorHandler: { exposeInternalMessages: true },
     } as Partial<CreateAppOptions>);
     expect(body).toContain(SECRET);

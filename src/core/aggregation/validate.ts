@@ -32,6 +32,7 @@ import type {
   AggTopN,
 } from "@classytic/repo-core/repository";
 import type { AnyRecord, RouteSchemaOptions } from "../../types/index.js";
+import { pathTouchesBlocked } from "../fieldRulePredicates.js";
 import type { NormalizedAggregation } from "./normalize.js";
 import {
   collectBlockedFields,
@@ -566,26 +567,11 @@ function validateFieldReferences(input: FieldRefValidationInput): void {
 function assertFieldAllowed(context: string, ref: string, input: FieldRefValidationInput): void {
   const { resourceName, aggregationName, lookupAliases, blockedFields } = input;
   const dot = ref.indexOf(".");
-  if (dot > 0) {
-    // Dotted path: either a lookup-aliased ref (`customer.name`) or a nested
-    // embedded-document field (`totals.grandTotal.amount`). When the head
-    // segment matches a declared lookup we trust the join; otherwise it's a
-    // nested doc path on the base resource and we only enforce blocked-field
-    // policy on the head segment.
-    const alias = ref.slice(0, dot);
-    if (lookupAliases.has(alias)) return;
-    if (blockedFields.has(alias)) {
-      throw new ArcAggregationConfigError(
-        `Resource "${resourceName}" aggregation "${aggregationName}" references ` +
-          `field "${ref}" in ${context} whose root "${alias}" is blocked from ` +
-          `aggregation (\`hidden: true\` or \`aggregable: false\` in ` +
-          `schemaOptions.fieldRules). Aggregating hidden fields would leak ` +
-          `cardinality information.`,
-      );
-    }
-    return;
-  }
-  if (blockedFields.has(ref)) {
+  // A ref whose head is a declared lookup alias reads the JOINED side — trusted.
+  if (dot > 0 && lookupAliases.has(ref.slice(0, dot))) return;
+  // Any depth, both directions: a blocked ancestor covers the ref, and a ref over an object that
+  // CONTAINS a blocked field groups or measures it raw.
+  if (pathTouchesBlocked(ref, blockedFields, { descendants: true })) {
     throw new ArcAggregationConfigError(
       `Resource "${resourceName}" aggregation "${aggregationName}" references ` +
         `field "${ref}" in ${context}, but the field is blocked from aggregation ` +

@@ -1,8 +1,8 @@
 // Pipeline module — functional guard/transform/intercept pattern
-export { guard } from "./guard.js";
-export { intercept } from "./intercept.js";
+export { type GuardOptions, guard } from "./guard.js";
+export { type InterceptOptions, intercept } from "./intercept.js";
 export { executePipeline, pipe } from "./pipe.js";
-export { transform } from "./transform.js";
+export { type TransformOptions, transform } from "./transform.js";
 
 export type {
   Guard,

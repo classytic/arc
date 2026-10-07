@@ -9,7 +9,12 @@ import "../types/fastify-augmentation.js";
 
 // Constants — single source of truth for defaults and magic values
 export * from "../constants.js";
-export type { AccessControlConfig } from "./AccessControl.js";
+export type {
+  AccessControlConfig,
+  AccessControlRepository,
+  FetchDenialReason,
+  FetchResult,
+} from "./AccessControl.js";
 
 // Composable classes extracted from BaseController
 export { AccessControl } from "./AccessControl.js";
@@ -40,6 +45,7 @@ export type {
 export { BaseCrudController } from "./BaseCrudController.js";
 export type { BodySanitizerConfig } from "./BodySanitizer.js";
 export { BodySanitizer } from "./BodySanitizer.js";
+export type { MixinConstructor } from "./controllerTypes.js";
 // createActionRouter is the internal engine for the public `actions` API on
 // defineResource. It is no longer exported — apps should declare actions via
 // `defineResource({ actions: { ... } })`.
@@ -61,7 +67,12 @@ export {
   type SeamedResourceConfig,
 } from "./defineResource/seams.js";
 export { defineResource, ResourceDefinition } from "./defineResource.js";
-export { defineResourceVariants } from "./defineResourceVariants.js";
+export {
+  defineResourceVariants,
+  type VariantOverride,
+  type VariantsMap,
+  type VariantsResult,
+} from "./defineResourceVariants.js";
 // Entity helpers — read `req.arc.idField` / `entityId` inside action and
 // custom-route handlers without re-reading resource config. Use
 // `getEntityQuery(req)` as the canonical `findOne` filter shape — fixes
@@ -74,7 +85,6 @@ export {
 } from "./entityHelpers.js";
 // Fastify ↔ arc-controller seam (also consumed by MCP integration)
 export {
-  createCrudHandlers,
   createFastifyHandler,
   createRequestContext,
   getControllerContext,

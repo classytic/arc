@@ -41,7 +41,9 @@ interface ResourcePermissions<TDoc = Record<string, unknown>> {
   delete?: PermissionCheck<TDoc>;
 }
 
-type PermissionOverrides<TDoc = Record<string, unknown>> = Partial<ResourcePermissions<TDoc>>;
+export type PermissionOverrides<TDoc = Record<string, unknown>> = Partial<
+  ResourcePermissions<TDoc>
+>;
 
 /**
  * Merge a base preset with user overrides.

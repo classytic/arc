@@ -16,6 +16,7 @@
  * });
  */
 
+import type { IoredisKeyValueCommands, UpstashKeyValueCommands } from "../../utils/redisShapes.js";
 import type { IdempotencyResult, IdempotencyStore } from "./interface.js";
 
 export interface RedisClient {
@@ -213,21 +214,12 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 // ============================================================================
 
 /**
- * Minimal ioredis shape we depend on — keeps this file peer-dep-free.
- *
- * Variadic tails are `unknown[]`, not `(string | number)[]`: ioredis types
- * every command as overloads whose tails mix literal tokens (`'MATCH'`),
- * `Buffer` and an optional callback, and a narrower tail matches NONE of
- * them — a real `Redis` instance then fails to assign (TS2345). Pinned by
- * `tests/types/ioredis-assignability.test.ts`.
+ * Minimal ioredis shape the idempotency store depends on — the shared
+ * key/value commands (`utils/redisShapes.ts`, where the `unknown[]`-tail rule
+ * is explained) plus `exists` and lifecycle. Keeps this file peer-dep-free.
  */
-export interface IoredisLike {
-  get(key: string): Promise<string | null>;
-  set(...args: unknown[]): Promise<string | null>;
-  del(...keys: string[]): Promise<number>;
+export interface IoredisLike extends IoredisKeyValueCommands {
   exists(...keys: string[]): Promise<number>;
-  scan(cursor: string | number, ...args: unknown[]): Promise<[string, string[]]>;
-  eval?(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
   quit?(): Promise<string>;
   disconnect?(): void;
 }
@@ -294,17 +286,12 @@ export function ioredisAsIdempotencyClient(client: IoredisLike): RedisClient & {
   };
 }
 
-/** Minimal `@upstash/redis` shape we depend on (REST client, edge-safe). */
-export interface UpstashRedisLike {
-  get(key: string): Promise<string | null | unknown>;
-  set(key: string, value: unknown, opts?: Record<string, unknown>): Promise<unknown>;
-  del(...keys: string[]): Promise<number>;
+/**
+ * Minimal `@upstash/redis` shape the idempotency store depends on (REST,
+ * edge-safe) — the shared key/value commands plus `exists`.
+ */
+export interface UpstashRedisLike extends UpstashKeyValueCommands {
   exists(...keys: string[]): Promise<number>;
-  scan(
-    cursor: number | string,
-    opts?: { match?: string; count?: number },
-  ): Promise<[number, string[]] | [string, string[]]>;
-  eval?(script: string, keys: string[], args: (string | number)[]): Promise<unknown>;
 }
 
 /**

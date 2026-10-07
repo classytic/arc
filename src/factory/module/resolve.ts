@@ -4,7 +4,94 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { ArcModule, ArcModuleInput, ModuleContribution } from "./types.js";
+import { activateBridges, type SkippedBridge } from "./graph.js";
+import type { ArcModule, ArcModuleInput, LazyBridge, ModuleContribution } from "./types.js";
+
+export function isLazyBridge(input: ArcModuleInput): input is LazyBridge {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    !(input instanceof Promise) &&
+    typeof (input as { load?: unknown }).load === "function"
+  );
+}
+
+/**
+ * Resolve every input, then drop inactive bridges — a `LazyBridge` is decided
+ * from its DECLARED `name` + `dependsOn`, so an inactive one is never imported.
+ * Input order is preserved (it is `orderModules`' tie-break).
+ */
+export async function resolveModules(
+  inputs: readonly ArcModuleInput[],
+): Promise<{ active: ArcModule[]; skipped: SkippedBridge[] }> {
+  const { active, skipped, lazyByName } = await declareModules(inputs);
+  return { active: await loadActiveBridges(active, lazyByName), skipped };
+}
+
+/** Replace each active lazy bridge's declaration with the module it loads. */
+export function loadActiveBridges(
+  active: readonly ArcModule[],
+  lazyByName: ReadonlyMap<string, LazyBridge>,
+): Promise<ArcModule[]> {
+  return Promise.all(
+    active.map((m) => {
+      const lazy = lazyByName.get(m.name);
+      return lazy ? loadLazyBridge(lazy) : m;
+    }),
+  );
+}
+
+/**
+ * Resolve every input and activate bridges WITHOUT loading a lazy bridge — its declaration
+ * stands in for it. The shared first half of `resolveModules` and `planModules`.
+ */
+export async function declareModules(inputs: readonly ArcModuleInput[]): Promise<{
+  active: ArcModule[];
+  skipped: SkippedBridge[];
+  lazyByName: ReadonlyMap<string, LazyBridge>;
+}> {
+  const declared = await Promise.all(
+    inputs.map((input): Promise<ArcModule> | ArcModule =>
+      isLazyBridge(input)
+        ? {
+            name: input.name,
+            kind: "bridge",
+            dependsOn: input.dependsOn,
+            ...(input.requires ? { requires: input.requires } : {}),
+          }
+        : resolveModule(input),
+    ),
+  );
+  const { active, skipped } = activateBridges(declared);
+  const lazyByName = new Map(inputs.filter(isLazyBridge).map((b) => [b.name, b] as const));
+  return { active, skipped, lazyByName };
+}
+
+/** The loaded module must be the bridge that was declared — activation was decided on the declaration. */
+async function loadLazyBridge(lazy: LazyBridge): Promise<ArcModule> {
+  const m = await resolveModule(lazy.load);
+  const deps = [...(m.dependsOn ?? [])].sort().join(",");
+  if (
+    m.name !== lazy.name ||
+    m.kind !== "bridge" ||
+    deps !== [...lazy.dependsOn].sort().join(",") ||
+    portsKey(m.requires) !== portsKey(lazy.requires)
+  ) {
+    throw new Error(
+      `[arc] lazy bridge "${lazy.name}" loaded a module that does not match its declaration ` +
+        `(got name "${m.name}", kind "${m.kind ?? "domain"}", dependsOn [${deps}], requires ` +
+        `${portsKey(m.requires)}). Activation and the requirement check were decided on the declared ` +
+        "name + dependsOn + requires, so they must be identical.",
+    );
+  }
+  return m;
+}
+
+/** A stable fingerprint of a `requires` declaration, for the declared-vs-loaded comparison. */
+function portsKey(requires: ArcModule["requires"]): string {
+  const list = (names: readonly string[] | undefined) => [...(names ?? [])].sort().join(",");
+  return `ports[${list(requires?.ports)}] optional[${list(requires?.optionalPorts)}] modules[${list(requires?.modules)}]`;
+}
 
 /**
  * Resolve any module-input form to a concrete `ArcModule`. A thunk is invoked
@@ -12,6 +99,7 @@ import type { ArcModule, ArcModuleInput, ModuleContribution } from "./types.js";
  * awaited. Called once per module at the start of the bootstrap phase.
  */
 export async function resolveModule(input: ArcModuleInput): Promise<ArcModule> {
+  if (isLazyBridge(input)) return loadLazyBridge(input);
   const resolved = typeof input === "function" ? await input() : await input;
   if (!resolved || typeof resolved !== "object" || typeof resolved.name !== "string") {
     throw new Error(

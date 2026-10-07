@@ -127,8 +127,8 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 | Peer | Min | Required? |
 |------|-----|-----------|
 | fastify | >=5.12.0 | **Yes** |
-| @classytic/primitives | >=0.28.0 | **Yes** |
-| @classytic/repo-core | >=0.28.0 | **Yes** |
+| @classytic/primitives | >=0.29.0 | **Yes** |
+| @classytic/repo-core | >=0.29.0 | **Yes** |
 | better-auth | >=1.7.0 | No |
 | ioredis | >=6.0.0 | No |
 | bullmq | >=6.0.0 | No |
@@ -136,7 +136,7 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 
 **Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter — Mongoose, Drizzle, AND Prisma — ships from its kit (`@classytic/mongokit/adapter@>=3.13.0`, `@classytic/sqlitekit/adapter@>=0.3.0`, `@classytic/prismakit/adapter@>=0.1.0`); hosts depend on the kit directly. The kit owns the driver peer. Custom kits implementing `DataAdapter<TDoc>` from `@classytic/repo-core/adapter` plug in identically.
 
-`@classytic/repo-core@>=0.4.0` publishes the `MinimalRepo` / `StandardRepo` contract plus the canonical pagination, tenant, error, schema-generator, AND adapter contracts (`/adapter` subpath: `DataAdapter`, `RepositoryLike`, `AdapterRepositoryInput`, `AdapterFactory`, `OpenApiSchemas`, `SchemaMetadata`, `FieldMetadata`, `RelationMetadata`, `asRepositoryLike`, `isRepository`, ...). Hosts import those from repo-core directly — arc re-exports only `RepositoryLike`. See the gotcha under "Type conventions" above. `@classytic/primitives` owns the canonical event types (`EventMeta`, `DomainEvent`, `EventTransport`, `createEvent`, `createChildEvent`, `matchEventPattern`, ...) AND the outbox contract (`@classytic/primitives/outbox` >=0.14: `OutboxStore`, option types, `OutboxOwnershipError`, `InvalidOutboxEventError` — arc 2.24 removed its duplicate/re-export; import from primitives). `EventTransport.subscribe` is OPTIONAL as of primitives 0.14 (publish-only transports) — arc's `eventPlugin` subscribe path guards it (`typeof transport.subscribe !== 'function'` → clear error / `failOpen` no-op). Ownership rule: primitives owns pure cross-package contracts, arc owns runtime (`EventOutbox`, `MemoryOutboxStore`, `repositoryAsOutboxStore`, `exponentialBackoff`) — arc re-exports the runtime `MemoryEventTransport` only. `mergeFieldRuleConstraints` + `applyNullable` now live in `@classytic/repo-core/schema`. Arc 2.12 ships zero kit-specific adapters — any kit (mongokit, sqlitekit, prismakit, pgkit, custom) plugs in via the `/adapter` subpath.
+**Ownership:** repo-core owns repository, adapter (`/adapter`), pagination, tenant, error, schema, cache, sync and idempotency contracts; primitives owns event types (`DomainEvent`, `EventTransport` — `subscribe` is optional, `eventPlugin` guards it) and the outbox contract (`/outbox`). Hosts import those from the owner, never through arc. Arc owns runtime: `MemoryEventTransport`, `EventOutbox`, `repositoryAsOutboxStore`, `exponentialBackoff`. The one peer value arc re-exports is `MemoryOutboxStore` (primitives), under `./events`. Arc ships zero kit adapters — kits plug in via repo-core `/adapter`. Per-floor reasons: [wiki/peer-deps.md](wiki/peer-deps.md).
 
 ## Files
 

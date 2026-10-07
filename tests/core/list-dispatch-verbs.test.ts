@@ -111,6 +111,35 @@ describe("BaseController — list() resource-dispatch verbs", () => {
       expect((repo as any).distinct).not.toHaveBeenCalled();
     });
 
+    /** `_distinct` returns RAW values, so a hidden rule blocks through the path in both directions. */
+    it.each([
+      ["a child of a hidden field", { secret: { hidden: true } }, "secret.token"],
+      ["a deep descendant of a hidden field", { secret: { hidden: true } }, "secret.a.b"],
+      ["a parent whose objects carry a hidden child", { "secret.token": { hidden: true } }, "secret"],
+    ])("refuses %s", async (_label, fieldRules, field) => {
+      // biome-ignore lint/suspicious/noExplicitAny: test mock extension
+      (repo as any).distinct = vi.fn().mockResolvedValue([{ token: "leak" }]);
+      controller = new BaseController(repo as never, { resourceName: "user", schemaOptions: { fieldRules } });
+
+      await expect(controller.list(createReq(hooks, { query: { _distinct: field } }))).rejects.toMatchObject({
+        status: 400,
+      });
+      // biome-ignore lint/suspicious/noExplicitAny: test mock extension
+      expect((repo as any).distinct).not.toHaveBeenCalled();
+    });
+
+    it("still allows a sibling path that shares a PREFIX but not a segment", async () => {
+      // `secretary` is not under `secret` — the rule is by path segment, not by string prefix.
+      // biome-ignore lint/suspicious/noExplicitAny: test mock extension
+      (repo as any).distinct = vi.fn().mockResolvedValue(["x"]);
+      controller = new BaseController(repo as never, {
+        resourceName: "user",
+        schemaOptions: { fieldRules: { secret: { hidden: true } } },
+      });
+      const res = await controller.list(createReq(hooks, { query: { _distinct: "secretary" } }));
+      expect(res.status).toBe(200);
+    });
+
     // `systemManaged` is a *write* rule (server stamps the value); the
     // field is still in every list response, so blocking `_distinct`
     // gives nothing but inconvenience. Pre-fix, the controller refused

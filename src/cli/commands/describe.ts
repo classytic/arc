@@ -53,7 +53,7 @@ interface DescribeOutput {
   stats: DescribeStats;
 }
 
-interface DescribedResource {
+export interface DescribedResource {
   name: string;
   displayName: string;
   prefix: string;
@@ -142,6 +142,8 @@ interface AggregationDescription {
 interface PermissionDescription {
   type: "public" | "requireAuth" | "requireRoles" | "custom";
   roles?: readonly string[];
+  /** `allowPublic({ policy })`: public, but a row policy narrows what anyone sees. */
+  rowFiltered?: true;
 }
 
 interface FieldDescription {
@@ -200,9 +202,9 @@ function describePermission(check: unknown): PermissionDescription {
 
   const fn = check as PermissionCheck;
 
-  // allowPublic() sets _isPublic = true
+  // allowPublic() sets _isPublic = true; allowPublic({ policy }) also sets _rowPolicy
   if (fn._isPublic === true) {
-    return { type: "public" };
+    return fn._rowPolicy ? { type: "public", rowFiltered: true } : { type: "public" };
   }
 
   // requireRoles() sets _roles = [...]

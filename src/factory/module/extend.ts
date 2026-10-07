@@ -28,7 +28,8 @@
  * | arm | behaviour |
  * |---|---|
  * | `resources`, `eventHandlers`, `scheduledJobs`, `workflows`, `healthChecks`, `errorMappers` | CONCATENATED, module's first |
- * | `dependsOn`, `owns` | UNION, order-preserving |
+ * | `dependsOn`, `owns`, `requires` | UNION, order-preserving (a port required on either side stays required) |
+ * | `kind` | set when the module has none; a DIFFERENT declared kind throws |
  * | `plugins`, `afterResources`, `onClose` | BOTH run, module's first; disposers composed |
  * | `bootstrap` | cannot be merged — pass a WRAPPER `(inner) => …` |
  * | `name` | not extendable; identity is the module's |
@@ -59,7 +60,14 @@ type Contribution<T> =
  * "extension" that is never additive.
  */
 export interface ModuleExtension<TExports = unknown> {
-  dependsOn?: readonly string[];
+  dependsOn?: ArcModule<TExports>["dependsOn"];
+  /**
+   * Classify a module the package left unclassified (`'platform'`, `'aggregator'`, …). Setting
+   * a kind that DIFFERS from one the module declared throws — a bridge is not silently relabelled.
+   */
+  kind?: ArcModule<TExports>["kind"];
+  /** Unioned with the module's; a port either side marks `'required'` stays required. */
+  requires?: ArcModule<TExports>["requires"];
   owns?: readonly string[] | "provided";
   resources?: ArcModule<TExports>["resources"];
   eventHandlers?: ArcModule<TExports>["eventHandlers"];
@@ -70,6 +78,10 @@ export interface ModuleExtension<TExports = unknown> {
   plugins?: ArcModule<TExports>["plugins"];
   afterResources?: ArcModule<TExports>["afterResources"];
   onClose?: ArcModule<TExports>["onClose"];
+  /** Host-emitted facts added to the module's owned events — concatenated. */
+  publishes?: ArcModule<TExports>["publishes"];
+  /** Extra owner prefixes for those facts — unioned with the module's. */
+  eventNamespace?: ArcModule<TExports>["eventNamespace"];
   /**
    * WRAP the module's bootstrap — it is never replaced.
    *
@@ -124,13 +136,33 @@ function mergeArray<T>(
 }
 
 /** Order-preserving union — a duplicate edge or claim is not an error. */
-function mergeNames(
-  own: readonly string[] | undefined,
-  extra: readonly string[] | undefined,
-): readonly string[] | undefined {
+function mergeNames<T extends string>(
+  own: readonly T[] | undefined,
+  extra: readonly T[] | undefined,
+): readonly T[] | undefined {
   if (own === undefined) return extra;
   if (extra === undefined) return own;
   return [...new Set([...own, ...extra])];
+}
+
+function mergeRequires(
+  own: ArcModule["requires"],
+  extra: ArcModule["requires"],
+): ArcModule["requires"] | undefined {
+  if (own === undefined) return extra;
+  if (extra === undefined) return own;
+  const ports = mergeNames(own.ports, extra.ports);
+  // A port required on either side is required; it is not also listed optional.
+  const required = new Set(ports ?? []);
+  const optional = mergeNames(own.optionalPorts, extra.optionalPorts)?.filter(
+    (p) => !required.has(p),
+  );
+  const modules = mergeNames(own.modules, extra.modules);
+  return {
+    ...(ports ? { ports } : {}),
+    ...(optional && optional.length > 0 ? { optionalPorts: optional } : {}),
+    ...(modules ? { modules } : {}),
+  };
 }
 
 function mergeOwns(
@@ -227,7 +259,17 @@ export function extendModule<TExports = unknown>(
     if (value !== undefined) out[key as string] = value;
   };
 
+  if (extension.kind !== undefined) {
+    if (mod.kind !== undefined && mod.kind !== extension.kind) {
+      throw new Error(
+        `[arc] extendModule("${mod.name}"): the module declares kind "${mod.kind}"; refusing to ` +
+          `relabel it "${extension.kind}". A kind changes activation and ordering — change it in the module.`,
+      );
+    }
+    out.kind = extension.kind;
+  }
   set("dependsOn", mergeNames(mod.dependsOn, extension.dependsOn));
+  set("requires", mergeRequires(mod.requires, extension.requires));
   set("owns", mergeOwns(mod.owns, extension.owns));
   set("resources", mergeContribution(mod.resources, extension.resources));
   set("eventHandlers", mergeContribution(mod.eventHandlers, extension.eventHandlers));
@@ -238,6 +280,12 @@ export function extendModule<TExports = unknown>(
   set("plugins", mergeHook(mod.plugins, extension.plugins));
   set("afterResources", mergeHook(mod.afterResources, extension.afterResources));
   set("onClose", mergeOnClose(mod.onClose, extension.onClose));
+  set("publishes", mergeArray(mod.publishes, extension.publishes));
+  if (extension.eventNamespace !== undefined) {
+    // The module's implicit namespace is its name — keep it when a host adds more.
+    const own = mod.eventNamespace === undefined ? [mod.name] : [mod.eventNamespace].flat();
+    set("eventNamespace", mergeNames(own, [extension.eventNamespace].flat()));
+  }
   // Bootstrap is a WRAPPER, not a merge: it is applied when the caller supplies
   // one, even if the module has none (the wrapper then receives `undefined`).
   if (extension.bootstrap) out.bootstrap = extension.bootstrap(mod.bootstrap);

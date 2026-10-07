@@ -101,18 +101,20 @@ await app.register(mcpPlugin, {
 
 ### Permission Filters (v2.4.2)
 
-Resource permissions with `filters` are automatically enforced in MCP tools — same as REST:
+Resource permissions that return a row `policy` are automatically enforced in MCP tools — same as REST:
 
 ```typescript
+import { allow, deny } from '@classytic/arc/permissions';
+
 defineResource({
   name: 'task',
   permissions: {
-    list: (ctx) => ({
-      granted: !!ctx.user,
-      filters: { orgId: ctx.user?.orgId, branchId: ctx.user?.branchId },
-    }),
+    list: (ctx) =>
+      ctx.user
+        ? allow({ policy: { orgId: ctx.user.orgId, branchId: ctx.user.branchId } })
+        : deny('Auth required'),
     create: (ctx) => !!ctx.user,                    // boolean works too
-    delete: (ctx) => ({ granted: false, reason: 'Read-only' }),  // deny
+    delete: () => deny('Read-only'),
   },
 });
 

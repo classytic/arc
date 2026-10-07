@@ -241,7 +241,7 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
       schemaOptions: {
         query: {
           allowedPopulate: ["category"],
-          allowedLookups: ["lookupcategories"],
+          allowedLookups: { lookupcategories: { scope: () => ({ isActive: { $ne: false } }) } },
         },
       },
     });
@@ -262,6 +262,21 @@ describe("Lookup/join (no refs — $lookup aggregation)", () => {
     const phone = body.data.find((d: any) => d.name === "Phone");
     expect(phone.cat).toBeDefined();
     expect(phone.cat.name).toBe("Electronics");
+  });
+
+  it("the joined side is filtered by the resource's server scope — an inactive category never joins", async () => {
+    await seedData();
+    // The client also sends its own `where` naming the inactive row; the server scope replaces it.
+    const res = await app.inject({
+      method: "GET",
+      url: `/lookup-products?lookup[cat][from]=lookupcategories&lookup[cat][localField]=categorySlug&lookup[cat][foreignField]=slug&lookup[cat][single]=true&lookup[cat][where][slug]=clothing`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const shirt = body.data.find((d: any) => d.name === "Shirt");
+    expect(shirt).toBeDefined();
+    expect(shirt.cat ?? null).toBeNull();
+    expect(body.data.find((d: any) => d.name === "Phone").cat.name).toBe("Electronics");
   });
 
   it("should support select on lookup (only bring specific fields)", async () => {
@@ -349,7 +364,7 @@ describe("Lookup without allowedLookups (deny-by-default)", () => {
 describe("Lookup combined with sort and filter", () => {
   beforeAll(async () => {
     await createTestAppWithResource({
-      schemaOptions: { query: { allowedLookups: ["lookupcategories"] } },
+      schemaOptions: { query: { allowedLookups: { lookupcategories: { scope: () => ({}) } } } },
     });
   });
 
@@ -391,7 +406,7 @@ describe("Lookup combined with sort and filter", () => {
 describe("Root select + lookup combined", () => {
   beforeAll(async () => {
     await createTestAppWithResource({
-      schemaOptions: { query: { allowedLookups: ["lookupcategories"] } },
+      schemaOptions: { query: { allowedLookups: { lookupcategories: { scope: () => ({}) } } } },
     });
   });
 
@@ -436,7 +451,7 @@ describe("Root select + lookup combined", () => {
 describe("Keyset pagination + lookup", () => {
   beforeAll(async () => {
     await createTestAppWithResource({
-      schemaOptions: { query: { allowedLookups: ["lookupcategories"] } },
+      schemaOptions: { query: { allowedLookups: { lookupcategories: { scope: () => ({}) } } } },
     });
   });
 

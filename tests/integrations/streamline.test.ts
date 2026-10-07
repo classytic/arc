@@ -679,6 +679,47 @@ describe("Streamline Integration Plugin", () => {
       });
       expect(getRes.statusCode).toBe(200);
     });
+
+    it("execute/pause/rewind are gated — by their own key, else start/cancel", async () => {
+      // These three routes checked no permission at all: restricting `cancel`
+      // still let anyone pause or rewind a run.
+      const wf = createMockWorkflow("gated");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        workflows: [wf],
+        auth: false,
+        permissions: { start: async () => false, cancel: async () => false },
+      });
+      await app.ready();
+      const run = await wf.start({});
+      const base = `/workflows/gated/runs/${run._id}`;
+
+      for (const url of [`${base}/execute`, `${base}/pause`, `${base}/rewind`]) {
+        const res = await app.inject({ method: "POST", url, payload: { stepId: "step1" } });
+        expect(res.statusCode, url).toBe(403);
+      }
+      expect(wf.engine.execute).not.toHaveBeenCalled();
+      expect(wf.engine.pause).not.toHaveBeenCalled();
+      expect(wf.engine.rewindTo).not.toHaveBeenCalled();
+    });
+
+    it("an explicit key wins over the fallback", async () => {
+      const wf = createMockWorkflow("explicit");
+      app = Fastify({ logger: false });
+      await app.register(streamlinePlugin, {
+        workflows: [wf],
+        auth: false,
+        permissions: { cancel: async () => false, pause: async () => true },
+      });
+      await app.ready();
+      const run = await wf.start({});
+      const res = await app.inject({
+        method: "POST",
+        url: `/workflows/explicit/runs/${run._id}/pause`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+    });
   });
 
   // ---------- Shutdown ----------

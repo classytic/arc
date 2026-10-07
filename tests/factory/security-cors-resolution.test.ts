@@ -36,6 +36,7 @@ describe("resolveCorsOptions — pure CORS policy", () => {
     // The env-var trap: `origin: process.env.X?.split(',')` with X unset.
     const envUndefined = resolveCorsOptions({
       preset: "production",
+      runtime: "memory",
       cors: { origin: undefined },
     });
     expect(envUndefined.warnings).toHaveLength(1);

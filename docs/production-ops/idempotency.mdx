@@ -51,8 +51,22 @@ interface IdempotencyPluginOptions {
   include?: RegExp[];             // URL patterns to include
   exclude?: RegExp[];             // URL patterns to exclude
   retryAfterSeconds?: number;     // 409 retry hint (default: 1)
-  namespace?: string;             // Folded into fingerprint (shared-store safety)
+  namespace?: string;             // Folded into the key (shared-store safety)
 }
+```
+
+### Requiring a key on a route
+
+A route whose retry must not execute twice (checkout, payment, receive) should refuse a
+keyless call rather than run it unprotected:
+
+```typescript
+routes: [{
+  method: 'POST',
+  path: '/checkout',
+  config: { idempotency: { required: true } },  // 400 arc.idempotency_key_required without the header
+  handler: checkout,
+}]
 ```
 
 Pass **either** `repository` **or** `store`, not both. Omit both for
@@ -80,10 +94,24 @@ Request 1: POST /orders + Idempotency-Key: abc
   → Cache response
   → Return response + x-idempotency-key: abc
 
-Request 2: POST /orders + Idempotency-Key: abc (retry)
+Request 2: POST /orders + Idempotency-Key: abc (retry, same body)
   → Find cached response
   → Return cached response + x-idempotency-replayed: true
+
+Request 3: POST /orders + Idempotency-Key: abc (DIFFERENT body)
+  → 422 arc.idempotency_key_reused — neither replayed nor executed
 ```
+
+The key names ONE operation (key + method + URL + caller + namespace). The body is not part
+of the key — its fingerprint (`fingerprintRequest` from `@classytic/repo-core/idempotency`,
+the same one every layer uses) is stored with the response and compared on every retry. A
+key reused for a different body is a client bug, and answering it either way is wrong: a
+replay returns another request's result, a fresh execution charges twice. A keyed body nested
+deeper than 100 levels is refused with 400 `arc.idempotency_body_unfingerprintable`.
+
+For commands that must be idempotent beyond HTTP — a job, an offline till syncing days later
+— claim in the domain with `runIdempotent` (`@classytic/repo-core/idempotency`); this plugin
+covers the HTTP retry.
 
 ## Response Headers
 

@@ -206,7 +206,7 @@ describe("createApp — resourceDir option", () => {
         actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
       });
 
-    it("duplicates emit a warn by default (back-compat)", async () => {
+    it("an explicit strictResources: false downgrades duplicates to a warn", async () => {
       const warns: string[] = [];
       const logger = {
         level: "warn",
@@ -223,6 +223,7 @@ describe("createApp — resourceDir option", () => {
         auth: false,
         // biome-ignore lint/suspicious/noExplicitAny: Fastify logger shape varies
         logger: logger as any,
+        strictResources: false,
         resources: [
           makeResource("dupe-warn-a", "/dupe-warn-a-1"),
           makeResource("dupe-warn-a", "/dupe-warn-a-2"),
@@ -232,6 +233,20 @@ describe("createApp — resourceDir option", () => {
       await app.ready();
 
       expect(warns.some((m) => m.includes('Duplicate resource name "dupe-warn-a"'))).toBe(true);
+    });
+
+    it("duplicates fail boot by DEFAULT — no flag set", async () => {
+      await expect(
+        createApp({
+          preset: "testing",
+          auth: false,
+          logger: false,
+          resources: [
+            makeResource("dupe-default-a", "/dupe-default-a-1"),
+            makeResource("dupe-default-a", "/dupe-default-a-2"),
+          ],
+        }),
+      ).rejects.toThrow(/Duplicate resource name "dupe-default-a"/);
     });
 
     it("strictResources: true throws on duplicate resource names", async () => {
@@ -388,6 +403,7 @@ describe("createApp — resourceDir option", () => {
       await expect(
         createApp({
           preset: "production",
+          runtime: "memory",
           auth: { type: "jwt", jwt: { secret: "not-a-real-secret-just-for-testing" } },
           logger: false,
           resources: [
@@ -402,6 +418,7 @@ describe("createApp — resourceDir option", () => {
       await expect(
         createApp({
           preset: "production",
+          runtime: "memory",
           auth: { type: "jwt", jwt: { secret: "not-a-real-secret-just-for-testing" } },
           logger: false,
           resourceDir: "tests/utils", // dir exists but has no .resource.ts files
@@ -425,6 +442,7 @@ describe("createApp — resourceDir option", () => {
       // Should NOT throw — explicit false overrides the production default.
       const app = await createApp({
         preset: "production",
+        runtime: "memory",
         auth: { type: "jwt", jwt: { secret: "not-a-real-secret-just-for-testing" } },
         logger: false,
         strictResources: false,

@@ -11,14 +11,14 @@
  * contract (mongokit, sqlitekit, streamline, prismakit) catches and
  * serializes arc errors with the same code path it uses for its own.
  *
- * **Code naming.** Hierarchical, lowercase + dot-separated:
- * `arc.not_found`, `arc.validation_error`, `arc.org.access_denied`. New
- * domain packages should follow the same pattern (`commerce.cart.locked`,
- * `payment.gateway.timeout`). Cross-cutting canonical codes live in
- * `@classytic/repo-core/errors`'s `ERROR_CODES` constant.
+ * **Codes are catalogued in `@classytic/repo-core/errors`** (`ARC_ERROR_CODES`,
+ * `ARC_REASON_CODES`) so client SDKs read the wire vocabulary without
+ * depending on arc. Emit from those constants; `tests/utils/error-code-catalog.test.ts`
+ * fails on an uncatalogued `arc.*` literal. Domain packages use their own
+ * namespace (`commerce.cart.locked`).
  */
 
-import type { HttpError } from "@classytic/repo-core/errors";
+import { ARC_ERROR_CODES as C, type HttpError } from "@classytic/repo-core/errors";
 
 export interface ErrorOptions {
   code?: string;
@@ -41,7 +41,7 @@ export class ArcError extends Error implements HttpError {
 
   constructor(message: string, options: ErrorOptions = {}) {
     super(message, options.cause ? { cause: options.cause } : undefined);
-    this.code = options.code ?? "arc.error";
+    this.code = options.code ?? C.ERROR;
     this.statusCode = options.statusCode ?? 500;
     this.details = options.details;
     this.cause = options.cause;
@@ -65,7 +65,7 @@ export class NotFoundError extends ArcError {
       ? `${resource} with identifier '${identifier}' not found`
       : `${resource} not found`;
     super(message, {
-      code: "arc.not_found",
+      code: C.NOT_FOUND,
       statusCode: 404,
       details: { resource, ...(identifier ? { identifier } : {}) },
     });
@@ -78,25 +78,37 @@ export class ValidationError extends ArcError {
 
   constructor(message: string, errors: Array<{ field: string; message: string }> = []) {
     super(message, {
-      code: "arc.validation_error",
+      code: C.VALIDATION_ERROR,
       statusCode: 400,
       details: { errors },
     });
     this.name = "ValidationError";
     this.errors = errors;
   }
+
+  /**
+   * `HttpError.validationErrors` — what `toErrorContract` turns into the wire's
+   * `details[]`, the one place clients (arc-next `fieldErrors`) read field errors.
+   */
+  get validationErrors(): Array<{ path: string; validator: string; error: string }> {
+    return this.errors.map((e) => ({
+      path: e.field,
+      validator: "validation_error",
+      error: e.message,
+    }));
+  }
 }
 
 export class UnauthorizedError extends ArcError {
   constructor(message = "Authentication required") {
-    super(message, { code: "arc.unauthorized", statusCode: 401 });
+    super(message, { code: C.UNAUTHORIZED, statusCode: 401 });
     this.name = "UnauthorizedError";
   }
 }
 
 export class ForbiddenError extends ArcError {
   constructor(message = "Access denied") {
-    super(message, { code: "arc.forbidden", statusCode: 403 });
+    super(message, { code: C.FORBIDDEN, statusCode: 403 });
     this.name = "ForbiddenError";
   }
 }
@@ -104,7 +116,7 @@ export class ForbiddenError extends ArcError {
 export class ConflictError extends ArcError {
   constructor(message: string, field?: string) {
     super(message, {
-      code: "arc.conflict",
+      code: C.CONFLICT,
       statusCode: 409,
       ...(field ? { details: { field } } : {}),
     });
@@ -117,7 +129,7 @@ export class OrgRequiredError extends ArcError {
 
   constructor(message: string, organizations?: Array<{ id: string; roles?: string[] }>) {
     super(message, {
-      code: "arc.org.selection_required",
+      code: C.ORG_SELECTION_REQUIRED,
       statusCode: 403,
       ...(organizations ? { details: { organizations } } : {}),
     });
@@ -129,7 +141,7 @@ export class OrgRequiredError extends ArcError {
 export class OrgAccessDeniedError extends ArcError {
   constructor(orgId?: string) {
     super("Organization access denied", {
-      code: "arc.org.access_denied",
+      code: C.ORG_ACCESS_DENIED,
       statusCode: 403,
       ...(orgId ? { details: { organizationId: orgId } } : {}),
     });
@@ -142,7 +154,7 @@ export class RateLimitError extends ArcError {
 
   constructor(message = "Too many requests", retryAfter?: number) {
     super(message, {
-      code: "arc.rate_limited",
+      code: C.RATE_LIMITED,
       statusCode: 429,
       ...(retryAfter ? { details: { retryAfter } } : {}),
     });
@@ -153,7 +165,7 @@ export class RateLimitError extends ArcError {
 
 export class ServiceUnavailableError extends ArcError {
   constructor(message = "Service temporarily unavailable") {
-    super(message, { code: "arc.service_unavailable", statusCode: 503 });
+    super(message, { code: C.SERVICE_UNAVAILABLE, statusCode: 503 });
     this.name = "ServiceUnavailableError";
   }
 }
@@ -163,22 +175,26 @@ export class ServiceUnavailableError extends ArcError {
  * and the global error handler when no explicit code is supplied.
  */
 const STATUS_CODE_MAP: Readonly<Record<number, string>> = {
-  400: "arc.bad_request",
-  401: "arc.unauthorized",
-  403: "arc.forbidden",
-  404: "arc.not_found",
-  409: "arc.conflict",
-  422: "arc.unprocessable_entity",
-  429: "arc.rate_limited",
-  500: "arc.internal_error",
-  502: "arc.bad_gateway",
-  503: "arc.service_unavailable",
-  504: "arc.gateway_timeout",
+  400: C.BAD_REQUEST,
+  401: C.UNAUTHORIZED,
+  403: C.FORBIDDEN,
+  404: C.NOT_FOUND,
+  409: C.CONFLICT,
+  412: C.PRECONDITION_FAILED,
+  413: C.PAYLOAD_TOO_LARGE,
+  415: C.UNSUPPORTED_MEDIA_TYPE,
+  422: C.UNPROCESSABLE_ENTITY,
+  429: C.RATE_LIMITED,
+  500: C.INTERNAL_ERROR,
+  501: C.NOT_IMPLEMENTED,
+  502: C.BAD_GATEWAY,
+  503: C.SERVICE_UNAVAILABLE,
+  504: C.GATEWAY_TIMEOUT,
 };
 
 /** Status → canonical arc code, falling back to `arc.error`. */
 export function statusToArcCode(status: number): string {
-  return STATUS_CODE_MAP[status] ?? "arc.error";
+  return STATUS_CODE_MAP[status] ?? C.ERROR;
 }
 
 /**

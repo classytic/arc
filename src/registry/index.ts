@@ -43,10 +43,7 @@ export {
   getCascadingResourcesWithMetadata,
 } from "./cascadeOrgDelete.js";
 export type { IntrospectionPluginOptions } from "./introspectionPlugin.js";
-export {
-  default as introspectionPlugin,
-  introspectionPlugin as introspectionPluginFn,
-} from "./introspectionPlugin.js";
+export { default as introspectionPlugin } from "./introspectionPlugin.js";
 // 2.15.5 — resource manifest for FE codegen. BE-side helper that emits
 // the JSON every host's hand-rolled `createCrudApi('foo')` needs to
 // auto-generate action methods (mentora / fajr report).
@@ -59,5 +56,5 @@ export {
   type CustomRouteManifestEntry,
   type ResourceManifest,
 } from "./manifest.js";
-export type { RegisterOptions } from "./ResourceRegistry.js";
+export type { RegisterOptions, RouteRow } from "./ResourceRegistry.js";
 export { ResourceRegistry } from "./ResourceRegistry.js";

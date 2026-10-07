@@ -280,8 +280,9 @@ describe("RedisStreamTransport DLQ envelope — replayable contract", () => {
       blockTimeMs: 50,
       closeTimeoutMs: 50,
       logger: {
+        // Only the xrange warning is under test here.
         warn: (...args: unknown[]) => {
-          warnings.push(args);
+          if (/lacks xrange/.test(String(args[0]))) warnings.push(args);
         },
         error: () => {},
       },

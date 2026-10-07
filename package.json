@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.41.1",
+  "version": "2.42.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -208,10 +208,6 @@
       "types": "./dist/auth/audit.d.mts",
       "default": "./dist/auth/audit.mjs"
     },
-    "./sync": {
-      "types": "./dist/sync/changelog.d.mts",
-      "default": "./dist/sync/changelog.mjs"
-    },
     "./usage": {
       "types": "./dist/usage/index.d.mts",
       "default": "./dist/usage/index.mjs"
@@ -227,6 +223,10 @@
     "./testing/outbox": {
       "types": "./dist/testing/outboxStoreContract.d.mts",
       "default": "./dist/testing/outboxStoreContract.mjs"
+    },
+    "./testing/ports": {
+      "types": "./dist/testing/requiredPorts.d.mts",
+      "default": "./dist/testing/requiredPorts.mjs"
     }
   },
   "main": "./dist/index.mjs",
@@ -292,9 +292,9 @@
       "./mcp/testing": "stable",
       "./scim": "stable",
       "./auth/audit": "stable",
-      "./sync": "experimental",
       "./usage": "experimental",
       "./testing/outbox": "stable",
+      "./testing/ports": "stable",
       "./outbox-admin": "experimental"
     }
   },
@@ -308,7 +308,7 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "npm run typecheck:src && npm run typecheck:types && npm run check:type-lane",
+    "typecheck": "npm run typecheck:src && npm run typecheck:types && npm run typecheck:types-strict && npm run check:type-lane",
     "typecheck:src": "tsc --noEmit",
     "check:type-lane": "node scripts/check-type-lane.mjs",
     "lint": "biome check src/",
@@ -322,6 +322,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "typecheck:types": "tsc -p tsconfig.types.json",
+    "typecheck:types-strict": "tsc -p tsconfig.types-strict.json",
     "api:surface": "node scripts/check-api-surface.mjs --update",
     "check:api-surface": "node scripts/check-api-surface.mjs",
     "check:package": "publint && attw --pack . --profile esm-only",
@@ -337,6 +338,8 @@
     "smoke": "node scripts/smoke-test.mjs",
     "smoke:consumer": "node scripts/smoke-test.mjs --consumer",
     "smoke:mcp": "node scripts/mcp-e2e.mjs",
+    "bench:memory": "node --expose-gc scripts/bench-memory.mjs",
+    "bench:http": "node --expose-gc scripts/bench-http.mjs",
     "push": "classytic-push",
     "release:tag": "node -e \"require('child_process').execSync('npm run push -- v'+require('./package.json').version,{stdio:'inherit'})\"",
     "release": "npm run push -- main && npm run release:tag && npm publish",
@@ -353,8 +356,8 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.28.0",
-    "@classytic/repo-core": ">=0.28.0",
+    "@classytic/primitives": ">=0.29.0",
+    "@classytic/repo-core": ">=0.29.0",
     "@classytic/streamline": ">=2.8.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
@@ -489,8 +492,8 @@
     "@classytic/gitkit": ">=0.1.0",
     "@classytic/mongokit": "^3.33.0",
     "@classytic/pgkit": "^0.1.0",
-    "@classytic/primitives": "^0.28.0",
-    "@classytic/repo-core": "^0.28.0",
+    "@classytic/primitives": "^0.29.0",
+    "@classytic/repo-core": ">=0.29.0",
     "@classytic/sqlitekit": "^0.9.0",
     "@classytic/streamline": "^2.8.2",
     "@electric-sql/pglite": "^0.5.4",

@@ -19,11 +19,12 @@
  */
 
 export type { AuthPluginOptions } from "./authPlugin.js";
-export { authPlugin as authPluginFn, default as authPlugin } from "./authPlugin.js";
+export { default as authPlugin } from "./authPlugin.js";
 export type {
   BetterAuthAdapterOptions,
   BetterAuthAdapterResult,
   BetterAuthHandler,
+  CredentialVerifier,
 } from "./betterAuth.js";
 // Better Auth adapter
 export { createBetterAuthAdapter } from "./betterAuth.js";

@@ -112,6 +112,12 @@ describe("Error Handler Plugin", () => {
       // ArcError mirrors details to meta (per HttpError contract); toErrorContract
       // surfaces it under body.meta. Source-side details remain accessible there.
       expect(body.meta?.errors).toHaveLength(2);
+      // …and the field list reaches the canonical `details[]`, where clients read
+      // field errors (arc-next `fieldErrors`). Under `meta` alone no form sees it.
+      expect(body.details).toEqual([
+        { path: "name", code: "validation_error", message: "Name is required" },
+        { path: "email", code: "validation_error", message: "Invalid email format" },
+      ]);
     });
 
     it("should handle ForbiddenError", async () => {

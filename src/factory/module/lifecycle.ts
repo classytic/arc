@@ -27,12 +27,9 @@ interface EventBusLike {
 export async function subscribeModuleEventHandlers(
   fastify: FastifyInstance,
   modules: readonly ArcModule[],
-  /**
-   * Optional sink for per-module handler counts, filled as each arm resolves.
-   * Lets `arc.moduleDescriptors` report real numbers without resolving the
-   * factories a SECOND time — see the note on `collectModuleScheduledJobs`.
-   */
+  /** Per-module handler counts, so descriptors never re-resolve the factories. */
   countsByModule?: Map<string, number>,
+  consumedByModule?: Map<string, string[]>,
 ): Promise<Array<() => void | Promise<void>>> {
   const unsubscribes: Array<() => void | Promise<void>> = [];
   const owner = new Map<string, string>();
@@ -59,6 +56,7 @@ export async function subscribeModuleEventHandlers(
         }
         const handler = applyBoundary(def, m.name, fastify);
         const patterns = Array.isArray(def.event) ? def.event : [def.event as string];
+        consumedByModule?.set(m.name, [...(consumedByModule.get(m.name) ?? []), ...patterns]);
         for (const pattern of patterns) {
           unsubscribes.push(await bus.subscribe(pattern, handler));
         }
@@ -78,14 +76,10 @@ export async function subscribeModuleEventHandlers(
 }
 
 /**
- * Apply the declaration's opt-in error boundary. Without `boundary`, the raw
- * handler is subscribed and a throw reaches the transport — which is what makes
- * the durable path work (unacked → redelivered → DLQ). With it, failures are
- * logged through `fastify.log` and swallowed, for handlers whose retry would
- * only delay the next event's resync.
- *
- * The boundary label falls back to `<module>.<pattern>` so an unnamed handler
- * still produces an attributable log line instead of "anonymous".
+ * Apply the opt-in error boundary. Without it a throw reaches the transport —
+ * that is what makes the durable path work (unacked → redelivered → DLQ). With
+ * it, failures are logged and swallowed. Unnamed handlers are labelled
+ * `<module>.<pattern>` so the log line stays attributable.
  */
 function applyBoundary(
   def: EventHandlerDefinition,

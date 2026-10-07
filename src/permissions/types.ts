@@ -165,6 +165,15 @@ export interface PermissionCheckMeta {
   /** Set by allowPublic() — marks the endpoint as publicly accessible */
   _isPublic?: boolean;
   /**
+   * Set by `allowPublic({ policy })` — the gate admits EVERYONE, but what they
+   * can read or write is narrowed by a row policy. Public and row-filtered are
+   * independent facts: `_isPublic` says who may call the endpoint, this says the
+   * rows are not all of them. Surfaced as `rowFiltered` by `describePermission`,
+   * so a "what is publicly exposed?" audit can tell an open catalogue from a
+   * catalogue that shows strangers only its published rows.
+   */
+  _rowPolicy?: boolean;
+  /**
    * Set by `denyAll()` — nobody passes this gate, ever.
    *
    * Marked because `denyAll` used to return a BARE closure with no metadata, and

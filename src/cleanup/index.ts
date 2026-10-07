@@ -25,7 +25,7 @@ export {
 export type { DataCleanupModuleDeps } from "./module.js";
 export { createDataCleanupModule } from "./module.js";
 
-export { canonicalJson, computeManifestDigest, computePlanDigest } from "./plan-digest.js";
+export { computeManifestDigest, computePlanDigest } from "./plan-digest.js";
 export type { CleanupRecipeInfo, CleanupRegistry } from "./registry.js";
 export { createCleanupRegistry } from "./registry.js";
 export type {
@@ -35,7 +35,7 @@ export type {
   ExecuteInput,
   PreviewInput,
 } from "./service.js";
-export { createCleanupService, GLOBAL_DESTRUCTIVE_KEY } from "./service.js";
+export { createCleanupService } from "./service.js";
 export type {
   Availability,
   CleanupCancelRequest,

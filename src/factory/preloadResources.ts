@@ -31,10 +31,10 @@
 import type { ResourceLike } from "./loadResources.js";
 
 /** Eager glob result: `{ '/path/to/file.ts': resourceModule }` */
-type EagerGlobResult = Record<string, unknown>;
+export type EagerGlobResult = Record<string, unknown>;
 
 /** Lazy glob result: `{ '/path/to/file.ts': () => Promise<unknown> }` */
-type LazyGlobResult = Record<string, () => Promise<unknown>>;
+export type LazyGlobResult = Record<string, () => Promise<unknown>>;
 
 /**
  * Normalize an eager `import.meta.glob` result into a `ResourceLike[]`.

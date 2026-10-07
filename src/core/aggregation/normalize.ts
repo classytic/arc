@@ -279,12 +279,10 @@ function buildExecutionHints(config: AggregationConfig): AggExecutionHints | und
     hints.maxTimeMs = config.timeout;
   }
   if (config.indexHint && config.indexHint.leadingKeys.length > 0) {
-    // Mongo's `hint` accepts `{ field: 1 }` — synthesize the canonical
-    // ascending-leading-keys shape. Sqlitekit ignores; future kits map
-    // into their dialect.
-    const hintObj: Record<string, 1> = {};
-    for (const key of config.indexHint.leadingKeys) hintObj[key] = 1;
-    hints.indexHint = hintObj;
+    // An EXPECTATION, passed as declared: mongokit checks a declared index leads with these keys
+    // and lets the planner choose. Synthesizing a forced `{ field: 1 }` hint failed `BadValue`
+    // whenever only a longer index led with the field.
+    hints.indexHint = { leadingKeys: [...config.indexHint.leadingKeys] };
   }
   return Object.keys(hints).length > 0 ? hints : undefined;
 }

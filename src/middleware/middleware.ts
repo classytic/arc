@@ -48,7 +48,7 @@ export interface NamedMiddleware {
   readonly handler: MiddlewareHandler;
 }
 
-interface MiddlewareOptions {
+export interface MiddlewareOptions {
   operations?: NamedMiddleware["operations"];
   priority?: number;
   when?: NamedMiddleware["when"];

@@ -56,3 +56,21 @@ export const CACHE_EVENTS = Object.freeze({
 
 /** Type for cache event names */
 export type CacheEvent = (typeof CACHE_EVENTS)[keyof typeof CACHE_EVENTS];
+
+/**
+ * The payload arc publishes for every auto-CRUD event (`<resource>.created|updated|deleted`).
+ * `data` is the resource document as the route returned it.
+ */
+export const CRUD_EVENT_SCHEMA = Object.freeze({
+  type: "object",
+  properties: {
+    resource: { type: "string" },
+    operation: { type: "string", enum: ["create", "update", "delete"] },
+    data: {},
+    // The actor id as the auth adapter holds it — a string or an ObjectId.
+    userId: {},
+    organizationId: { type: "string" },
+    timestamp: { type: "string" },
+  },
+  required: ["resource", "operation", "timestamp"],
+} as const);

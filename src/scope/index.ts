@@ -18,7 +18,7 @@
 
 export type { ElevationEvent, ElevationOptions } from "./elevation.js";
 // Elevation plugin
-export { default as elevationPlugin, elevationPlugin as elevationPluginFn } from "./elevation.js";
+export { default as elevationPlugin } from "./elevation.js";
 export type { RateLimitKeyContext, TenantKeyGeneratorOptions } from "./rateLimitKey.js";
 // Per-tenant rate limit key generator
 // `SCOPE_AWARE_KEY_GENERATOR` / `isScopeAwareKeyGenerator` stay INTERNAL — they are how

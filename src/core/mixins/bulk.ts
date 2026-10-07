@@ -17,7 +17,6 @@
  */
 
 import { conjoinPolicyFilters } from "../../permissions/filter-merge.js";
-import { getOrgId as getOrgIdFromScope, isElevated } from "../../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -29,17 +28,18 @@ import { createError } from "../../utils/errors.js";
 import { withRepoFeatures } from "../../utils/repoFeature.js";
 import type { BaseCrudController } from "../BaseCrudController.js";
 import type { MixinConstructor } from "../controllerTypes.js";
+import { resolveTenancy } from "../tenancy.js";
 
 /** Public surface contributed by BulkMixin. */
 export interface BulkExt {
-  bulkCreate(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>>;
+  bulkCreate(req: IRequestContext): Promise<IControllerResponse<object[]>>;
   bulkUpdate(
     req: IRequestContext,
   ): Promise<IControllerResponse<{ matchedCount: number; modifiedCount: number }>>;
   bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>>;
 }
 
-export function BulkMixin<TBase extends MixinConstructor<BaseCrudController>>(
+export function BulkMixin<TBase extends MixinConstructor<BaseCrudController<object>>>(
   Base: TBase,
 ): TBase & MixinConstructor<BulkExt> {
   return class BulkController extends Base {
@@ -68,34 +68,31 @@ export function BulkMixin<TBase extends MixinConstructor<BaseCrudController>>(
         this.bodySanitizer.sanitize((item ?? {}) as AnyRecord, "create", req, arcContext),
       );
 
-      // SECURITY: inject tenant field into each item when an org scope is
-      // present. Mirrors AccessControl.buildIdFilter semantics:
+      // SECURITY: inject the tenant into every item, decided by
+      // `resolveTenancy` — the same rule as reads and as single-doc create:
       //   - No scope at all (unit tests) → no injection (controller lenient)
-      //   - Member scope with orgId → inject orgId into every item
-      //   - Elevated scope → no injection (admin picks per-item orgs)
-      //   - Public scope on a tenant-scoped resource → deny
+      //   - A caller WITH an org (member, service, or an elevated admin who
+      //     selected one) → that org is injected into every item
+      //   - Elevated with NO org (platform view) → no injection; the admin
+      //     picks per-item orgs
+      //   - No org, or anonymous → 403
+      //
+      // Elevated callers used to skip injection whether or not they had
+      // selected an org, so an admin acting as org-9 bulk-created rows under
+      // whatever `organizationId` each body carried — while a single create by
+      // the same admin was stamped org-9 by the preset.
       let scopedItems: AnyRecord[] = sanitizedItems;
-      if (this.tenantField) {
-        const scope = arcContext?._scope;
-        if (scope) {
-          if (scope.kind === "public") {
-            throw createError(403, "Organization context required to bulk-create resources", {
-              code: "ORG_CONTEXT_REQUIRED",
-            });
-          }
-          if (!isElevated(scope)) {
-            const orgId = getOrgIdFromScope(scope);
-            if (!orgId) {
-              throw createError(403, "Organization context required to bulk-create resources", {
-                code: "ORG_CONTEXT_REQUIRED",
-              });
-            }
-            const tenantField = this.tenantField;
-            scopedItems = sanitizedItems.map((item) => ({
-              ...item,
-              [tenantField]: orgId,
-            }));
-          }
+      if (this.tenantField && arcContext?._scope) {
+        const tenancy = resolveTenancy(arcContext, this.tenantField);
+        if (tenancy.mode === "scoped") {
+          scopedItems = sanitizedItems.map((item) => ({
+            ...item,
+            [tenancy.field]: tenancy.orgId,
+          }));
+        } else if (tenancy.reason !== "platform" && tenancy.reason !== "untenanted-resource") {
+          throw createError(403, "Organization context required to bulk-create resources", {
+            code: "ORG_CONTEXT_REQUIRED",
+          });
         }
       }
 
@@ -127,11 +124,13 @@ export function BulkMixin<TBase extends MixinConstructor<BaseCrudController>>(
     /**
      * Build a tenant-scoped filter for bulk update/delete.
      *
-     * Mirrors `AccessControl.buildIdFilter` semantics:
+     * Same tenancy as `AccessControl.buildIdFilter` — both go through
+     * `resolveTenancy`:
      *   - Always merge `_policyFilters` (from permission middleware)
-     *   - `member` scope on a tenant resource → add org filter
-     *   - `elevated` scope → no org filter (admin cross-org operation)
-     *   - `public` scope on a tenant resource → deny
+     *   - A caller with an org (member, service, or an elevated admin who
+     *     selected one) → add org filter
+     *   - Elevated with NO org (platform view) → no org filter
+     *   - No org, or anonymous, on a tenant resource → deny
      *   - No scope at all (unit tests) → leave filter unchanged
      *
      * Returns the merged filter, or `null` when access must be denied.
@@ -147,18 +146,30 @@ export function BulkMixin<TBase extends MixinConstructor<BaseCrudController>>(
       // constraint), so a bulk update/delete could hit rows the policy excluded.
       // Conjunction guarantees every layer's restriction is enforced together.
       const arcContext = this.meta(req);
-      let filter = conjoinPolicyFilters(userFilter, arcContext?._policyFilters);
+      const filter = conjoinPolicyFilters(userFilter, arcContext?._policyFilters);
 
-      if (this.tenantField) {
-        const scope = arcContext?._scope;
-        if (!scope) return filter;
-        if (scope.kind === "public") return null;
-        if (isElevated(scope)) return filter;
-        const orgId = getOrgIdFromScope(scope);
-        if (!orgId) return null;
-        filter = conjoinPolicyFilters(filter, { [this.tenantField]: orgId });
+      // No scope at all is a direct/unit-test call, not a request.
+      if (!this.tenantField || !arcContext?._scope) return filter;
+
+      // Tenancy is `resolveTenancy`'s — the rule every read uses — with the
+      // write-side refusals on top. This used to return early for ANY elevated
+      // caller, before looking at the org: an admin who had SELECTED org-9 got
+      // a bulk update/delete across EVERY tenant, while the same admin deleting
+      // one row by id was scoped to org-9. The docblock promised parity with
+      // `buildIdFilter`; the code did not have it.
+      const tenancy = resolveTenancy(arcContext, this.tenantField);
+      switch (tenancy.mode) {
+        case "scoped":
+          return conjoinPolicyFilters(filter, { [tenancy.field]: tenancy.orgId });
+        case "unscoped":
+          // Only the platform view (elevated, NO org) may write across tenants.
+          // A caller with no org, and a cross-tenant READ flag that somehow
+          // reached a write, are both refused: a bulk write is never the place
+          // tenancy is allowed to go missing.
+          return tenancy.reason === "platform" || tenancy.reason === "untenanted-resource"
+            ? filter
+            : null;
       }
-      return filter;
     }
 
     /**

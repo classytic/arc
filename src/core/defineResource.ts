@@ -32,10 +32,12 @@
  * ```
  */
 
+import { readEnv } from "@classytic/primitives/environment";
 import type { DataAdapter } from "@classytic/repo-core/adapter";
 import type { ActionsMap, AnyRecord, ResourceConfig } from "../types/index.js";
 import type { InternalResourceConfig } from "./defineResource/config.js";
 import {
+  assertConcurrencyCapability,
   assertTransactionCapability,
   resolveOrAutoCreateController,
 } from "./defineResource/controller.js";
@@ -53,11 +55,14 @@ import {
   ResourceDefinition,
 } from "./defineResource/ResourceDefinition.js";
 import { resolveOpenApiSchemas } from "./defineResource/schemas.js";
-import { validateDefineResourceConfig } from "./defineResource/validate.js";
+import {
+  validateDefineResourceConfig,
+  validateSecurityInvariants,
+} from "./defineResource/validate.js";
 
 /**
  * `TDoc` is **unconstrained** at this layer. The previous `TDoc
- * extends AnyRecord` bound leaked out of `BaseController`'s
+ * extends object` bound leaked out of `BaseController`'s
  * mixin-composition requirement into every host's adapter boundary:
  * Mongoose's `HydratedDocument<T>`, Prisma's generated row types,
  * and any domain interface without an explicit index signature all
@@ -68,7 +73,7 @@ import { validateDefineResourceConfig } from "./defineResource/validate.js";
  * known envelope fields.
  *
  * The cast moved inside `resolveOrAutoCreateController` where
- * `BaseController<TDoc extends AnyRecord>` actually requires it.
+ * `BaseController<TDoc extends object>` actually requires it.
  * One internal boundary cast replaces N host-side casts.
  */
 /**
@@ -112,6 +117,8 @@ export function defineResource<TDoc = AnyRecord>(
   let diagnostics: ResourceDiagnostic[] = [];
   if (!normalisedConfig.skipValidation) {
     diagnostics = validateDefineResourceConfig(normalisedConfig);
+  } else {
+    validateSecurityInvariants(normalisedConfig);
   }
 
   // Phase 2 — auto-derive idField from repository before presets see it.
@@ -130,15 +137,16 @@ export function defineResource<TDoc = AnyRecord>(
   //
   // Strict mode (resource `strictPermissions: true` OR the
   // `ARC_STRICT_PERMISSIONS` env) upgrades an ungated WRITE from a warning to a
-  // FATAL error, so unauthenticated writes cannot ship silently. Off by default
-  // — existing hosts keep the warn behavior until they opt in.
+  // FATAL error, so unauthenticated writes cannot ship silently. ON by default; an explicit
+  // `false` (resource or env) downgrades it to a warning.
   // NOT behind `skipValidation`. That flag means "skip SCHEMA validation" and is
   // set implicitly by `customRoutesOnly`, so hiding a security invariant behind
   // it let a documented-as-structural switch silently disable the ungated-write
   // check — including under `ARC_STRICT_PERMISSIONS`. Nothing is lost by running
   // it always: `collectUngatedCrudDiagnostics` returns [] when
   // `disableDefaultRoutes` is set, which is every `customRoutesOnly` resource.
-  const strict = resolvedConfig.strictPermissions ?? process.env.ARC_STRICT_PERMISSIONS === "true";
+  const strict =
+    resolvedConfig.strictPermissions ?? readEnv(process.env).bool("ARC_STRICT_PERMISSIONS", true);
   diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig, strict));
 
   // Fatal diagnostics (severity: "error") fail boot at define-time — the same
@@ -185,10 +193,16 @@ export function defineResource<TDoc = AnyRecord>(
   // Defer the transaction-CAPABILITY assertion to registration: this
   // function commonly runs at module import, before `beforeBoot()` connects,
   // and an unresolved topology reports `transactions: false` by design.
+  const deferred: Array<() => void> = [];
   if (resolvedConfig.transactional === true) {
     const name = resolvedConfig.name;
-    resource._deferredChecks = [() => assertTransactionCapability(repository, name)];
+    deferred.push(() => assertTransactionCapability(repository, name));
   }
+  if (resolvedConfig.concurrency) {
+    const name = resolvedConfig.name;
+    deferred.push(() => assertConcurrencyCapability(repository, name));
+  }
+  if (deferred.length > 0) resource._deferredChecks = deferred;
 
   // Attach boot-time diagnostics. `buildResourcePlugin` flushes them
   // through `fastify.log.warn` on first mount so the host's configured

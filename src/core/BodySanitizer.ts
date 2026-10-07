@@ -7,6 +7,7 @@
  * Designed to be used standalone or composed into controllers.
  */
 
+import { readEnv } from "@classytic/primitives/environment";
 import { SYSTEM_FIELDS } from "../constants.js";
 import { applyFieldWritePermissions, resolveEffectiveRoles } from "../permissions/fields.js";
 import { getUserRoles } from "../permissions/types.js";
@@ -75,7 +76,7 @@ export class BodySanitizer {
     // resource can opt out of a fleet-wide setting.
     this.onImmutableWrite =
       config.onImmutableWrite ??
-      (process.env.ARC_STRICT_IMMUTABLE_WRITES === "true" ? "reject" : "strip");
+      (readEnv(process.env).bool("ARC_STRICT_IMMUTABLE_WRITES", true) ? "reject" : "strip");
   }
 
   /**

@@ -2,7 +2,7 @@
 /**
  * Type-lane coverage gate — every test file containing a compile-time
  * assertion (`expectTypeOf` or `@ts-expect-error`) must be part of the
- * `tsconfig.types.json` program. Vitest transpiles without type-checking,
+ * `tsconfig.types.json` / `tsconfig.types-strict.json` programs. Vitest transpiles without type-checking,
  * so an assertion outside that program proves nothing; the include list is
  * maintained manually, and this check is what keeps it from drifting.
  *
@@ -18,8 +18,13 @@ import path from "node:path";
 import process from "node:process";
 
 const ROOT = process.cwd();
-const config = JSON.parse(readFileSync(path.join(ROOT, "tsconfig.types.json"), "utf8"));
-const include = (config.include ?? []).map((entry) => entry.replaceAll("\\", "/"));
+/** Every type-lane program: the default one, and the one compiled under `strictModuleNames`. */
+const LANES = ["tsconfig.types.json", "tsconfig.types-strict.json"];
+const include = LANES.flatMap((file) =>
+  (JSON.parse(readFileSync(path.join(ROOT, file), "utf8")).include ?? []).map((entry) =>
+    entry.replaceAll("\\", "/"),
+  ),
+);
 
 /** Does `relPath` (posix, repo-relative) match one of the include entries? */
 function included(relPath) {
@@ -69,5 +74,5 @@ if (missing.length > 0) {
   process.exit(1);
 }
 console.log(
-  `✔ Type-lane coverage — all ${covered} compile-assertion test files are in the tsconfig.types.json program.`,
+  `✔ Type-lane coverage — all ${covered} compile-assertion test files are in a type-lane program (${LANES.join(", ")}).`,
 );

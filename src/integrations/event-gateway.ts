@@ -30,7 +30,12 @@ export interface EventGatewayOptions {
   auth?: boolean;
   /** Custom auth function for WebSocket upgrade */
   authenticate?: (request: unknown) => Promise<{ userId?: string; organizationId?: string } | null>;
-  /** Filter events by org from request.scope (default: false) */
+  /**
+   * SSE tenant filtering — forwarded to `ssePlugin`'s `orgScoped`, whose
+   * default (**true**) applies when this is omitted. Deliberately not
+   * defaulted here: two defaults for one decision is how the stream stayed
+   * cross-tenant after the rest of arc failed closed.
+   */
   orgScoped?: boolean;
   /** Room/subscription authorization policy */
   roomPolicy?: (
@@ -77,7 +82,7 @@ const eventGatewayPluginImpl: FastifyPluginAsync<EventGatewayOptions> = async (
 ) => {
   const {
     auth = true,
-    orgScoped = false,
+    orgScoped,
     roomPolicy,
     maxMessageBytes,
     maxSubscriptionsPerClient,
@@ -101,7 +106,7 @@ const eventGatewayPluginImpl: FastifyPluginAsync<EventGatewayOptions> = async (
       requireAuth: auth,
       patterns: opts.sse?.patterns ?? ["*"],
       heartbeat: opts.sse?.heartbeat ?? 30000,
-      orgScoped,
+      ...(orgScoped !== undefined ? { orgScoped } : {}),
       filter: opts.sse?.filter,
     });
   }

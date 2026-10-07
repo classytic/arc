@@ -22,12 +22,9 @@
  *
  * ## Known gap
  *
- * `anyOf(a, b)` composes checks into a bare function with no aggregated meta,
- * so `anyOf(platformAdminOnly(), requireOrgRole(…))` introspects as
- * `authenticated` with no roles. Consumers must read `authenticated` as "the
- * server decides" rather than "any logged-in user", and fall back to an
- * explicit gate for those. Fixing it means teaching the combinators to
- * aggregate meta — an arc change, tracked here because this is where it shows.
+ * `authenticated` means "the server decides" — a custom or request-time check
+ * (ownership, service scope) — never "any logged-in user". Membership and
+ * role/membership disjunctions are `member`; only opaque branches remain here.
  */
 
 import { describePermission } from "./explain.js";
@@ -43,7 +40,13 @@ import type { PermissionCheck } from "./types.js";
  * A CLIENT MUST treat an unrecognised type as DENIED, never as permitted — the
  * next type added here will otherwise read as "allowed" on every older client.
  */
-export type PermissionEntryType = "public" | "authenticated" | "roles" | "scoped" | "denied";
+export type PermissionEntryType =
+  | "public"
+  | "authenticated"
+  | "roles"
+  | "scoped"
+  | "member"
+  | "denied";
 
 export interface PermissionEntry {
   type: PermissionEntryType;
@@ -121,6 +124,9 @@ export function introspectCheck(check: PermissionCheck): PermissionEntry {
       scope: { ...req.scope },
     };
   }
+  // Any member of the active org passes, or a holder of `roles`. A client that cannot
+  // tell membership must treat this as denied (the unknown-type rule above).
+  if (req.kind === "member") return { type: "member", roles: req.roles ? [...req.roles] : [] };
   if (req.kind === "denied") return { type: "denied", roles: [] };
   return { type: "authenticated", roles: [] };
 }

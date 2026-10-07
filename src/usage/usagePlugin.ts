@@ -191,9 +191,10 @@ const usagePluginFn: FastifyPluginAsync<UsagePluginOptions> = async (fastify, op
   });
 };
 
+// Only the `fp()`-wrapped plugin is exported (the barrel names it `usagePlugin`).
+// Exporting the raw function under that name made `import { usagePlugin }`
+// register an ENCAPSULATED plugin whose `fastify.usage` never reached routes.
 export default fp(usagePluginFn, {
   name: "arc-usage",
   fastify: "5.x",
 });
-
-export { usagePluginFn as usagePlugin };

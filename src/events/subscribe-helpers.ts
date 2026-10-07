@@ -322,7 +322,7 @@ export async function subscribeWithBoundary(
  * including `FastifyInstance` (declaration-merged in `eventPlugin.ts`) and
  * test doubles. Avoids importing the full Fastify type in this module.
  */
-interface FastifyEventBus {
+export interface FastifyEventBus {
   events: {
     subscribe: (pattern: string, handler: EventHandler) => Promise<() => void>;
   };

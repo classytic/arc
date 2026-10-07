@@ -1,10 +1,9 @@
 /**
  * Security Tests: Idempotency Body Hash
  *
- * Tests that idempotency keys with different request bodies
- * are treated as separate requests (not replayed).
- *
- * CRITICAL: Prevents data corruption from replay attacks.
+ * The same key with a different body is REFUSED (422 `arc.idempotency_key_reused`) — never
+ * replayed (the caller would get another request's answer) and never executed again (the key
+ * names one operation; a second one under it is how a charge happens twice).
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
@@ -95,7 +94,7 @@ describe("Security: Idempotency Body Hash", () => {
     expect(res2.headers["x-idempotency-replayed"]).toBe("true");
   });
 
-  it("should NOT replay when same key but different body", async () => {
+  it("refuses the same key with a different body — neither replayed nor re-executed", async () => {
     const key = "test-different-body";
 
     // First request: $100
@@ -120,15 +119,21 @@ describe("Security: Idempotency Body Hash", () => {
       payload: { amount: 1000, customer: "charlie" },
     });
 
-    expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body);
-    expect(data2.amount).toBe(1000); // NEW response with $1000
-    expect(data2.customer).toBe("charlie");
-    expect(data2.id).not.toBe(data1.id); // Different order ID
+    expect(res2.statusCode).toBe(422);
+    expect(JSON.parse(res2.body).code).toBe("arc.idempotency_key_reused");
     expect(res2.headers["x-idempotency-replayed"]).toBeUndefined();
+
+    // The first request's answer still replays for its own body.
+    const res3 = await app.inject({
+      method: "POST",
+      url: "/orders",
+      headers: { "idempotency-key": key },
+      payload: { amount: 100, customer: "bob" },
+    });
+    expect(JSON.parse(res3.body).id).toBe(data1.id);
   });
 
-  it("should handle empty vs non-empty body as different", async () => {
+  it("treats an empty and a non-empty body as different requests — refused", async () => {
     const key = "test-empty-body";
 
     // First request: empty body
@@ -149,9 +154,7 @@ describe("Security: Idempotency Body Hash", () => {
       payload: { amount: 50, customer: "dave" },
     });
 
-    expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body);
-    expect(data2.amount).toBe(50); // Should NOT replay empty body response
+    expect(res2.statusCode).toBe(422);
     expect(res2.headers["x-idempotency-replayed"]).toBeUndefined();
   });
 
@@ -183,7 +186,7 @@ describe("Security: Idempotency Body Hash", () => {
     expect(res2.headers["x-idempotency-replayed"]).toBe("true");
   });
 
-  it("should handle nested objects correctly", async () => {
+  it("compares nested bodies by content — a nested difference is refused", async () => {
     const key = "test-nested";
 
     // First request
@@ -210,10 +213,7 @@ describe("Security: Idempotency Body Hash", () => {
       },
     });
 
-    expect(res2.statusCode).toBe(200);
-    const data2 = JSON.parse(res2.body);
-    expect(data2.user.id).toBe(2); // Should NOT replay
-    expect(data2.items[0].qty).toBe(5);
+    expect(res2.statusCode).toBe(422);
     expect(res2.headers["x-idempotency-replayed"]).toBeUndefined();
   });
 });

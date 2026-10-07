@@ -38,15 +38,21 @@ Every request goes through this ladder — if any step is missed, tenant isolati
 
 ## Where `tenantField` is read
 
-Every resource defines `tenantField` (default: `'organizationId'`, or `false` to disable). It is read in **exactly three places** and ALL of them derive the org ID from `metadata._scope` via `getOrgId()`:
+Every resource defines `tenantField` (default: `'organizationId'`, or `false` to disable). **One function decides tenancy — `resolveTenancy()` in `src/core/tenancy.ts`** — and every layer switches on its result:
 
-| File                           | Method                  | Purpose                                        |
-|--------------------------------|-------------------------|------------------------------------------------|
-| `src/core/QueryResolver.ts`    | `resolve()`             | `list` — prepends `{ [tenantField]: orgId }` to the filter |
-| `src/core/AccessControl.ts`    | `buildIdFilter()`       | `get`, `update`, `delete` by ID — compound filter so cross-tenant IDs 404 |
-| `src/core/BaseController.ts`   | `buildBulkFilter()`     | `bulkUpdate`, `bulkDelete` — narrows bulk ops to the caller's org |
+| Result | Meaning |
+|---|---|
+| `{ mode: 'scoped', field, orgId }` | filter by `field = orgId` (a member, a service key, or an elevated admin who SELECTED an org) |
+| `unscoped: 'platform'` | elevated admin with NO org — sees and writes across tenants |
+| `unscoped: 'cross-tenant'` | the route declared `multiTenantPreset({ crossTenant: [...] })` — reads only; the row policy still applies |
+| `unscoped: 'no-org'` | anonymous, or signed in with no org selected — reads get no tenant filter (the preset refuses earlier where one is required); **writes are refused** |
+| `unscoped: 'untenanted-resource'` | `tenantField: false` |
 
-**Everything else** (`BodySanitizer`, `MongoKit QueryParser`, presets) already composes cleanly with these three read points. If `getOrgId(scope)` returns the right value, you have tenant isolation — end of story.
+Consumers: `QueryResolver` (list), `AccessControl.buildIdFilter` (get/update/delete by id) and `checkOrgScope` (post-fetch), `buildTenantRepoOptions` (what the kit is told, `bypassTenant`), the bulk mixin (`bulkCreate` stamping + `buildBulkFilter`), and — via `eventAudienceOf` / `isEventVisible` — the `sse` and `realtime` streams.
+
+**Never re-derive the org from the scope in a new layer.** Each layer used to, with its own condition, and they drifted: `crossTenant` was taught to three of four read layers (`get` silently ignored it for signed-in members), bulk writes skipped the org for ANY elevated admin (an admin acting as org-9 deleted across every tenant), and `realtime` withheld the platform view that reads grant. The union is exhaustive, so a new mode is a compile error in every consumer that has not handled it.
+
+The cache key (`deriveCacheScope`) deliberately does NOT use it: it answers "whose cache partition", which on a cross-tenant read is still the caller's org — dropping it could let one org's cached page answer another's.
 
 ## Filter composition
 
@@ -101,19 +107,18 @@ Return the scope directly from your permission check. This is the cleanest integ
 
 ```ts
 // src/permissions/apiKey.ts
-import type { PermissionCheck } from '@classytic/arc/permissions';
+import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
 import { ClientModel } from '../models/Client.js';
 
 export function requireApiKey(): PermissionCheck {
   return async ({ request }) => {
     const apiKey = request.headers['x-api-key'] as string | undefined;
-    if (!apiKey) return { granted: false, reason: 'Missing API key' };
+    if (!apiKey) return deny('Missing API key');
 
     const client = await ClientModel.findOne({ apiKey });
-    if (!client) return { granted: false, reason: 'Invalid API key' };
+    if (!client) return deny('Invalid API key');
 
-    return {
-      granted: true,
+    return allow({
       scope: {
         kind: 'service',
         clientId: String(client._id),
@@ -121,8 +126,8 @@ export function requireApiKey(): PermissionCheck {
         scopes: client.allowedScopes,  // optional OAuth-style scope strings
       },
       // Optional additional row-level narrowing
-      filters: client.projectId ? { projectId: client.projectId } : undefined,
-    };
+      ...(client.projectId ? { policy: { projectId: client.projectId } } : {}),
+    });
   };
 }
 ```

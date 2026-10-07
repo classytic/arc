@@ -111,7 +111,7 @@ permissions: {
 3. Returns 403 if ownership check fails
 4. Elevated scope bypasses the check
 
-### `allowPublic()`
+### `allowPublic(options?)`
 
 Allow public access (no authentication required).
 
@@ -121,6 +121,62 @@ permissions: {
   get: allowPublic(),
 }
 ```
+
+#### Public, but only some rows: `allowPublic({ policy })`
+
+Most public reads should not expose every row: a storefront shows published
+products, a review wall shows published reviews. Give the gate a `policy` and
+everyone is still admitted, but only the rows the policy matches are readable:
+
+```typescript
+permissions: {
+  list: allowPublic({ policy: { status: { $in: ['published', 'flagged'] } } }),
+  get:  allowPublic({ policy: { status: { $in: ['published', 'flagged'] } } }),
+}
+```
+
+The policy is enforced in the database, ANDed with whatever the caller asks
+for, so `GET /reviews?status=hidden` returns nothing rather than the hidden
+rows, and `GET /reviews/<hidden-id>` is a 404. It applies the same way to
+aggregations and realtime feeds.
+
+**Per caller.** Pass a function instead of an object and one gate can give
+strangers, the row's author and staff a different view. Return `{}` for a caller
+who should be unrestricted:
+
+```typescript
+import { allowPublic, scopeOf } from '@classytic/arc/permissions';
+import { getUserId, isElevated } from '@classytic/arc/scope';
+
+const visible = { status: { $in: ['published', 'flagged'] } };
+
+list: allowPublic({
+  policy: (ctx) => {
+    const scope = scopeOf(ctx);
+    if (isElevated(scope)) return {};                                        // staff: everything
+    const userId = getUserId(scope);
+    return userId ? { $or: [visible, { authorId: userId }] } : visible;       // author: + own
+  },
+}),
+```
+
+**Why not write the check by hand?** You can (`() => allow({ policy })`), but
+arc treats any check as protected unless it carries the `_isPublic` flag, so a
+hand-written one answers every anonymous visitor with a **401**. `allowPublic`
+sets the flag for you.
+
+**Fail-closed.** `allowPublic({ policy: {} })` throws at startup (it filters
+nothing; use `allowPublic()`). A resolver that returns `undefined` or `null`
+answers **403**, never an unfiltered page: return `{}` when you mean
+"unrestricted".
+
+**Inside `anyOf`**, the first branch that grants wins, and a public branch
+grants everyone. So `anyOf(allowPublic({ policy }), requireRoles('admin'))`
+filters admins too. Put the privileged branch first, or return `{}` for them
+from the resolver.
+
+The presets take overrides, so this also works there:
+`publicRead({ list: allowPublic({ policy }), get: allowPublic({ policy }) })`.
 
 ### `denyAll(reason?)`
 
@@ -394,7 +450,7 @@ const requireCasbinAccess = (): PermissionCheck => async (context) => {
     context.resource,
     context.action
   );
-  return { granted: allowed };
+  return allowed;  // a boolean is a complete answer
 };
 
 defineResource({
@@ -411,18 +467,14 @@ defineResource({
 ### Custom RBAC Service
 
 ```typescript
-import type { PermissionCheck } from '@classytic/arc/permissions';
+import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
 import { rbacService } from './services/rbac';
 
 const requireRbac = (): PermissionCheck => async (context) => {
   const { user, resource, action } = context;
   const allowed = await rbacService.can(user, action, resource);
 
-  return {
-    granted: allowed,
-    filters: allowed ? undefined : {},
-    reason: allowed ? undefined : 'Access denied by RBAC',
-  };
+  return allowed ? allow() : deny('Access denied by RBAC');
 };
 
 defineResource({
@@ -448,7 +500,7 @@ const requireAbac = (): PermissionCheck => async (context) => {
     user?.role === 'admin',
   ];
 
-  return { granted: rules.some(rule => rule === true) };
+  return rules.some(rule => rule === true);
 };
 ```
 
@@ -535,32 +587,41 @@ return true; // Granted
 return false; // Denied
 ```
 
-2. **PermissionResult:** Advanced control
+2. **An `AuthorizationDecision`**, built with `allow()` / `deny()`: advanced control
 ```typescript
-return {
-  granted: true,
-  filters: { organizationId: user.orgId }, // Apply filters
-  reason: 'Access denied by policy', // Reason for denial
-};
+import { allow, deny } from '@classytic/arc/permissions';
+
+return allow({ policy: { organizationId: user.orgId } }); // grant + narrow rows
+return deny('Access denied by policy');                   // refuse, with a reason
 ```
 
-### Applying Filters
+> The pre-2.30 `{ granted, filters }` object is **no longer accepted**: arc
+> throws on it rather than silently reading it as a denial. Use `allow()` /
+> `deny()`.
 
-Filters are automatically merged into queries:
+### Applying a Row Policy
+
+A `policy` is ANDed into the query, so the caller cannot widen it with their
+own filters:
 
 ```typescript
 permissions: {
-  list: (context) => ({
-    granted: true,
-    filters: {
-      // User can only see their own organization's data
-      organizationId: context.user?.organizationId,
-      // And only active records
-      status: 'active',
-    },
-  }),
+  list: (context) =>
+    context.user
+      ? allow({
+          policy: {
+            // User can only see their own organization's data
+            organizationId: context.user.organizationId,
+            // And only active records
+            status: 'active',
+          },
+        })
+      : deny('Authentication required'),
 }
 ```
+
+For a **public** read that narrows rows, use `allowPublic({ policy })` instead of
+a hand-written check: see [`allowPublic(options?)`](#allowpublicoptions).
 
 ---
 
@@ -743,7 +804,7 @@ Request Scope:   request.scope = { kind: 'member', organizationId, orgRoles: ['a
                         ↓
 Permission Check: requireOrgRole('admin', 'recruiter')
                   → scope.orgRoles.some(r => required.includes(r))
-                  → 'recruiter' matches → granted: true
+                  → 'recruiter' matches → allow
 ```
 
 ### Using requireOrgRole with Multi-Role Users
@@ -829,27 +890,27 @@ const workspaceTenant = multiTenantPreset({
 ```
 
 When membership rules require database lookups, hosts may pass any custom
-`PermissionCheck` function. Return `{ granted: true, filters }` to narrow rows,
+`PermissionCheck` function. Return `allow({ policy })` to narrow rows,
 or return a verified `scope` from an earlier authentication permission. Built-in
 role checks remain preferable when no custom lookup or row filter is needed.
 
 For permissions that need query scoping (e.g. "AM sees only assigned jobs"), write a custom `PermissionCheck` that reads org roles from `request.scope`:
 
 ```typescript
-import type { PermissionCheck } from '@classytic/arc/permissions';
-import { isMember, isElevated, getOrgRoles } from '@classytic/arc/scope';
+import { allow, deny, scopeOf, type PermissionCheck } from '@classytic/arc/permissions';
+import { isElevated, getOrgRoles } from '@classytic/arc/scope';
 
 export function canAccessJobs(): PermissionCheck {
   return (ctx) => {
-    const scope = (ctx.request as any)?.scope ?? { kind: 'public' };
-    if (isElevated(scope)) return { granted: true };
+    const scope = scopeOf(ctx);
+    if (isElevated(scope)) return allow();
 
     const orgRoles = getOrgRoles(scope);
-    if (orgRoles.length === 0) return { granted: false, reason: 'Not an org member' };
+    if (orgRoles.length === 0) return deny('Not an org member');
 
     // Admin/DM see everything
     if (orgRoles.some(r => ['admin', 'delivery_manager'].includes(r))) {
-      return { granted: true };
+      return allow();
     }
 
     const userId = ctx.user?.id;
@@ -858,22 +919,19 @@ export function canAccessJobs(): PermissionCheck {
 
     // Multi-role: union both assignment filters
     if (isAM && isRecruiter) {
-      return {
-        granted: true,
-        filters: { $or: [{ assignedAMs: userId }, { assignedRecruiters: userId }] },
-      };
+      return allow({ policy: { $or: [{ assignedAMs: userId }, { assignedRecruiters: userId }] } });
     }
-    if (isAM) return { granted: true, filters: { assignedAMs: userId } };
-    if (isRecruiter) return { granted: true, filters: { assignedRecruiters: userId } };
+    if (isAM) return allow({ policy: { assignedAMs: userId } });
+    if (isRecruiter) return allow({ policy: { assignedRecruiters: userId } });
 
-    return { granted: false, reason: 'Insufficient role' };
+    return deny('Insufficient role');
   };
 }
 ```
 
 ### Best Practice: Use requireOrgRole When Possible
 
-Prefer Arc's built-in `requireOrgRole()` over custom role checks. Only write custom `PermissionCheck` functions when you need `filters` for query scoping.
+Prefer Arc's built-in `requireOrgRole()` over custom role checks. Only write custom `PermissionCheck` functions when you need a row `policy` for query scoping (and for a public read, reach for `allowPublic({ policy })` first).
 
 | Use Case | Approach |
 |----------|----------|

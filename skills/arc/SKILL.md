@@ -77,7 +77,7 @@ createApp({ role: process.env.ARC_ROLE as 'api' | 'worker' | 'relay' | 'schedule
 
 `api` and `worker` mount NO module schedule arms; `relay` mounts only `kind: 'relay'` arms (the outbox relay, durable webhook delivery); `scheduler` mounts all of them. Declaring `relay`/`scheduler` together with `resources`/`resourceDir` is BOOT-FATAL — a relay process must not serve routes. Default `all` is the pre-2.33 behaviour, unchanged. `createWorker()` forwards `role`; without one it still runs everything non-HTTP.
 
-`beforeBoot()` (2.21) runs before Fastify exists and before module thunks / resource files import — connect the DB there instead of dynamic-import ordering hacks.
+`beforeBoot()` (2.21) runs before Fastify exists and before module thunks / resource files import — connect the DB there instead of dynamic-import ordering hacks. Return a disposer (`() => mongoose.disconnect()`) and arc runs it on close and on a failed boot. A bridge declared as `{ kind: 'bridge', name, dependsOn, load }` is never imported when inactive.
 
 For async-booted engines, pass `resources` as a factory so it runs after `bootstrap[]`:
 
@@ -210,7 +210,14 @@ presets: ['softDelete', { name: 'multiTenant', tenantField: 'organizationId' }]
 
 ## Permissions
 
-A `PermissionCheck` returns `boolean | { granted, reason?, filters?, scope? }`. `filters` propagate into the repo query (row-level ABAC). `scope` stamps attributes downstream.
+A `PermissionCheck` returns `boolean | AuthorizationDecision` — build one with `allow({ policy?, scope? })` / `deny(reason?)`. `policy` is ANDed into the repo query (row-level ABAC); `scope` stamps attributes downstream. The pre-2.30 `{ granted, filters }` shape THROWS — never emit it.
+
+**Public but row-filtered** — use `allowPublic({ policy })`, not a hand-written `allow({ policy })`: a hand-written check lacks the `_isPublic` flag, so anonymous callers get 401.
+
+```typescript
+list: allowPublic({ policy: { status: 'published' } }),              // strangers: published only
+list: allowPublic({ policy: (ctx) => isElevated(scopeOf(ctx)) ? {} : { status: 'published' } }),  // {} = unrestricted
+```
 
 ```typescript
 import {
@@ -233,9 +240,11 @@ permissions: {
 **Custom check:**
 
 ```typescript
+import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
+
 const requirePro = (): PermissionCheck => async (ctx) => {
-  if (!ctx.user) return { granted: false, reason: 'Auth required' };
-  return { granted: ctx.user.plan === 'pro' };
+  if (!ctx.user) return deny('Auth required');
+  return ctx.user.plan === 'pro' ? allow() : deny('Pro plan required');
 };
 ```
 

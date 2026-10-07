@@ -20,6 +20,7 @@
  */
 
 export type {
+  AroundHookHandler,
   DefineHookOptions,
   HookContext,
   HookHandler,

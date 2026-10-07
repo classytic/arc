@@ -56,6 +56,20 @@ describe("buildQueryKey()", () => {
   });
 });
 
+/** Different queries never share a key — a shared key serves one query's cached result for another. */
+describe("buildQueryKey() — distinct queries stay distinct", () => {
+  const key = (params: Record<string, unknown>) => buildQueryKey("product", "list", 1, params, "u1", "o1");
+  it.each([
+    ["a delimiter inside a value", { a: "x,b:y" }, { a: "x", b: "y" }],
+    ["a number and its string", { page: 1 }, { page: "1" }],
+    ["two different dates", { since: new Date("2026-01-01") }, { since: new Date("2027-01-01") }],
+    ["two different regexes", { name: /^ab/i }, { name: /^cd/ }],
+    ["null and empty string", { tag: null }, { tag: "" }],
+  ])("%s", (_label, a, b) => {
+    expect(key(a)).not.toBe(key(b));
+  });
+});
+
 describe("versionKey()", () => {
   it("generates resource version key", () => {
     expect(versionKey("users")).toBe("arc:ver:users");

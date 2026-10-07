@@ -7,23 +7,24 @@
  * @example
  * import { ssePlugin } from '@classytic/arc/plugins';
  *
- * // Basic — stream all events at /events/stream
+ * // Basic — every event at /events/stream, each caller seeing only their
+ * // own organization's (org-scoping is on by default)
  * await fastify.register(ssePlugin);
  *
- * // Filtered + org-scoped
+ * // Narrowed to some event types
  * await fastify.register(ssePlugin, {
  *   path: '/api/events',
  *   patterns: ['order.*', 'product.*'],
- *   orgScoped: true,
  * });
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { eventAudienceOf, isEventVisible } from "../core/tenancy.js";
 import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
 import type { RequestScope } from "../scope/types.js";
-import { getOrgId, PUBLIC_SCOPE } from "../scope/types.js";
+import { PUBLIC_SCOPE } from "../scope/types.js";
 import { openSseStream } from "../utils/sseStream.js";
 import { promoteStreamTokenToHeader } from "../utils/streaming.js";
 
@@ -38,7 +39,22 @@ export interface SSEOptions {
   patterns?: string[];
   /** Heartbeat interval in ms (default: 30000) */
   heartbeat?: number;
-  /** Filter events by organizationId from request.scope (default: false) */
+  /**
+   * Deliver an event carrying `meta.organizationId` only to callers in that
+   * organization (default: **true** since 2.41.1).
+   *
+   * It defaulted to `false`, and with `patterns: ['*']` that meant a signed-in
+   * member of one tenant received every other tenant's domain events — CRUD
+   * events carry the full document as `data`. In a framework whose other
+   * defaults fail closed, the stream was the one door left open.
+   *
+   * Flipping it costs single-tenant apps nothing: events with no
+   * `organizationId` are delivered to every caller either way. An elevated
+   * platform admin with NO active organization still sees every tenant — the
+   * same rule `checkOrgScope` applies to elevated reads. Set `false` only for a
+   * stream that is deliberately cross-tenant (an internal ops console), and
+   * put `requireAuth` plus a `filter` in front of it.
+   */
   orgScoped?: boolean;
   /** Custom event filter function */
   filter?: (event: DomainEvent<unknown>, request: FastifyRequest) => boolean;
@@ -64,7 +80,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
     requireAuth = true,
     patterns = ["*"],
     heartbeat = 30000,
-    orgScoped = false,
+    orgScoped = true,
     filter: customFilter,
     tokenQueryParam = "token",
   } = opts;
@@ -108,27 +124,18 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
       const stream = openSseStream(request, reply, { heartbeatMs: heartbeat });
       stream.onCleanup(() => activeConnections.delete(stream.close));
 
-      // Get org context from request.scope for filtering
+      // Who this subscriber is, for tenant filtering — the SAME rule reads use
+      // (`core/tenancy.ts`), so a stream never disagrees with a list about the
+      // same caller. An elevated admin with no active org gets the platform
+      // view; a caller with no org gets untenanted events only.
       const scope: RequestScope = request.scope ?? PUBLIC_SCOPE;
-      const requestOrgId = getOrgId(scope);
-
-      // Subscribe to each pattern
-      // If orgScoped is enabled but caller has no org context, drop all org events
-      // to prevent leaking data across organizations
-      const dropOrgEvents = orgScoped && !requestOrgId;
+      const audience = eventAudienceOf(scope);
 
       for (const pattern of patterns) {
         const unsub = await fastify.events.subscribe(
           pattern,
           async (event: DomainEvent<unknown>) => {
-            // Org-scoped filtering: only forward events for the user's org
-            if (orgScoped) {
-              const eventOrgId = event.meta?.organizationId;
-              // If caller has no org, drop any event that carries an orgId
-              if (dropOrgEvents && eventOrgId) return;
-              // If caller has an org, only forward events matching their org
-              if (requestOrgId && eventOrgId && eventOrgId !== requestOrgId) return;
-            }
+            if (orgScoped && !isEventVisible(event.meta?.organizationId, audience)) return;
 
             // Custom filter
             if (customFilter && !customFilter(event, request)) return;

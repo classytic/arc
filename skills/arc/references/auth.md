@@ -497,6 +497,7 @@ import {
 | Function | Description |
 |----------|-------------|
 | `allowPublic()` | No authentication |
+| `allowPublic({ policy })` | No authentication, rows narrowed by a filter (or a per-caller resolver; `{}` = unrestricted) |
 | `requireAuth()` | Any authenticated user |
 | `requireRoles(['admin'])` | At least one role matches |
 | `requireOwnership('userId')` | Resource owner only (elevated bypasses) |
@@ -510,9 +511,11 @@ import {
 **Custom permission:**
 
 ```typescript
+import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
+
 const requirePro = (): PermissionCheck => async (ctx) => {
-  if (!ctx.user) return { granted: false, reason: 'Auth required' };
-  return { granted: ctx.user.plan === 'pro' };
+  if (!ctx.user) return deny('Auth required');
+  return ctx.user.plan === 'pro' ? allow() : deny('Pro plan required');
 };
 ```
 
@@ -646,12 +649,12 @@ Gate routes on service identity using the scope helpers + a permission builder:
 
 ```typescript
 import { isService, getClientId, getServiceScopes } from '@classytic/arc/scope';
-import type { PermissionCheck } from '@classytic/arc/permissions';
+import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
 
 const requireScope = (scope: string): PermissionCheck => (ctx) => {
-  if (!isService(ctx.request.scope)) return { granted: false, reason: 'service only' };
+  if (!isService(ctx.request.scope)) return deny('service only');
   const has = getServiceScopes(ctx.request.scope).includes(scope);
-  return has ? { granted: true } : { granted: false, reason: `missing scope: ${scope}` };
+  return has ? allow() : deny(`missing scope: ${scope}`);
 };
 
 defineResource({

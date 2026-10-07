@@ -26,13 +26,13 @@ describe("RouteSchemaOptions.query — security whitelists assign without cast",
     expect(opts.query?.allowedPopulate).toEqual(["organizationId", "createdBy", "approvedBy"]);
   });
 
-  it("allowedLookups accepts a string[] directly", () => {
+  it("allowedLookups maps each collection to the server scope of its joined rows", () => {
     const opts: RouteSchemaOptions = {
       query: {
-        allowedLookups: ["users", "organizations", "products"],
+        allowedLookups: { products: { scope: () => ({ deletedAt: null }) } },
       },
     };
-    expect(opts.query?.allowedLookups).toEqual(["users", "organizations", "products"]);
+    expect(Object.keys(opts.query?.allowedLookups ?? {})).toEqual(["products"]);
   });
 
   it("both whitelists coexist with kit-level `filterableFields`", () => {
@@ -43,12 +43,12 @@ describe("RouteSchemaOptions.query — security whitelists assign without cast",
       query: {
         filterableFields: { status: { type: "string" } },
         allowedPopulate: ["category"],
-        allowedLookups: ["categories"],
+        allowedLookups: { categories: { scope: () => ({}) } },
       },
     };
     expect(opts.query?.filterableFields).toBeDefined();
     expect(opts.query?.allowedPopulate).toEqual(["category"]);
-    expect(opts.query?.allowedLookups).toEqual(["categories"]);
+    expect(opts.query?.allowedLookups).toHaveProperty("categories");
   });
 
   it("commerce-style host config — full block, zero casts", () => {
@@ -66,12 +66,12 @@ describe("RouteSchemaOptions.query — security whitelists assign without cast",
           status: { type: "string" },
         },
         allowedPopulate: ["organizationId", "addresses"],
-        allowedLookups: ["organizations", "addresses"],
+        allowedLookups: { addresses: { scope: () => ({ deletedAt: null }) } },
       },
     };
 
     expect(customerOpts.query?.allowedPopulate).toContain("addresses");
-    expect(customerOpts.query?.allowedLookups).toContain("organizations");
+    expect(customerOpts.query?.allowedLookups).toHaveProperty("addresses");
     expect(customerOpts.query?.filterableFields).toBeDefined();
   });
 });
@@ -89,9 +89,10 @@ type _AllowedPopulateIsStringArray = AssertAssignable<
 const _populate: _AllowedPopulateIsStringArray = true;
 void _populate;
 
-type _AllowedLookupsIsStringArray = AssertAssignable<
+/** A bare name list authorizes nothing — it must NOT type-check as an allowedLookups value. */
+type _LookupNamesRejected = AssertAssignable<
   string[],
-  NonNullable<RouteSchemaOptions["query"]>["allowedLookups"] | string[]
+  NonNullable<NonNullable<RouteSchemaOptions["query"]>["allowedLookups"]>
 >;
-const _lookups: _AllowedLookupsIsStringArray = true;
+const _lookups: _LookupNamesRejected = false;
 void _lookups;

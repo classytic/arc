@@ -639,6 +639,44 @@ describe("publishMany — mixed outcomes", () => {
     expect(store._getEntry("fail-2")?.lastError?.message).toBe("fail-2 rejected");
     expect(store._getEntry("fail-4")?.status).toBe("pending");
   });
+
+  /** An outcome map that does not name exactly the batch is a contract breach — nothing is acknowledged. */
+  it.each([
+    [
+      "omits an event",
+      (events: readonly DomainEvent[]) => new Map(events.slice(1).map((e) => [e.meta.id, null])),
+    ],
+    [
+      "names an unknown event",
+      (events: readonly DomainEvent[]) =>
+        new Map<string, Error | null>([
+          ...events.map((e) => [e.meta.id, null] as const),
+          ["ghost", null],
+        ]),
+    ],
+    ["returns nothing", () => undefined as unknown as PublishManyResult],
+  ])("a publishMany result that %s fails the whole batch", async (_label, outcome) => {
+    const store = new MemoryOutboxStore();
+    const transport: EventTransport = {
+      name: "broken-batch",
+      async publish() {},
+      async publishMany(events) {
+        return outcome(events) as PublishManyResult;
+      },
+      subscribe: async () => () => {},
+    };
+    const outbox = new EventOutbox({ store, transport, consumerId: "w1" });
+    await outbox.store(makeEvent("a-1"));
+    await outbox.store(makeEvent("a-2"));
+
+    const result = await outbox.relayBatch();
+
+    expect(result.relayed).toBe(0);
+    expect(result.publishFailed).toBe(2);
+    expect(store._getEntry("a-1")?.status).toBe("pending");
+    expect(store._getEntry("a-2")?.status).toBe("pending");
+    expect(store._getEntry("a-1")?.lastError?.message).toMatch(/publishMany .* none acknowledged/);
+  });
 });
 
 // ============================================================================

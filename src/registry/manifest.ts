@@ -1,7 +1,7 @@
 /**
  * Resource metadata for frontend code generators — `{ name, prefix, idField,
- * crudOps, actions[] }`, where each action carries its `mount` and
- * `requiresId`.
+ * versionField?, crudOps, actions[] }`, where each action carries its `mount`
+ * and `requiresId`.
  *
  * A hand-rolled FE client needs a method per declarative action and drifts the
  * moment a new one is declared. Arc owns the resource definition, so it can
@@ -76,6 +76,12 @@ export interface ResourceManifest {
   readonly customRoutes: readonly CustomRouteManifestEntry[];
   /** Tenant scoping field (when set) — surfaces for FE callers that need to send `x-organization-id`. */
   readonly tenantField?: string | false;
+  /**
+   * Optimistic-concurrency version field — present only when the resource declares
+   * `concurrency`. A client sends `If-Match: "<doc[versionField]>"` on update and gets
+   * `412 arc.precondition_failed` for a stale one (arc-next: `createCrudApi(entity, { versionField })`).
+   */
+  readonly versionField?: string;
 }
 
 // ============================================================================
@@ -139,6 +145,7 @@ export function buildResourceManifest(resource: ResourceDefinition): ResourceMan
     aggregations,
     customRoutes,
     ...(resource.tenantField !== undefined ? { tenantField: resource.tenantField } : {}),
+    ...(resource.versionField !== undefined ? { versionField: resource.versionField } : {}),
   };
 }
 
@@ -191,16 +198,13 @@ export function buildResourceManifestFromRegistry(entry: RegistryEntry): Resourc
     name: entry.name,
     displayName: entry.displayName ?? entry.name,
     prefix: entry.prefix,
-    // `idField` isn't on the registry entry today (it's resource-only) —
-    // codegen consumers that need it should call `buildResourceManifest`
-    // with the live `ResourceDefinition` instead. Default for the registry
-    // path is the framework convention.
-    idField: DEFAULT_ID_FIELD,
+    idField: entry.idField ?? DEFAULT_ID_FIELD,
     updateMethod,
     crudOps,
     actions,
     aggregations,
     customRoutes,
     ...(entry.tenantField !== undefined ? { tenantField: entry.tenantField } : {}),
+    ...(entry.versionField !== undefined ? { versionField: entry.versionField } : {}),
   };
 }

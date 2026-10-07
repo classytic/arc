@@ -51,6 +51,7 @@ export {
   type CreateMcpAuthFromBetterAuthApiKeyOptions,
   createMcpAuthFromBetterAuthApiKey,
 } from "./betterAuthApiKey.js";
+export type { McpContextExtras } from "./buildRequestContext.js";
 // Factory (Level 2) + collision resolution
 export {
   type AuthRef,
@@ -89,9 +90,7 @@ export {
   requireOrgId,
   requireRole,
 } from "./guards.js";
-// Non-HTTP controller invocation — shared pipeline for MCP tools, jobs,
-// workflow steps. Eliminates the synthetic-context shim every caller used
-// to reinvent.
+// Non-HTTP controller invocation — one pipeline for MCP tools, jobs and workflow steps.
 export {
   buildRequestContext,
   type InvokeControllerOptions,

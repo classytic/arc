@@ -42,6 +42,11 @@
 // --- Arc-specific assertions -----------------------------------------------
 export type { ArcAssertion, ArcResponseLike } from "./assertions.js";
 export { expectArc } from "./assertions.js";
+export {
+  assertModuleBootsAlone,
+  type ModuleBootsAloneOptions,
+  type ModuleBootsAloneResult,
+} from "./assertModuleBootsAlone.js";
 // --- Authorization conformance (cross-surface enforcement parity) -----------
 export type {
   AuthorizationConformance,
@@ -112,8 +117,6 @@ export {
  * disposers a no-op `{ defer: () => {} }` would silently discard.
  */
 export { createTestModuleSetup, type TestModuleSetup } from "./moduleSetup.js";
-// --- Vitest preload helper --------------------------------------------------
-export { preloadResources, preloadResourcesAsync } from "./preloadResources.js";
 /** The ONE role gate for package tests — see its module docblock. */
 export { scopeRoleGate } from "./scopeRoleGate.js";
 // --- Storage adapter contract ----------------------------------------------

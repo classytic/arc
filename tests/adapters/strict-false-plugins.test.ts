@@ -192,6 +192,35 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
     expect(second).toHaveLength(0);
   });
 
+  it("low-level store: a malformed row is dead-lettered at claim — never re-leased, never blocks the queue", async () => {
+    const store = repositoryAsOutboxStore(makeArcBackingRepo(OutboxModel));
+    await store.save({
+      type: "order.created",
+      payload: {},
+      meta: { id: "evt-bad", timestamp: new Date() },
+    });
+    await store.save({
+      type: "order.created",
+      payload: {},
+      meta: { id: "evt-good", timestamp: new Date() },
+    });
+    await OutboxModel.collection.updateOne({ _id: "evt-bad" } as never, {
+      $unset: { "event.meta": "" },
+    });
+
+    const claimed = await store.claimPending?.({ consumerId: "w1", limit: 10 });
+    expect(claimed?.map((e) => e.meta.id)).toEqual(["evt-good"]);
+
+    const bad = await OutboxModel.collection.findOne({ _id: "evt-bad" } as never);
+    expect(bad).toMatchObject({
+      status: "dead_letter",
+      leaseOwner: null,
+      lastError: { code: "MALFORMED_EVENT" },
+    });
+    // Not claimable again: quarantined, not left to lease-expire forever.
+    expect(await store.claimPending?.({ consumerId: "w2", limit: 10 })).toEqual([]);
+  });
+
   it("low-level store: fail() with aggregation pipeline preserves firstFailedAt across retries", async () => {
     const store = repositoryAsOutboxStore(makeArcBackingRepo(OutboxModel));
 

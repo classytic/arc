@@ -25,3 +25,12 @@ try {
     console.warn(`[vitest setup] process.loadEnvFile(".env") failed:`, err);
   }
 }
+
+/**
+ * The fail-loud switches default ON in arc. Most fixtures build minimal resources (no permissions,
+ * loose filters) to exercise OTHER behaviour, so the suite opts out here; the defaults themselves
+ * are pinned in `tests/factory/production-strict-flags.test.ts`. `??=`: a shell export still wins.
+ */
+process.env.ARC_STRICT_PERMISSIONS ??= "false";
+process.env.ARC_STRICT_QUERY_PARAMS ??= "false";
+process.env.ARC_STRICT_IMMUTABLE_WRITES ??= "false";

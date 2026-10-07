@@ -15,6 +15,7 @@
  * });
  */
 
+import { ARC_ERROR_CODES } from "@classytic/repo-core/errors";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import type { ExternalOpenApiPaths } from "../docs/externalPaths.js";
@@ -66,6 +67,30 @@ export interface BetterAuthAdapterOptions {
    */
   orgContext?: boolean;
   /**
+   * Effective roles in the active organization — the seam for an organization HIERARCHY (roles held
+   * at a parent, e.g. a head office, apply in its child organizations). Called with the caller's own
+   * membership roles there (`null` when not a member); returns the roles the request carries, or
+   * `null` to leave it non-member. Requires `orgContext`.
+   */
+  resolveOrgRoles?: (input: {
+    userId: string;
+    organizationId: string;
+    memberRoles: readonly string[] | null;
+  }) => readonly string[] | null | Promise<readonly string[] | null>;
+  /**
+   * Where the caller's own membership roles come from. Default `'better-auth'`: arc asks Better
+   * Auth (`getActiveMember`, then `getActiveMemberRole`) and passes the answer to `resolveOrgRoles`
+   * as `memberRoles`.
+   *
+   * `'resolver'`: `resolveOrgRoles` reads membership itself, so arc skips Better Auth's lookup — one
+   * fewer membership read per authenticated request — and calls it with `memberRoles: null`. Choose
+   * it ONLY for a resolver that never reads `memberRoles`; one that extends them would lose them.
+   * Requires `resolveOrgRoles`.
+   *
+   * @default 'better-auth'
+   */
+  memberLookup?: "better-auth" | "resolver";
+  /**
    * OpenAPI documentation for auth endpoints.
    * - `true` (default): auto-extract from auth.api if available
    * - `false`: disable (auth routes won't appear in OpenAPI data)
@@ -103,18 +128,22 @@ export interface BetterAuthAdapterOptions {
    * When true, includes the actual error message for debugging.
    */
   exposeAuthErrors?: boolean;
+  /**
+   * Credentials other than a session, by `Authorization` scheme (RFC 7235) — a paired device, an
+   * API key. A request presenting a registered scheme is authenticated by its verifier ONLY: the
+   * scope it returns (usually `{ kind: 'service', … }`) is installed; `null` is a 401. Gate such
+   * routes with `requireServiceScope(...)`. `Bearer` is the session's and cannot be registered.
+   *
+   * @example
+   * credentials: { Device: (value) => verifyDevice(value) }   // Authorization: Device <sn>:<token>
+   */
+  credentials?: Readonly<Record<string, CredentialVerifier>>;
 
   /**
-   * Per-route rate limit for the Better Auth catch-all (`/api/auth/*`),
-   * applied via `@fastify/rate-limit`'s route config (requires the
-   * limiter to be registered, which createApp does by default).
-   *
-   * Credential endpoints deserve a tighter bucket than the global limit
-   * (brute-force / credential-stuffing surface), BUT the same catch-all
-   * also serves Better Auth's chatty `get-session` heartbeat — so arc
-   * ships NO default here; a forced strict limit (the classic "5/min on
-   * /login") would 429 every SPA that polls sessions. Pick a ceiling that
-   * covers your session-poll cadence, or key the bucket smarter:
+   * Per-route `@fastify/rate-limit` config for the auth catch-all. No default:
+   * the same route serves the chatty `get-session` heartbeat, so a strict
+   * login-style limit would 429 every SPA that polls sessions. Pick a ceiling
+   * above your poll cadence, or exempt the heartbeat:
    *
    * @example
    * ```ts
@@ -182,13 +211,10 @@ declare module "fastify" {
  * We reconstruct one from Fastify's request properties.
  */
 function toFetchRequest(request: FastifyRequest): Request {
-  // Build full URL from Fastify's protocol, hostname, and original URL
   const protocol = request.protocol ?? "http";
   const host = request.hostname ?? "localhost";
   const url = `${protocol}://${host}${request.url}`;
 
-  // Convert Fastify headers to a Headers object.
-  // Fastify headers can be string | string[] | undefined.
   const headers = new Headers();
   for (const [key, value] of Object.entries(request.headers)) {
     if (value === undefined) continue;
@@ -201,17 +227,13 @@ function toFetchRequest(request: FastifyRequest): Request {
     }
   }
 
-  // Determine if this method can carry a body
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
 
-  // Reconstruct the body with content-type fidelity.
-  // Fastify already parsed the body — we serialize it back respecting the original format
-  // so that Better Auth can handle form/urlencoded, multipart, and JSON payloads correctly.
+  // Fastify already parsed the body — re-serialize it in its original format.
   let body: string | Buffer | undefined;
   if (hasBody && request.body != null) {
     const contentType = (request.headers["content-type"] ?? "").toLowerCase();
     if (request.rawBody) {
-      // rawBody plugin preserves the original bytes — use as-is
       body = request.rawBody;
     } else if (contentType.includes("application/x-www-form-urlencoded")) {
       const params = new URLSearchParams();
@@ -228,8 +250,7 @@ function toFetchRequest(request: FastifyRequest): Request {
     ) {
       body = JSON.stringify(request.body);
     } else {
-      // Non-JSON/non-string content (e.g. multipart/form-data) without rawBody
-      // cannot be faithfully reconstructed. Enable @fastify/raw-body for full fidelity.
+      // e.g. multipart without rawBody — can't be reconstructed faithfully.
       request.log?.warn?.(
         "toFetchRequest: cannot reconstruct %s body without rawBody plugin",
         contentType,
@@ -244,16 +265,10 @@ function toFetchRequest(request: FastifyRequest): Request {
   };
   const fetchRequest = new Request(url, init);
 
-  // Better Auth (>= 1.6.21) parses the request body and THEN calls
-  // `ctx.request.clone()` on the same request — e.g. sign-up.mjs hands a clone
-  // to `sendVerificationEmail`. undici throws `TypeError: unusable` when cloning
-  // a request whose body stream was already consumed (better-call reads the body
-  // off the original request unless the endpoint opts into `cloneRequest`),
-  // surfacing as intermittent signup 500s under concurrency. This bridge fully
-  // owns the request and captures its complete init (method/headers/body — a
-  // string or Buffer, always re-usable), so clone() reconstructs from that init:
-  // one consistent path, safe whether or not the body was already read, and it
-  // leaves the original request untouched for any further reads.
+  // Better Auth reads the body and THEN calls `request.clone()` (e.g. sign-up →
+  // sendVerificationEmail); undici throws `TypeError: unusable` cloning a
+  // consumed body. The init's body is a re-usable string/Buffer, so clone()
+  // rebuilds from it — safe whether or not the body was read.
   Object.defineProperty(fetchRequest, "clone", {
     configurable: true,
     writable: true,
@@ -272,24 +287,20 @@ function toFetchRequest(request: FastifyRequest): Request {
  * Handles both buffered (JSON) and streaming (SSE) responses.
  */
 async function sendFetchResponse(response: Response, reply: FastifyReply): Promise<void> {
-  // Set status code
   reply.status(response.status);
 
-  // Copy response headers to Fastify reply
   response.headers.forEach((value, key) => {
-    // Skip transfer-encoding -- Fastify manages this itself
+    // Fastify manages transfer-encoding itself.
     if (key.toLowerCase() === "transfer-encoding") return;
     reply.header(key, value);
   });
 
-  // Stream the body if it's a streaming content type (e.g. SSE),
-  // otherwise buffer as text to avoid holding large chunks in memory.
+  // Stream SSE / binary bodies; buffer everything else as text.
   const contentType = response.headers.get("content-type") ?? "";
   if (
     response.body &&
     (contentType.includes("text/event-stream") || contentType.includes("application/octet-stream"))
   ) {
-    // Pipe the ReadableStream directly — Fastify v5 supports web streams
     await reply.send(response.body);
   } else {
     const body = await response.text();
@@ -298,15 +309,9 @@ async function sendFetchResponse(response: Response, reply: FastifyReply): Promi
 }
 
 // ============================================================================
-// Direct API helpers
+// Direct API helpers — session/org lookups use the in-process `auth.api.*`
+// map; a hand-rolled stub must supply the methods it exercises.
 // ============================================================================
-//
-// arc 2.13+ requires `auth.api.*` (the in-process method map exposed by every
-// `betterAuth()` instance since 1.6.0). The 2.12 HTTP fallback chain
-// (auth.handler-based round-trips for /get-session, /organization/*) is gone.
-// If you've stubbed Better Auth with a hand-rolled `{ handler }`-only object,
-// add an `api: { getSession, organization: { ... } }` map mirroring whatever
-// methods you exercise.
 
 interface BetterAuthDirectApi {
   getSession?: (opts: {
@@ -316,11 +321,9 @@ interface BetterAuthDirectApi {
 }
 
 /**
- * Resolve the current session via Better Auth's direct JS API.
- *
- * Throws `ArcError(BETTER_AUTH_API_MISSING)` when `auth.api.getSession` is
- * absent — this surfaces immediately and clearly when an integrator passes a
- * stub handler instead of a real `betterAuth()` instance.
+ * Resolve the current session via `auth.api.getSession`. Throws
+ * `ArcError(BETTER_AUTH_API_MISSING)` when it is absent (a stub, not a real
+ * `betterAuth()` instance).
  */
 async function getSessionDirect(
   auth: BetterAuthHandler,
@@ -329,25 +332,20 @@ async function getSessionDirect(
   const api = auth.api as BetterAuthDirectApi | undefined;
   if (!api || typeof api.getSession !== "function") {
     throw new ArcError(
-      "Better Auth instance is missing `api.getSession` — arc 2.13+ requires the in-process API map. Pass a real `betterAuth()` instance or supply an `api: { getSession }` stub.",
-      { code: "BETTER_AUTH_API_MISSING", statusCode: 500 },
+      "Better Auth instance is missing `api.getSession` — arc requires the in-process API map. Pass a real `betterAuth()` instance or supply an `api: { getSession }` stub.",
+      { code: ARC_ERROR_CODES.AUTH_MISCONFIGURED, statusCode: 500 },
     );
   }
 
-  // Errors propagate to the caller's catch block — that's where `exposeAuthErrors`
-  // decides whether the original message reaches the client. authenticate maps
-  // them to 401; optionalAuthenticate swallows them as unauthenticated.
+  // Errors propagate: callers map them to 401 (gated by `exposeAuthErrors`) or unauthenticated.
   const result = await api.getSession({ headers });
   return result?.user ? result : null;
 }
 
 /**
- * Read a method from `auth.api` — supports both the flat shape that real
- * `betterAuth()` instances expose (`api.getActiveMember`) and the nested
- * shape some test mocks / older builds use (`api.organization.getActiveMember`).
- *
- * Real Better Auth 1.6.x flattens every plugin endpoint onto the top-level
- * `api` object. The nested form is kept as a fallback for hand-rolled stubs.
+ * Read a method from `auth.api`: the flat shape real instances expose
+ * (`api.getActiveMember`), falling back to the nested stub shape
+ * (`api.organization.getActiveMember`).
  */
 function pickApiMethod<T = unknown>(
   auth: BetterAuthHandler,
@@ -386,11 +384,8 @@ async function getActiveMemberRoles(
 }
 
 /**
- * Resolve org roles for an explicit organizationId.
- *
- * Required for API key auth where the synthetic session lacks
- * `activeOrganizationId` — callers pass org context via the
- * `x-organization-id` header.
+ * Resolve org roles for an explicit organizationId — for sessions without
+ * `activeOrganizationId` (e.g. API-key auth via `x-organization-id`).
  */
 async function getMemberRolesByOrg(
   auth: BetterAuthHandler,
@@ -414,21 +409,12 @@ async function getMemberRolesByOrg(
 }
 
 /**
- * Teams the current user is a MEMBER of, scoped to one organization. Used to
- * validate `activeTeamId` before binding it to scope.
+ * Teams the current user is a MEMBER of in one organization, used to validate
+ * `activeTeamId` before binding it to scope.
  *
- * `auth.api.listUserTeams` (`/organization/list-user-teams`) is the only name
- * probed. A `listTeams` fallback lived here for "older 1.5.x" and was removed:
- * Better Auth exposes `listUserTeams` and `listOrganizationTeams` on `auth.api`
- * and has never exposed a bare `listTeams` — that is the CLIENT name
- * (`authClient.organization.listTeams`). It could only ever resolve against a
- * test double, which is exactly what it was doing.
- *
- * Do not "restore" it as `listOrganizationTeams`: that endpoint lists every team
- * in the organization, while this one lists the teams the USER belongs to.
- * Validating `activeTeamId` against the org-wide list would admit a team the
- * user is not a member of — the organization check below constrains the org, not
- * membership.
+ * Must stay `listUserTeams`: `listOrganizationTeams` lists EVERY team in the
+ * org and would admit a team the user isn't a member of. (`listTeams` is the
+ * client-side name; `auth.api` has no such method.)
  */
 async function listTeamsDirect(
   auth: BetterAuthHandler,
@@ -543,6 +529,14 @@ async function resolveActiveTeamId(input: {
  * fastify.get('/me', { preHandler: [authenticate] }, handler);
  * ```
  */
+/** Verifies one credential scheme's value; the scope to install, or `null` when it is not valid. */
+export type CredentialVerifier = (
+  credentials: string,
+  request: FastifyRequest,
+) => Promise<RequestScope | null>;
+
+const AUTH_SCHEME = /^[A-Za-z][A-Za-z0-9!#$%&'*+.^_`|~-]*$/;
+
 export function createBetterAuthAdapter(
   options: BetterAuthAdapterOptions,
 ): BetterAuthAdapterResult {
@@ -553,21 +547,97 @@ export function createBetterAuthAdapter(
     openapi: openapiOpt = true,
     userFields,
     exposeAuthErrors = false,
+    resolveOrgRoles,
+    memberLookup = "better-auth",
+    credentials = {},
   } = options;
 
-  // Normalize basePath -- strip trailing slash
+  const verifiers = new Map<string, CredentialVerifier>();
+  for (const [scheme, verify] of Object.entries(credentials)) {
+    if (!AUTH_SCHEME.test(scheme))
+      throw new Error(`createBetterAuthAdapter: "${scheme}" is not an auth scheme name.`);
+    if (scheme.toLowerCase() === "bearer")
+      throw new Error("createBetterAuthAdapter: the Bearer scheme is the session's.");
+    verifiers.set(scheme.toLowerCase(), verify);
+  }
+  /** A registered non-session credential on this request, if any. */
+  const presentedCredential = (request: FastifyRequest) => {
+    if (verifiers.size === 0) return null;
+    const header = request.headers.authorization;
+    if (typeof header !== "string") return null;
+    const space = header.indexOf(" ");
+    if (space <= 0) return null;
+    const verify = verifiers.get(header.slice(0, space).toLowerCase());
+    return verify ? { verify, value: header.slice(space + 1).trim() } : null;
+  };
+
   const normalizedBase = basePath.replace(/\/+$/, "");
 
-  // Org context config
   const orgEnabled = !!orgContextOpt;
+  if (resolveOrgRoles && !orgEnabled) {
+    throw new Error("createBetterAuthAdapter: `resolveOrgRoles` requires `orgContext: true`.");
+  }
+  if (memberLookup !== "better-auth" && memberLookup !== "resolver") {
+    throw new Error(
+      `createBetterAuthAdapter: \`memberLookup\` must be 'better-auth' or 'resolver' (got ${String(memberLookup)}).`,
+    );
+  }
+  if (memberLookup === "resolver" && !resolveOrgRoles) {
+    throw new Error(
+      "createBetterAuthAdapter: `memberLookup: 'resolver'` requires `resolveOrgRoles` — without it nothing would read membership.",
+    );
+  }
+  const skipMemberLookup = memberLookup === "resolver";
+
+  /**
+   * The member scope for the active organization (session's active org wins; the header covers
+   * sessions without one), or `undefined` when the caller holds no role there. ONE path for
+   * `authenticate` and `optionalAuthenticate`, so `resolveOrgRoles` cannot apply on one and not the
+   * other.
+   */
+  const resolveMemberScope = async (
+    headers: Headers,
+    session: Record<string, unknown> | undefined,
+    requestedOrgId: string | undefined,
+    userId: string | undefined,
+    userRoles: string[],
+  ): Promise<RequestScope | undefined> => {
+    const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
+    if (!activeOrgId) return undefined;
+
+    let orgRoles: readonly string[] | null = null;
+    if (!skipMemberLookup) {
+      // `getActiveMember` can only succeed when the SESSION has an active org.
+      if (session?.activeOrganizationId) orgRoles = await getActiveMemberRoles(auth, headers);
+      if (!orgRoles) orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
+    }
+    if (resolveOrgRoles && userId) {
+      orgRoles = await resolveOrgRoles({
+        userId,
+        organizationId: activeOrgId,
+        memberRoles: orgRoles,
+      });
+    }
+    if (!orgRoles) return undefined;
+
+    const scope: RequestScope = {
+      kind: "member",
+      userId,
+      userRoles,
+      organizationId: activeOrgId,
+      orgRoles: [...orgRoles],
+    };
+    const activeTeamId = await resolveActiveTeamId({ auth, headers, session, activeOrgId });
+    if (activeTeamId) scope.teamId = activeTeamId;
+    return scope;
+  };
 
   // ========================================
   // Authenticate preHandler
   // ========================================
 
   /**
-   * Validates the current session by forwarding cookies/headers
-   * to Better Auth's `GET /api/auth/get-session` endpoint.
+   * Validates the session via `auth.api.getSession` with the request headers.
    *
    * On success, sets `request.user` and `request.session`.
    * When orgContext is enabled, also sets `request.scope` to
@@ -575,6 +645,22 @@ export function createBetterAuthAdapter(
    * On failure, replies with 401.
    */
   const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const presented = presentedCredential(request);
+    if (presented) {
+      const scope = await presented.verify(presented.value, request);
+      if (!scope) {
+        reply
+          .code(401)
+          .send({
+            code: ARC_ERROR_CODES.UNAUTHORIZED,
+            message: "Invalid credentials",
+            status: 401,
+          });
+        return;
+      }
+      (request as unknown as { scope: RequestScope }).scope = scope;
+      return;
+    }
     try {
       const headers = buildHeaders(request);
 
@@ -582,14 +668,13 @@ export function createBetterAuthAdapter(
 
       if (!sessionData?.user) {
         reply.code(401).send({
-          code: "arc.unauthorized",
+          code: ARC_ERROR_CODES.UNAUTHORIZED,
           message: "Invalid or expired session",
           status: 401,
         });
         return;
       }
 
-      // Attach user and session to request
       const req = request as unknown as Record<string, unknown>;
       req.user = sessionData.user;
       req.session = sessionData.session;
@@ -601,56 +686,18 @@ export function createBetterAuthAdapter(
       req.scope = { kind: "authenticated", userId, userRoles };
 
       if (orgEnabled) {
-        const session = sessionData.session as Record<string, unknown> | undefined;
-        const requestedOrgId = requireSingleHeaderValue(request.headers, "x-organization-id");
-        // Prefer session's activeOrganizationId; fall back to x-organization-id header
-        // (needed for API-key auth where synthetic sessions carry no org context)
-        const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
-
-        if (activeOrgId) {
-          /**
-           * `getActiveMember` resolves the member for the SESSION's active
-           * organization, so with no `activeOrganizationId` it cannot succeed —
-           * it throws `No active organization`, which the helper swallows into
-           * `null` after paying the full endpoint round trip.
-           *
-           * A bearer-only deployment never calls `setActive`, so that was every
-           * request: ~440ms spent to learn what the session already said, before
-           * the ~870ms header-based lookup that actually answers. Ask the
-           * session first; it is already in hand.
-           */
-          let orgRoles = session?.activeOrganizationId
-            ? await getActiveMemberRoles(auth, headers)
-            : null;
-          if (!orgRoles) {
-            orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
-          }
-
-          if (orgRoles) {
-            const scope: RequestScope = {
-              kind: "member",
-              userId,
-              userRoles,
-              organizationId: activeOrgId,
-              orgRoles,
-            };
-
-            const activeTeamId = await resolveActiveTeamId({
-              auth,
-              headers,
-              session,
-              activeOrgId,
-            });
-            if (activeTeamId) scope.teamId = activeTeamId;
-
-            req.scope = scope;
-          }
-          // No membership → scope stays 'authenticated'. Elevation plugin can promote.
-        }
+        // No role in the active org → scope stays 'authenticated'. Elevation plugin can promote.
+        const memberScope = await resolveMemberScope(
+          headers,
+          sessionData.session as Record<string, unknown> | undefined,
+          requireSingleHeaderValue(request.headers, "x-organization-id"),
+          userId,
+          userRoles,
+        );
+        if (memberScope) req.scope = memberScope;
       }
     } catch (err) {
       if (err instanceof ArcError) throw err;
-      // Don't leak internal error details to clients unless explicitly opted-in
       const message = exposeAuthErrors
         ? err instanceof Error
           ? err.message
@@ -658,7 +705,7 @@ export function createBetterAuthAdapter(
         : "Authentication required";
 
       reply.code(401).send({
-        code: "arc.unauthorized",
+        code: ARC_ERROR_CODES.UNAUTHORIZED,
         message,
         status: 401,
       });
@@ -681,6 +728,13 @@ export function createBetterAuthAdapter(
     request: FastifyRequest,
     _reply: FastifyReply,
   ): Promise<void> => {
+    const presented = presentedCredential(request);
+    if (presented) {
+      // An invalid credential on a public route leaves the caller public, as a bad session does.
+      const scope = await presented.verify(presented.value, request);
+      if (scope) (request as unknown as { scope: RequestScope }).scope = scope;
+      return;
+    }
     try {
       const headers = buildHeaders(request);
       const sessionData = await getSessionDirect(auth, headers);
@@ -698,47 +752,14 @@ export function createBetterAuthAdapter(
       req.scope = { kind: "authenticated", userId: optUserId, userRoles: optUserRoles };
 
       if (orgEnabled) {
-        const session = sessionData.session as Record<string, unknown> | undefined;
-        const requestedOrgId = requireSingleHeaderValue(request.headers, "x-organization-id");
-        const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
-
-        if (activeOrgId) {
-          /**
-           * `getActiveMember` resolves the member for the SESSION's active
-           * organization, so with no `activeOrganizationId` it cannot succeed —
-           * it throws `No active organization`, which the helper swallows into
-           * `null` after paying the full endpoint round trip.
-           *
-           * A bearer-only deployment never calls `setActive`, so that was every
-           * request: ~440ms spent to learn what the session already said, before
-           * the ~870ms header-based lookup that actually answers. Ask the
-           * session first; it is already in hand.
-           */
-          let orgRoles = session?.activeOrganizationId
-            ? await getActiveMemberRoles(auth, headers)
-            : null;
-          if (!orgRoles) {
-            orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
-          }
-
-          if (orgRoles) {
-            const scope: RequestScope = {
-              kind: "member",
-              userId: optUserId,
-              userRoles: optUserRoles,
-              organizationId: activeOrgId,
-              orgRoles,
-            };
-            const activeTeamId = await resolveActiveTeamId({
-              auth,
-              headers,
-              session,
-              activeOrgId,
-            });
-            if (activeTeamId) scope.teamId = activeTeamId;
-            req.scope = scope;
-          }
-        }
+        const memberScope = await resolveMemberScope(
+          headers,
+          sessionData.session as Record<string, unknown> | undefined,
+          requireSingleHeaderValue(request.headers, "x-organization-id"),
+          optUserId,
+          optUserRoles,
+        );
+        if (memberScope) req.scope = memberScope;
       }
     } catch (err) {
       if (err instanceof ArcError) throw err;
@@ -753,33 +774,19 @@ export function createBetterAuthAdapter(
   let extractedOpenApi: ExternalOpenApiPaths | undefined;
 
   if (openapiOpt === false) {
-    // User explicitly disabled OpenAPI for auth routes
     extractedOpenApi = undefined;
   } else if (typeof openapiOpt === "object") {
-    // User provided a manual spec override
     extractedOpenApi = openapiOpt;
   }
-  // Note: auto-extraction from auth.api is deferred to plugin registration
-  // (async context) to avoid making createBetterAuthAdapter async.
+  // Auto-extraction from auth.api happens at plugin registration.
 
   // ========================================
   // Fastify Plugin
   // ========================================
 
   const betterAuthPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-    /**
-     * `orgContext` without the `organization()` plugin is a SILENT
-     * misconfiguration, so it fails at boot instead.
-     *
-     * Arc resolves org membership through `auth.api.getActiveMember` /
-     * `getActiveMemberRole`. Absent the plugin those methods do not exist,
-     * every lookup returns null, and `request.scope` silently stays
-     * `'authenticated'` — so `requireOrgId()` throws 403 on every
-     * tenant-scoped route. It fails CLOSED (no data leak), but the symptom
-     * points nowhere near the cause: the host sees blanket 403s and no
-     * indication that a plugin is missing. One check at registration turns
-     * that into a sentence.
-     */
+    // `orgContext` without the `organization()` plugin fails closed but
+    // silently (blanket 403s, no hint why) — fail at boot instead.
     if (orgEnabled) {
       const hasOrgApi =
         pickApiMethod(auth, "getActiveMember", "organization") !== undefined ||
@@ -791,14 +798,11 @@ export function createBetterAuthAdapter(
             "arc can never resolve membership, so request.scope stays 'authenticated' and every " +
             "tenant-scoped route answers 403. Add `organization()` to your betterAuth({ plugins }), " +
             "or drop `orgContext`.",
-          { code: "BETTER_AUTH_ORG_PLUGIN_MISSING", statusCode: 500 },
+          { code: ARC_ERROR_CODES.AUTH_MISCONFIGURED, statusCode: 500 },
         );
       }
     }
 
-    // Register catch-all route for Better Auth endpoints. `rateLimit`
-    // (adapter option) stamps @fastify/rate-limit's per-route config so
-    // credential endpoints can run a tighter bucket than the global limit.
     const routeOpts =
       options.rateLimit && typeof options.rateLimit === "object"
         ? { config: { rateLimit: options.rateLimit } }
@@ -812,10 +816,8 @@ export function createBetterAuthAdapter(
           const fetchResponse = await auth.handler(fetchRequest);
           await sendFetchResponse(fetchResponse, reply);
         } catch (err) {
-          // Throw ArcError so the centralized errorHandlerPlugin handles it
-          // with consistent envelope, logging, requestId, stack traces, etc.
           throw new ArcError("Authentication service error", {
-            code: "AUTH_SERVICE_ERROR",
+            code: ARC_ERROR_CODES.AUTH_SERVICE_ERROR,
             statusCode: 500,
             cause: err instanceof Error ? err : new Error(String(err)),
           });
@@ -823,7 +825,6 @@ export function createBetterAuthAdapter(
       },
     );
 
-    // Decorate fastify with authenticate functions
     if (!fastify.hasDecorator("authenticate")) {
       fastify.decorate("authenticate", authenticate);
     }
@@ -831,10 +832,8 @@ export function createBetterAuthAdapter(
       fastify.decorate("optionalAuthenticate", optionalAuthenticate);
     }
 
-    // Declare the request properties the authenticate handlers assign
-    // (`req.user`, `req.session`) so per-request writes don't mutate the
-    // request shape. Guarded: `user` is also decorated by @fastify/jwt when
-    // arc JWT auth is active on the same instance.
+    // Pre-declare `user`/`session` so per-request writes keep the request shape
+    // stable. Guarded: @fastify/jwt may already decorate `user`.
     if (!fastify.hasRequestDecorator("user")) {
       fastify.decorateRequest("user", undefined);
     }
@@ -842,7 +841,6 @@ export function createBetterAuthAdapter(
       fastify.decorateRequest("session", undefined);
     }
 
-    // Auto-extract OpenAPI from auth.api if not already set
     if (!extractedOpenApi && openapiOpt !== false && auth.api && typeof auth.api === "object") {
       extractedOpenApi = extractBetterAuthOpenApi(auth.api as Record<string, unknown>, {
         basePath,
@@ -850,7 +848,6 @@ export function createBetterAuthAdapter(
       });
     }
 
-    // Push extracted OpenAPI paths to arc core (if available)
     if (extractedOpenApi) {
       const arc = (fastify as { arc?: { externalOpenApiPaths?: ExternalOpenApiPaths[] } }).arc;
       if (arc?.externalOpenApiPaths) {
@@ -861,7 +858,6 @@ export function createBetterAuthAdapter(
     fastify.log.debug(`Better Auth: Routes registered at ${normalizedBase}/*`);
   };
 
-  // Wrap with fastify-plugin for encapsulation transparency
   const plugin = fp(betterAuthPlugin, {
     name: "arc-better-auth",
     fastify: "5.x",

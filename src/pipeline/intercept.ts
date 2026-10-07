@@ -31,7 +31,7 @@
 import type { IControllerResponse } from "../types/index.js";
 import type { Interceptor, NextFunction, OperationFilter, PipelineContext } from "./types.js";
 
-interface InterceptOptions {
+export interface InterceptOptions {
   operations?: OperationFilter;
   handler: (ctx: PipelineContext, next: NextFunction) => Promise<IControllerResponse<unknown>>;
 }

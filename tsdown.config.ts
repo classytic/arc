@@ -25,7 +25,6 @@ export default defineConfig({
     // Core
     "src/index.ts",
     "src/core/index.ts",
-    "src/sync/changelog.ts",
     "src/usage/index.ts",
     "src/types/index.ts",
     "src/types/storage.ts",
@@ -88,6 +87,7 @@ export default defineConfig({
     "src/testing/storageContract.ts",
     "src/testing/cleanupStoreContract.ts",
     "src/testing/outboxStoreContract.ts",
+    "src/testing/requiredPorts.ts",
 
     // Schemas (TypeBox)
     "src/schemas/index.ts",

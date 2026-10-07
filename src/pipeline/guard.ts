@@ -28,7 +28,7 @@
 
 import type { Guard, OperationFilter, PipelineContext } from "./types.js";
 
-interface GuardOptions {
+export interface GuardOptions {
   operations?: OperationFilter;
   handler: (ctx: PipelineContext) => boolean | Promise<boolean>;
 }

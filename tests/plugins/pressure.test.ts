@@ -273,3 +273,45 @@ describe("pressure — readiness", () => {
     expect(check.critical).toBe(false);
   });
 });
+
+describe("pressure — sampling is bounded", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("a signal that never resolves does not block boot — it reads as cannot-measure", async () => {
+    const hung: PressureSignal = { name: "db-pool", read: () => new Promise<number>(() => {}) };
+    const app = await appWith({ signals: [hung], readTimeoutMs: 20 });
+    expect(app.pressure.state()).toBe("ok");
+  });
+
+  it("a stuck read is not restarted every tick — no pile-up behind it", async () => {
+    let reads = 0;
+    const hung: PressureSignal = {
+      name: "db-pool",
+      read: () => {
+        reads += 1;
+        return new Promise<number>(() => {});
+      },
+    };
+    await appWith({ signals: [hung], intervalMs: 10, readTimeoutMs: 5 });
+    await sleep(120);
+    expect(reads).toBe(1);
+  });
+
+  it("a slow signal never has two reads in flight", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const slow: PressureSignal = {
+      name: "queue",
+      read: async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await sleep(40);
+        inFlight -= 1;
+        return 0.1;
+      },
+    };
+    await appWith({ signals: [slow], intervalMs: 5, readTimeoutMs: 1000 });
+    await sleep(150);
+    expect(peak).toBe(1);
+  });
+});

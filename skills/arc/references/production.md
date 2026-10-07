@@ -76,8 +76,8 @@ Default `0`, which is the pre-2.41 behaviour: close the moment SIGTERM arrives. 
 
 `drainDelayMs` is the window between "start failing readiness" and "stop accepting":
 
-- `/health/ready` → `503 { status: 'draining' }` immediately on signal
-- `/health/live` → stays `200` (a draining process is alive — that's the point; a 503 here gets the pod **killed**, not drained)
+- `/_health/ready` → `503 { status: 'draining' }` immediately on signal
+- `/_health/live` → stays `200` (a draining process is alive — that's the point; a 503 here gets the pod **killed**, not drained)
 - everything already routed here is still served for the whole window
 
 Set it **above** your LB's deregistration window — typically 5000–15000ms. On Kubernetes, also keep `terminationGracePeriodSeconds` > `drainDelayMs + timeout`, or the kubelet SIGKILLs you mid-drain.
@@ -299,7 +299,7 @@ const app = await createApp({
       path: '/events/stream',       // SSE endpoint (default: '/events/stream')
       requireAuth: true,            // Fail-closed auth (default: true)
       patterns: ['order.*', 'product.*'],  // Event patterns to stream (default: ['*'])
-      orgScoped: false,             // Filter events by org from request.scope (default: false)
+      // orgScoped defaults to TRUE (2.41.1) — a caller only sees its own org's events.
       heartbeat: 30000,             // Heartbeat interval in ms (default: 30000)
     },
   },
@@ -307,7 +307,7 @@ const app = await createApp({
 
 // Manual registration
 import { ssePlugin } from '@classytic/arc/plugins';
-await fastify.register(ssePlugin, { requireAuth: true, orgScoped: true });
+await fastify.register(ssePlugin, { requireAuth: true });
 ```
 
 ### Realtime resource change feed (2.22)
@@ -322,12 +322,9 @@ row-permissioned resources through it); event firehose → sse. Massive fan-out
 (viral feeds, live scores) → publish once to a dedicated edge fan-out layer
 via `app.events.subscribe(...)`; full tiering guide: docs/production-ops/realtime.mdx.
 
-```typescript
-```
-
 **Fail-closed auth:** When `requireAuth: true` (default), throws at registration if `fastify.authenticate` is missing — prevents exposing SSE without auth.
 
-**Org-scoped:** When `orgScoped: true`, events with `organizationId` are only sent to clients whose `request.scope` matches. Prevents cross-tenant leakage.
+**Org-scoped by default (2.41.1):** an event carrying `organizationId` reaches only callers in that org. It defaulted to `false` — with `patterns: ['*']`, one tenant's member received every tenant's events, full documents included. Events with no `organizationId` still reach everyone, so single-tenant apps are unaffected; an elevated admin with no active org sees all tenants (the platform view). `orgScoped: false` is for a deliberately cross-tenant stream only — keep `requireAuth` and add a `filter`.
 
 ## Error Handler Plugin
 
@@ -383,7 +380,7 @@ return reply.header('content-type', 'text/csv').send(readableStream);
 
 ### BigInt Serialization
 
-Opt-in: `createApp({ serializeBigInt: true })` — auto-converts BigInt → Number in all JSON responses.
+Opt-in: `createApp({ serializeBigInt: 'string' })` — BigInt → decimal string in JSON responses (lossless); `'number'` is lossy above 2^53-1.
 
 ## Multipart Body Middleware (v2.7.3)
 
@@ -678,7 +675,27 @@ await outbox.store(event, { session });
 const relayed = await outbox.relay();  // publishes pending → transport
 ```
 
-**OutboxStore interface**: `save(event)`, `getPending(limit)`, `acknowledge(eventId)` (+ optional `claimPending`, `fail`, `getDeadLettered`, `purge`). When you pass `repository`, arc adapts it internally.
+**Prefer the module form** — it owns the relay schedule, shutdown, and a readiness check, so none of that is hand-wired:
+
+```typescript
+import { createOutboxModule, exponentialBackoff, repositoryAsOutboxStore } from '@classytic/arc/events';
+
+const outbox = createOutboxModule({
+  store: repositoryAsOutboxStore(new Repository(OutboxModel)),
+  // Bounds retries AND log volume. `attempts` is the DURABLE count (it survives relay
+  // restarts and is shared across relays), so a poison event really does stop at 5.
+  failurePolicy: ({ attempts }) =>
+    attempts >= 5 ? { deadLetter: true } : { retryAt: exponentialBackoff({ attempt: attempts }) },
+  health: { relayLagUnhealthyMs: 5 * 60_000, probeCacheMs: 5_000 },
+});
+// createApp({ modules: [outbox] }); consumers declare dependsOn: ['outbox'].
+```
+
+- `requestDrain()` — nudge a pass after commit (milliseconds, not `relayEveryMs`); runs outside the caller's request scope.
+- `drain()` — await delivery, cascades included. For tests and a shutdown that should empty the queue.
+- `health()` + readiness check `<name>.relay` — **non-critical** (a stalled relay is a cluster problem; pulling one pod would not drain it). Unhealthy on any dead letter or pending lag past the threshold. The probe reuses a reading for `probeCacheMs` so N replicas × probe rate do not become N count queries a second on the outbox table.
+
+**OutboxStore contract** (`@classytic/primitives/outbox`): required `save`, `getPending`, `acknowledge`; optional `claimPending` / `claimPendingFenced` (lease + fencing token, and the durable `attempts`), `fail`, `getDeadLettered`, `requeue`, `purge`, `countByStatus`, `oldestPendingAgeMs`. Prove a custom store with `runOutboxStoreContract` from `@classytic/arc/testing/outbox`. When you pass `repository`, arc adapts it internally.
 
 ## Bulk Operations Preset
 

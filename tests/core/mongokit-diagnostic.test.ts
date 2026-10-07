@@ -653,9 +653,10 @@ describe("10. QueryParser security", () => {
   });
 
   it("should handle deeply nested filters safely", () => {
-    // Attempt deeply nested query
-    const parsed = parseQuery("a[b][c][d][e][f][g]=deep");
-    // Should either parse safely or limit depth
-    expect(parsed).toBeDefined();
+    // Refused by the shared query grammar (a nested key is a dot path, never an operator) — a
+    // 400, never a hang or an unrelated crash.
+    expect(() => parseQuery("a[b][c][d][e][f][g]=deep")).toThrow(
+      expect.objectContaining({ status: 400, code: "INVALID_QUERY_INPUT" }),
+    );
   });
 });

@@ -62,8 +62,8 @@ export interface PluginResourceResult {
 }
 
 export interface CreatePluginDefinition<
-  TRootOpts extends AnyRecord = AnyRecord,
-  TResourceOpts extends AnyRecord = AnyRecord,
+  TRootOpts extends object = AnyRecord,
+  TResourceOpts extends object = AnyRecord,
 > {
   /**
    * Global setup function. Called once when the plugin is registered on the Fastify instance.
@@ -84,8 +84,8 @@ export interface CreatePluginDefinition<
 }
 
 export interface ArcPlugin<
-  TRootOpts extends AnyRecord = AnyRecord,
-  TResourceOpts extends AnyRecord = AnyRecord,
+  TRootOpts extends object = AnyRecord,
+  TResourceOpts extends object = AnyRecord,
 > {
   /** Plugin name */
   readonly name: string;
@@ -115,8 +115,8 @@ export interface ArcPlugin<
  * @returns ArcPlugin with forRoot() and forResource() methods
  */
 export function createPlugin<
-  TRootOpts extends AnyRecord = AnyRecord,
-  TResourceOpts extends AnyRecord = AnyRecord,
+  TRootOpts extends object = AnyRecord,
+  TResourceOpts extends object = AnyRecord,
 >(
   name: string,
   definition: CreatePluginDefinition<TRootOpts, TResourceOpts>,

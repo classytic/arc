@@ -61,9 +61,39 @@ describe("the documented repository-store schema", () => {
     if (!store) throw new Error("store missing");
     const { createIdempotencyResult } = await import("../../src/idempotency/stores/index.js");
 
-    await store.set("DOC-A", createIdempotencyResult(201, { order: "A" }, {}, 60_000));
+    await store.set("DOC-A", createIdempotencyResult(201, { order: "A" }, {}, 60_000, "fp-A"));
     expect((await store.get("DOC-A"))?.statusCode).toBe(201);
+    // The body fingerprint survives the repository round-trip — without it a changed body replays.
+    expect((await store.get("DOC-A"))?.requestFingerprint).toBe("fp-A");
     expect(await store.get("DOC-B")).toBeUndefined(); // no cross-key replay
+    await app.close();
+  }, 60_000);
+
+  it("refuses the same key with a changed body THROUGH the repository store", async () => {
+    const model = mongoose.model(
+      "ArcIdempotencyReuse",
+      new Schema({ _id: String }, { strict: false, strictQuery: false, timestamps: false }),
+      "arc_idempotency_reuse",
+    );
+    const app = Fastify({ logger: false });
+    await app.register(idempotencyPlugin, {
+      enabled: true,
+      repository: new Repository(model as never, [
+        methodRegistryPlugin(),
+        batchOperationsPlugin(),
+        mongoOperationsPlugin(),
+      ]) as never,
+    });
+    let runs = 0;
+    app.post("/pay", { preHandler: [app.idempotency.middleware] }, async () => ({ run: ++runs }));
+    await app.ready();
+
+    const pay = (amount: number) =>
+      app.inject({ method: "POST", url: "/pay", headers: { "idempotency-key": "k1" }, payload: { amount } });
+    expect((await pay(100)).statusCode).toBe(200);
+    expect((await pay(100)).json()).toEqual({ run: 1 }); // replay
+    expect((await pay(900)).statusCode).toBe(422); // same key, different body
+    expect(runs).toBe(1);
     await app.close();
   }, 60_000);
 });

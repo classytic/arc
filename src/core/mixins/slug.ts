@@ -19,10 +19,10 @@ import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by SlugMixin. */
 export interface SlugExt {
-  getBySlug(req: IRequestContext): Promise<IControllerResponse<AnyRecord>>;
+  getBySlug(req: IRequestContext): Promise<IControllerResponse<object>>;
 }
 
-export function SlugMixin<TBase extends MixinConstructor<BaseCrudController>>(
+export function SlugMixin<TBase extends MixinConstructor<BaseCrudController<object>>>(
   Base: TBase,
 ): TBase & MixinConstructor<SlugExt> {
   return class SlugController extends Base {

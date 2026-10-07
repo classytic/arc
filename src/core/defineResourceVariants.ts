@@ -37,19 +37,19 @@ type VariantIdentity = Required<Pick<ResourceConfig, "name" | "prefix">>;
  * A variant override = identity (name + prefix) + any other ResourceConfig
  * field that should differ from the base.
  */
-type VariantOverride<TDoc = AnyRecord> = VariantIdentity & Partial<ResourceConfig<TDoc>>;
+export type VariantOverride<TDoc = AnyRecord> = VariantIdentity & Partial<ResourceConfig<TDoc>>;
 
 /**
  * Map of variant key → override config. The key becomes the property name in
  * the returned object (e.g. `{ articlePublic: ... }` → `result.articlePublic`).
  */
-type VariantsMap<TDoc = AnyRecord> = Record<string, VariantOverride<TDoc>>;
+export type VariantsMap<TDoc = AnyRecord> = Record<string, VariantOverride<TDoc>>;
 
 /**
  * Result type — preserves the variant keys so destructuring is type-safe:
  * `const { articlePublic, articleAdmin } = defineResourceVariants(...)`.
  */
-type VariantsResult<TDoc, V extends VariantsMap<TDoc>> = {
+export type VariantsResult<TDoc, V extends VariantsMap<TDoc>> = {
   [K in keyof V]: ResourceDefinition<TDoc>;
 };
 
@@ -73,7 +73,7 @@ type VariantsResult<TDoc, V extends VariantsMap<TDoc>> = {
  *          `ResourceDefinition` ready for `.toPlugin()` registration.
  */
 export function defineResourceVariants<
-  TDoc extends AnyRecord = AnyRecord,
+  TDoc extends object = AnyRecord,
   V extends VariantsMap<TDoc> = VariantsMap<TDoc>,
 >(base: Omit<ResourceConfig<TDoc>, "name" | "prefix">, variants: V): VariantsResult<TDoc, V> {
   const out = {} as VariantsResult<TDoc, V>;

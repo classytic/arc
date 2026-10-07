@@ -1,16 +1,10 @@
 /**
- * Idempotency body fingerprinting — depth-cap safety + content sensitivity.
+ * Idempotency body fingerprinting (`fingerprintRequest`, @classytic/primitives).
  *
- * Invariants:
- *  1. DoS defense — a deeply nested body (`{"a":{"a":{...}}}`, ~250K levels
- *     inside Fastify's 1 MiB bodyLimit) must not blow V8's call stack in
- *     `normalizeBody`; recursion caps at MAX_FINGERPRINT_DEPTH (32) with a
- *     content hash substituted past the cap.
- *  2. No false replay — the store key is `key:fingerprint`, so two
- *     DIFFERENT over-deep bodies under one idempotency key must fingerprint
- *     differently (each executes as its own operation); a shared sentinel
- *     past the cap would replay the FIRST request's cached response for the
- *     second body. Identical deep bodies still replay normally.
+ *  1. A keyed body nested past 100 levels is REFUSED (400) before the handler runs — never a
+ *     stack overflow, never a truncated fingerprint that could match another body.
+ *  2. Content is compared exactly at any allowed depth: a difference 40 levels down is the
+ *     same key reused (422), and identical deep bodies replay.
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
@@ -66,16 +60,26 @@ afterEach(async () => {
 });
 
 describe("depth-cap DoS defense", () => {
-  it("handles a 1000-deep nested body without stack overflow", async () => {
+  it("refuses a keyed 1000-deep body with 400 — no stack overflow, handler never runs", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/orders",
       headers: { "content-type": "application/json", "idempotency-key": "depth-bomb-1000" },
       payload: deepBody(1000),
     });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { code?: string }).code).toBe("arc.idempotency_body_unfingerprintable");
+    expect(counter).toBe(0);
+  });
+
+  it("an UNKEYED deep body is not fingerprinted at all", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/orders",
+      headers: { "content-type": "application/json" },
+      payload: deepBody(1000),
+    });
     expect(res.statusCode).toBe(200);
-    const parsed = res.json() as { ok: boolean };
-    expect(parsed.ok).toBe(true);
   });
 
   it("round-trips the deep body itself intact", async () => {
@@ -93,8 +97,8 @@ describe("depth-cap DoS defense", () => {
   });
 });
 
-describe("content beyond the depth cap", () => {
-  it("different over-deep bodies under the same key do NOT false-replay each other", async () => {
+describe("content at depth", () => {
+  it("a difference 40 levels deep is the key REUSED — refused, not replayed, not re-run", async () => {
     const first = await app.inject({
       method: "POST",
       url: "/orders",
@@ -108,15 +112,14 @@ describe("content beyond the depth cap", () => {
       method: "POST",
       url: "/orders",
       headers: { "content-type": "application/json", "idempotency-key": "k-deep" },
-      payload: deepBody(40, "payment-b"), // differs ONLY beyond depth 32
+      payload: deepBody(40, "payment-b"), // differs only at the leaf
     });
-    // Distinct fingerprint → its own operation, not a replay of request one.
-    expect(second.statusCode).toBe(200);
+    expect(second.statusCode).toBe(422);
     expect(second.headers["x-idempotency-replayed"]).toBeUndefined();
-    expect(second.json()).toEqual({ ok: true, n: 2 });
+    expect(counter).toBe(1);
   });
 
-  it("identical over-deep bodies still replay the cached response", async () => {
+  it("identical deep bodies replay the cached response", async () => {
     const payload = deepBody(40, "same");
     const first = await app.inject({
       method: "POST",

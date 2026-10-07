@@ -158,6 +158,26 @@ describe("resolveDelivery — the per-event authorization decision", () => {
     });
   });
 
+  it("the PLATFORM view (elevated, no active org) receives every tenant — as its `list` does", () => {
+    // SSE and reads both give this admin every tenant; realtime alone dropped
+    // them, so the admin could list rows across tenants and never see those
+    // same rows change. One rule now (`core/tenancy.ts`).
+    const event = makeEvent({ data: { a: 1 } }, { organizationId: "org-1" });
+    expect(
+      resolveDelivery(event, { ...openPolicy, subscriberPlatformView: true }, "created").kind,
+    ).toBe("deliver");
+  });
+
+  it("a policy built without subscriberPlatformView keeps the fail-closed meaning", () => {
+    const event = makeEvent({ data: { a: 1 } }, { organizationId: "org-1" });
+    expect(resolveDelivery(event, openPolicy, "created").kind).toBe("drop");
+  });
+
+  it("untenanted events reach every subscriber, org or not", () => {
+    const event = makeEvent({ data: { a: 1 } });
+    expect(resolveDelivery(event, openPolicy, "created").kind).toBe("deliver");
+  });
+
   it("tenantScoped: false disables the org guard (tenantField: false resources)", () => {
     const event = makeEvent({ data: { a: 1 } }, { organizationId: "org-1" });
     expect(resolveDelivery(event, { ...openPolicy, tenantScoped: false }, "created").kind).toBe(

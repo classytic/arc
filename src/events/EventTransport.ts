@@ -43,11 +43,11 @@
  */
 
 import {
+  createEventRouter,
   type DomainEvent,
   type EventHandler,
   type EventLogger,
   type EventTransport,
-  matchEventPattern,
   type PublishManyResult,
 } from "@classytic/primitives/events";
 import { runWorkScope, workSeedFromEvent } from "../context/workScope.js";
@@ -181,7 +181,7 @@ export interface MemoryEventTransportOptions {
  */
 export class MemoryEventTransport implements EventTransport {
   readonly name = "memory";
-  private handlers = new Map<string, Set<EventHandler>>();
+  private router = createEventRouter<EventHandler>();
   private logger: EventLogger;
   private onHandlerError: "log" | "throw";
   private handlerDispatch: "sequential" | "parallel";
@@ -216,18 +216,10 @@ export class MemoryEventTransport implements EventTransport {
   }
 
   private async dispatch(event: DomainEvent): Promise<void> {
-    // Resolve all matching handlers via the canonical `matchEventPattern`
-    // from primitives — same glob rules every other transport speaks.
-    // Walking `this.handlers` once per publish is O(handlers); fine for the
-    // in-memory transport's typical scale (tens of subscribers per process).
-    const allHandlers = new Set<EventHandler>();
-    for (const [pattern, handlers] of this.handlers) {
-      if (matchEventPattern(pattern, event.type)) {
-        for (const h of handlers) allHandlers.add(h);
-      }
-    }
+    // The primitives router: `matchEventPattern` semantics, amortized O(1) per publish.
+    const allHandlers = this.router.route(event.type);
 
-    if (allHandlers.size === 0 && this.onUnroutedEvent) {
+    if (allHandlers.length === 0 && this.onUnroutedEvent) {
       try {
         this.onUnroutedEvent(event);
       } catch (err) {
@@ -270,7 +262,7 @@ export class MemoryEventTransport implements EventTransport {
        * written not to reject, and `allSettled` means the next person to add a
        * timeout or a metric to it cannot silently break that.
        */
-      const pending = [...allHandlers];
+      const pending = allHandlers;
       if (this.handlerConcurrency >= pending.length) {
         await Promise.allSettled(pending.map(run));
       } else {
@@ -328,24 +320,13 @@ export class MemoryEventTransport implements EventTransport {
   }
 
   async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
-    if (!this.handlers.has(pattern)) {
-      this.handlers.set(pattern, new Set());
-    }
-    this.handlers.get(pattern)?.add(handler);
-
+    this.router.add(pattern, handler);
     return () => {
-      const set = this.handlers.get(pattern);
-      if (set) {
-        set.delete(handler);
-        // Clean up empty sets to prevent memory leaks from dynamic subscriptions.
-        if (set.size === 0) {
-          this.handlers.delete(pattern);
-        }
-      }
+      this.router.remove(pattern, handler);
     };
   }
 
   async close(): Promise<void> {
-    this.handlers.clear();
+    this.router.clear();
   }
 }

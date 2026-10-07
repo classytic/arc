@@ -1,30 +1,17 @@
 /**
- * Phase 4 — pick (or auto-create) the resource's controller.
- *
- * Three branches:
- *   1. User-supplied controller → forward `queryParser` (duck-typed)
- *      and warn on dropped resource-level options.
- *   2. No controller, has CRUD routes, has a repository → auto-build
- *      a `BaseController` with every resource-level knob threaded
- *      through (tenantField, schemaOptions, idField, defaultSort,
- *      cache, onFieldWriteDenied, presetFields).
+ * Pick (or auto-create) the resource's controller:
+ *   1. User-supplied → thread `queryParser` / options in; warn on anything dropped.
+ *   2. No controller + CRUD routes + repository → auto-build a `BaseController`.
  *   3. Otherwise → `undefined` (custom-routes-only resource).
  *
- * The warns are load-bearing DX: silently dropping `queryParser`,
- * `schemaOptions`, etc. on a custom controller produces 90-minute
- * "why don't my filters work" debugs. Each warn names the resource,
- * lists the dropped options, and points at the canonical fix. All
- * warns honour `ARC_SUPPRESS_WARNINGS=1` via `arcLog()`.
+ * Dropped options must never be silent — each warn names the resource, the
+ * options, and the fix (`ARC_SUPPRESS_WARNINGS=1` silences via `arcLog()`).
  */
 
+import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { isReadOnlyRepo } from "@classytic/repo-core/repository";
 import { arcLog } from "../../logger/index.js";
-import type {
-  AnyRecord,
-  IController,
-  QueryParserInterface,
-  ResourceConfig,
-} from "../../types/index.js";
+import type { IController, QueryParserInterface, ResourceConfig } from "../../types/index.js";
 import { BaseController } from "../BaseController.js";
 import type { BaseControllerOptions } from "../controllerTypes.js";
 import type { InternalResourceConfig } from "./config.js";
@@ -33,32 +20,19 @@ import { enforceWriteVerbReachability, warnOnWriteMethodOverride } from "./write
 /** CRUD routes refused over a read-only repository. */
 const READ_ONLY_REFUSED_ROUTES = ["create", "update", "delete"] as const;
 
-/**
- * Resolve the controller for the resource. See module docstring for
- * branch semantics.
- */
-export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
+/** Resolve the controller for the resource (branches in the module docstring). */
+export function resolveOrAutoCreateController<TDoc extends object>(
   resolvedConfig: InternalResourceConfig<TDoc>,
   adapter: ResourceConfig<TDoc>["adapter"],
-  repository: unknown,
+  repository: RepositoryLike | undefined,
   hasCrudRoutes: boolean,
 ): IController<TDoc> | undefined {
   const userController = resolvedConfig.controller;
 
-  // Transactional envelope requires a repository that can actually run one —
-  // BOOT-fatal on both branches (user-supplied and auto-built): a requested
-  // envelope that silently degrades to bare writes is the defect, not a mode.
-  //
-  // Split across two lifecycle points, because they can be settled at
-  // different times. Method presence is knowable NOW. Whether the DEPLOYMENT
-  // can run a transaction is not: `defineResource()` typically runs at module
-  // import, before `beforeBoot()` connects, and mongokit reports
-  // `transactions: false` for an unresolved topology by design. So the
-  // capability assertion is deferred to registration (lifecycle slot 5) via
-  // `assertTransactionCapability`, where fail-closed finally means what it
-  // says. Presence alone was never sufficient — kits expose `withTransaction`
-  // unconditionally and fail at BEGIN, which is how standalone Mongo used to
-  // boot fine and 500 on the first write.
+  // `transactional: true` is BOOT-fatal when unsupported — never silently degraded to
+  // bare writes. Method presence is checked now; the deployment CAPABILITY is deferred
+  // to registration (`assertTransactionCapability`) because `defineResource()` runs
+  // before `beforeBoot()` connects, and kits expose `withTransaction` regardless.
   if (resolvedConfig.transactional === true) {
     const repoLike = repository as
       | { withTransaction?: unknown; capabilities?: { transactions?: unknown } }
@@ -72,19 +46,11 @@ export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
           "silently drop a requested transaction envelope.",
       );
     }
-    // The CAPABILITY half is deferred to registration — see
-    // `assertTransactionCapability`. Asserting it here would read a
-    // descriptor taken before `beforeBoot()` opened the connection.
   }
 
-  // A repository whose rows another component owns (`capabilities.readOnly` —
-  // Better Auth's identity collections, a SQL view, a read replica) must not
-  // be reachable through generic CRUD writes. The kit seals the repository so
-  // a write THROWS, but a 500 on the first `POST /users` is late feedback for
-  // a wiring mistake that is fully visible at boot.
-  //
-  // Refusing here is what makes the seal a design, not a tripwire: the host
-  // either drops the write routes or opts into `unsafeWritable` deliberately.
+  // Read-only repositories (rows owned elsewhere: Better Auth, a SQL view, a replica)
+  // refuse write ROUTES at boot rather than 500 on the first write. Hosts disable the
+  // routes or opt into the kit's `unsafeWritable`.
   if (repository && isReadOnlyRepo(repository)) {
     const disabled = new Set(resolvedConfig.disabledRoutes ?? []);
     const enabledWrites = READ_ONLY_REFUSED_ROUTES.filter(
@@ -120,24 +86,14 @@ export function resolveOrAutoCreateController<TDoc extends AnyRecord>(
 }
 
 /**
- * Forward resource-level options into a user-supplied controller via
- * the duck-typed `configure(opts)` lifecycle hook. Closes the pre-2.15
- * gap where `tenantField` / `schemaOptions` / `idField` / `defaultSort`
- * / `cache` / `onFieldWriteDenied` had no path into a host controller
- * unless the host remembered to forward them through `super(repo,
- * { ... })`. `BaseController` / `BaseCrudController` ship `configure()`;
- * custom controllers can opt in by adding the method.
+ * Forward resource-level options into a user-supplied controller via the
+ * duck-typed `configure(opts)` hook.
  *
- * **Gate by `_declaredKeys`**: only forward keys the user literally
- * passed at the resource level. Without this gate, arc-inferred values
- * (e.g. `inferTenantFieldFromAdapter` setting `tenantField: false`
- * because the model's organizationId path doesn't exist) would clobber
- * the matching value the host already set in the controller's
- * constructor (e.g. `new BaseController(repo, { tenantField:
- * "companyId" })`). Resource-level explicit values still win — the
- * snapshot captures what the user typed before any inference runs.
+ * **Gated by `_declaredKeys`**: only keys the user literally passed are
+ * forwarded, so arc-inferred values (e.g. `tenantField: false` from adapter
+ * inference) never clobber what the host set in the controller's constructor.
  */
-function threadConfigureLifecycle<TDoc extends AnyRecord>(
+function threadConfigureLifecycle<TDoc extends object>(
   controller: unknown,
   resolvedConfig: InternalResourceConfig<TDoc>,
   adapter: ResourceConfig<TDoc>["adapter"],
@@ -173,12 +129,8 @@ function threadConfigureLifecycle<TDoc extends AnyRecord>(
   if (resolvedConfig.queryParser !== undefined && wasDeclared("queryParser")) {
     opts.queryParser = resolvedConfig.queryParser;
   }
-  /**
-   * NOT gated on `_declaredKeys`: `writes` is never inferred or injected by a
-   * preset, so its presence IS the declaration. Gating it would mean a
-   * resource that declares write verbs alongside its own controller silently
-   * kept generic CRUD — the exact bypass the seam exists to close.
-   */
+  // NOT gated: `writes` is never inferred, so presence IS the declaration. Gating it
+  // would let a custom controller silently keep generic CRUD, bypassing the verbs.
   if (resolvedConfig.writes !== undefined) {
     opts.writes = resolvedConfig.writes;
   }
@@ -186,8 +138,10 @@ function threadConfigureLifecycle<TDoc extends AnyRecord>(
   if (resolvedConfig.transactional !== undefined) {
     opts.transactional = resolvedConfig.transactional;
   }
-  // matchesFilter and presetFields come from adapter / presets, not
-  // user-declared fields — always forward when present.
+  if (resolvedConfig.concurrency !== undefined) {
+    opts.concurrency = resolvedConfig.concurrency;
+  }
+  // From adapter / presets, not user-declared — always forwarded when present.
   if (adapter?.matchesFilter !== undefined) opts.matchesFilter = adapter.matchesFilter;
   if (resolvedConfig._controllerOptions) {
     opts.presetFields = {
@@ -201,20 +155,11 @@ function threadConfigureLifecycle<TDoc extends AnyRecord>(
 }
 
 /**
- * Forward a resource-level `queryParser` into a user-supplied
- * controller via duck-typed `setQueryParser`. Without this the
- * controller's internal default would silently override the
- * resource's parser, drifting `[contains]` / `[like]` semantics
- * away from what the OpenAPI schema advertises.
- *
- * **Fail-loud (2.15.0):** older versions warned and continued —
- * letting the resource register with a silently-shadowed parser. The
- * "ship and pray they read the log" path produced 90-minute "why
- * doesn't `[contains]` work" debugs in production. Now throws at
- * registration so the misconfig surfaces immediately, with the same
- * fix-it message in the error.
+ * Forward a resource-level `queryParser` into a user-supplied controller via
+ * duck-typed `setQueryParser`. Throws when the controller can't accept it —
+ * a shadowed parser silently drifts filter semantics from the OpenAPI schema.
  */
-function threadQueryParser<TDoc extends AnyRecord>(
+function threadQueryParser<TDoc extends object>(
   controller: unknown,
   resolvedConfig: InternalResourceConfig<TDoc>,
 ): void {
@@ -236,29 +181,19 @@ function threadQueryParser<TDoc extends AnyRecord>(
 }
 
 /**
- * Warn when the user supplies their own controller AND declares
- * resource-level options arc only auto-threads on the auto-build
- * path. The user *can* fix this by forwarding through `super(repo,
- * { ... })`, so the warn names the dropped options + the canonical
- * fix.
+ * Warn when a custom controller without `configure()` can't receive
+ * resource-level options the user declared.
  */
-function warnOnDroppedAuthorOptions<TDoc extends AnyRecord>(
+function warnOnDroppedAuthorOptions<TDoc extends object>(
   resolvedConfig: InternalResourceConfig<TDoc>,
 ): void {
-  // If the controller exposes the 2.15.0 `configure(opts)` lifecycle
-  // hook arc is about to call, options aren't actually dropped — skip
-  // the warn entirely. Configure-aware controllers are the canonical
-  // post-2.15 path; the warn was always a band-aid for the older
-  // "user-provided controller has no way to receive these" gap.
+  // Configure-aware controllers receive the options — nothing is dropped.
   const ctrl = resolvedConfig.controller as { configure?: unknown } | undefined;
   if (typeof ctrl?.configure === "function") return;
 
   const declared = resolvedConfig._declaredKeys;
 
-  // Only warn for keys the USER literally passed — not values arc
-  // injected via presets or `inferTenantFieldFromAdapter`. Pre-2.15
-  // omitting this check fired false positives whenever inference set
-  // e.g. `tenantField: false` on a global resource.
+  // Only keys the USER passed — inferred/preset values would be false positives.
   const isDeclared = (key: string): boolean => (declared ? declared.has(key) : true);
 
   const dropped: string[] = [];
@@ -302,13 +237,11 @@ function warnOnDroppedAuthorOptions<TDoc extends AnyRecord>(
 }
 
 /**
- * Warn when a preset injected `_controllerOptions` (slugLookup,
- * softDelete, parent presets) but the user supplied their own
- * controller. The user did NOT declare these — "forward them" is
- * bad advice. The fix is either drop the preset or extend
- * `BaseController` so the auto-build path runs.
+ * Warn when a preset injected `_controllerOptions` but the user supplied their
+ * own controller. The user didn't declare these, so the fix is dropping the
+ * preset or extending `BaseController` — not "forward them".
  */
-function warnOnDroppedPresetOptions<TDoc extends AnyRecord>(
+function warnOnDroppedPresetOptions<TDoc extends object>(
   resolvedConfig: InternalResourceConfig<TDoc>,
 ): void {
   if (resolvedConfig._controllerOptions === undefined) return;
@@ -329,15 +262,13 @@ function warnOnDroppedPresetOptions<TDoc extends AnyRecord>(
 }
 
 /**
- * Auto-build a `BaseController` with every resource-level knob
- * threaded in. `maxLimit` is extracted from the parser's schema so
- * `BaseController.QueryResolver` and Fastify validation stay in sync
- * with the parser's configured limit.
+ * Auto-build a `BaseController` with every resource-level option. `maxLimit`
+ * comes from the parser's schema so QueryResolver and Fastify validation agree.
  */
-function buildBaseController<TDoc extends AnyRecord>(
+function buildBaseController<TDoc extends object>(
   resolvedConfig: InternalResourceConfig<TDoc>,
   adapter: ResourceConfig<TDoc>["adapter"],
-  repository: unknown,
+  repository: RepositoryLike,
 ): IController<TDoc> {
   const qp = resolvedConfig.queryParser as QueryParserInterface | undefined;
   let maxLimitFromParser: number | undefined;
@@ -349,11 +280,8 @@ function buildBaseController<TDoc extends AnyRecord>(
     }
   }
 
-  // Resource-level `defaultLimit` / `maxLimit` (2.17.0) win over the
-  // parser-derived defaults so hosts can declare pagination shape
-  // inline without authoring a custom `queryParser`. Used by the
-  // `referenceData: true` shorthand to lift both caps to 1000 in one
-  // line.
+  // Resource-level `defaultLimit` / `maxLimit` win over parser-derived values
+  // (e.g. the `referenceData: true` shorthand).
   const resourceConfigMaxLimit = (resolvedConfig as { maxLimit?: number }).maxLimit;
   const resourceConfigDefaultLimit = (resolvedConfig as { defaultLimit?: number }).defaultLimit;
 
@@ -374,13 +302,9 @@ function buildBaseController<TDoc extends AnyRecord>(
     cache: resolvedConfig.cache,
     onFieldWriteDenied: resolvedConfig.onFieldWriteDenied,
     onImmutableWrite: resolvedConfig.onImmutableWrite,
-    /**
-     * Domain commands for the write slots. Threaded here rather than
-     * subclassing: the pipeline stays arc's and the command stays the
-     * kernel's, so neither has to be re-implemented to reach the other.
-     */
     writes: resolvedConfig.writes as BaseControllerOptions["writes"],
     transactional: resolvedConfig.transactional === true,
+    ...(resolvedConfig.concurrency ? { concurrency: resolvedConfig.concurrency } : {}),
     presetFields: resolvedConfig._controllerOptions
       ? {
           slugField: resolvedConfig._controllerOptions.slugField,
@@ -392,14 +316,24 @@ function buildBaseController<TDoc extends AnyRecord>(
   return controller as IController<TDoc>;
 }
 
+/** Deferred like the transaction check: `concurrency` needs the kit's CAS on `ifVersion`. */
+export function assertConcurrencyCapability(repository: unknown, resourceName: string): void {
+  const capabilities = (repository as { capabilities?: { optimisticConcurrency?: unknown } } | null)
+    ?.capabilities;
+  if (!capabilities || capabilities.optimisticConcurrency === true) return;
+  throw new Error(
+    `Resource "${resourceName}" declares \`concurrency\` but its repository reports ` +
+      `\`capabilities.optimisticConcurrency: ${String(capabilities.optimisticConcurrency)}\` — ` +
+      "an ETag it cannot enforce would promise a guard that is not there. Use a kit with CAS " +
+      "writes (mongokit), or remove the option.",
+  );
+}
+
 /**
- * The DEFERRED half of the `transactional: true` gate — run at resource
- * registration, after `beforeBoot()` has had its chance to connect.
- *
- * Fail-closed: anything other than a confirmed `true` refuses the boot. A
- * repository with NO capability descriptor (hand-written, custom kit) passes
- * — it never promised one, and the define-time presence check already covered
- * the only signal it offers.
+ * The DEFERRED half of the `transactional: true` gate — run at registration,
+ * after `beforeBoot()` connects. Fail-closed: anything but a confirmed `true`
+ * refuses the boot. A repository with NO capability descriptor passes (it never
+ * promised one; the define-time presence check covered it).
  */
 export function assertTransactionCapability(repository: unknown, resourceName: string): void {
   const capabilities = (repository as { capabilities?: { transactions?: unknown } } | null)

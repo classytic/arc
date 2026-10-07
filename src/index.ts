@@ -155,12 +155,8 @@ export type {
   ArcListResult,
   ArcUpdateResult,
 } from "./core/BaseController.js";
-// ============================================================================
-// Validation — resource config validation. Relocated to `@classytic/arc/utils`
-// in v2.11.0 (dev tooling, not runtime essentials). Removed from root barrel
-// to enforce the "root = essentials only" policy.
-// ============================================================================
 export type {
+  AllowPublicOptions,
   AuthorizationDecision,
   DataPolicy,
   DynamicPermissionMatrix,
@@ -169,6 +165,7 @@ export type {
   FieldPermissionMap,
   PermissionCheck,
   PermissionContext,
+  PublicPolicy,
 } from "./permissions/index.js";
 // ============================================================================
 // Permission System — commonly used with defineResource (pure functions)
@@ -220,7 +217,6 @@ export type {
   ArcRequest,
   // Plugin options
   AuthPluginOptions,
-  ConfigError,
   ControllerLike,
   CrudController,
   CrudRouteKey,
@@ -280,18 +276,12 @@ export type {
   ResourceWrites,
   // Controller
   RouteHandler,
-  RouteHandlerMethod,
   // Schema
   RouteSchemaOptions,
   // Service & Repository
   ServiceContext,
-  TypedController,
-  TypedRepository,
-  TypedResourceConfig,
   UserBase,
   UserOrganization,
-  ValidateOptions,
-  ValidationResult,
   WriteContext,
   WriteVerbKey,
   // Controller override utility types (v2.11) — let subclass authors write

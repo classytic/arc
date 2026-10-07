@@ -48,6 +48,7 @@
 import type { DomainEvent } from "@classytic/primitives/events";
 import { OutboxOwnershipError, type OutboxStore } from "@classytic/primitives/outbox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { claimedAttempts } from "../events/outbox/claimed.js";
 
 // ============================================================================
 // Types
@@ -239,6 +240,99 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
         const saved = await seed(3);
         const claimed = await store.claimPending({ consumerId: "c1", limit: 2 });
         expect(claimed.map(idOf)).toEqual(saved.slice(0, 2).map(idOf));
+      });
+    });
+
+    /**
+     * The fenced claim had NO coverage here, though it is the path the relay
+     * prefers and the one fencing exists for. Two guarantees, both silent when
+     * broken:
+     *   - a re-claim after lease expiry mints a STRICTLY GREATER token, so the
+     *     crashed-and-resumed ex-holder cannot acknowledge an event it no longer
+     *     owns;
+     *   - `attempts`, when a store reports it, is the DURABLE count — it must
+     *     rise across claims by different consumers, because a count that each
+     *     relay keeps for itself is the thing it exists to replace.
+     */
+    describe("claimPendingFenced — fencing tokens + durable attempts", () => {
+      it("mints a STRICTLY GREATER token when a lease is taken over", async ({ skip }) => {
+        if (!store.claimPendingFenced) return skip();
+        await seed(1);
+        const [first] = await store.claimPendingFenced({
+          consumerId: "dead",
+          limit: 1,
+          leaseMs: 0,
+        });
+        const [second] = await store.claimPendingFenced({ consumerId: "c2", limit: 1 });
+        if (!first || !second) return skip();
+        expect(second.fencingToken).toBeGreaterThan(first.fencingToken);
+      });
+
+      it("REJECTS an acknowledge carrying the superseded token", async ({ skip }) => {
+        if (!store.claimPendingFenced) return skip();
+        await seed(1);
+        const [stale] = await store.claimPendingFenced({
+          consumerId: "dead",
+          limit: 1,
+          leaseMs: 0,
+        });
+        const [current] = await store.claimPendingFenced({ consumerId: "c2", limit: 1 });
+        if (!stale || !current) return skip();
+        await expect(
+          store.acknowledge(idOf(stale.event), { fencingToken: stale.fencingToken }),
+        ).rejects.toBeInstanceOf(OutboxOwnershipError);
+      });
+
+      it("reports attempts = 1 on the first claim, when it reports attempts at all", async ({
+        skip,
+      }) => {
+        if (!store.claimPendingFenced) return skip();
+        await seed(1);
+        const [claimed] = await store.claimPendingFenced({ consumerId: "c1", limit: 1 });
+        const attempts = claimed ? claimedAttempts(claimed) : undefined;
+        if (attempts === undefined) return skip();
+        expect(attempts).toBe(1);
+      });
+
+      it("attempts is DURABLE — it rises across claims by DIFFERENT consumers", async ({
+        skip,
+      }) => {
+        if (!store.claimPendingFenced || !store.fail) return skip();
+        await seed(1);
+        const seen: number[] = [];
+        // Three relays, each failing the event once — the fleet a per-process count
+        // gets wrong: each would report 1, and `attempts >= 3` would never fire.
+        for (const consumerId of ["relay-a", "relay-b", "relay-c"]) {
+          const [claimed] = await store.claimPendingFenced({ consumerId, limit: 1 });
+          if (!claimed) return skip();
+          const attempts = claimedAttempts(claimed);
+          if (attempts === undefined) return skip();
+          seen.push(attempts);
+          await store.fail(
+            idOf(claimed.event),
+            { message: "boom" },
+            { consumerId, fencingToken: claimed.fencingToken },
+          );
+        }
+        expect(seen).toEqual([1, 2, 3]);
+      });
+
+      it("requeue RESETS attempts — a re-driven event starts over", async ({ skip }) => {
+        if (!store.claimPendingFenced || !store.fail || !store.requeue) return skip();
+        await seed(1);
+        const [claimed] = await store.claimPendingFenced({ consumerId: "c1", limit: 1 });
+        if (!claimed || claimedAttempts(claimed) === undefined) return skip();
+        await store.fail(
+          idOf(claimed.event),
+          { message: "fatal" },
+          { consumerId: "c1", fencingToken: claimed.fencingToken, deadLetter: true },
+        );
+        expect(await store.requeue(idOf(claimed.event))).toBe(true);
+
+        // Carrying the old count forward would dead-letter the operator's re-drive
+        // on its first blip.
+        const [again] = await store.claimPendingFenced({ consumerId: "c2", limit: 1 });
+        expect(again ? claimedAttempts(again) : undefined).toBe(1);
       });
     });
 

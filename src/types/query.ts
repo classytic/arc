@@ -96,6 +96,8 @@ export interface LookupOption {
   single?: boolean;
   /** Field selection on the joined collection */
   select?: string | Record<string, 0 | 1>;
+  /** Filter on the joined rows — set by arc from the resource's `LookupPolicy`, never by the client. */
+  where?: Record<string, unknown>;
 }
 
 /**

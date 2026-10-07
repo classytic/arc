@@ -33,6 +33,7 @@ export type { RouteDefinition, RouteMcpConfig, RouteMethod } from "./routes.js";
 export type {
   CrudRouteKey,
   CrudSchemas,
+  LookupPolicy,
   MiddlewareConfig,
   OpenApiSchemas,
   RouteSchemaOptions,

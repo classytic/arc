@@ -300,6 +300,7 @@ describe("CORS production safety", () => {
     // Changed from hard error to warning — users may rely on proxy/CDN CORS
     const app = await createApp({
       preset: "production",
+      runtime: "memory",
       auth: false,
       logger: false,
       helmet: false,
@@ -315,6 +316,7 @@ describe("CORS production safety", () => {
   it('production preset with origin: "*" should work (from env vars)', async () => {
     const app = await createApp({
       preset: "production",
+      runtime: "memory",
       auth: false,
       logger: false,
       helmet: false,
@@ -331,6 +333,7 @@ describe("CORS production safety", () => {
   it("production preset with explicit origin should succeed", async () => {
     const app = await createApp({
       preset: "production",
+      runtime: "memory",
       auth: false,
       logger: false,
       helmet: false,
@@ -356,6 +359,7 @@ describe("CORS production safety", () => {
     const warns: string[] = [];
     const app = await createApp({
       preset: "production",
+      runtime: "memory",
       auth: false,
       // Custom logger that captures warns — the default logger flushes
       // warnings to stdout which Vitest doesn't surface in this test.
@@ -389,6 +393,7 @@ describe("CORS production safety", () => {
   it("production preset with origin: false should succeed (CORS disabled)", async () => {
     const app = await createApp({
       preset: "production",
+      runtime: "memory",
       auth: false,
       logger: false,
       helmet: false,
@@ -414,6 +419,7 @@ describe("CORS production safety", () => {
     const warns: string[] = [];
     const app = await createApp({
       preset: "production",
+      runtime: "memory",
       auth: false,
       logger: {
         level: "warn",

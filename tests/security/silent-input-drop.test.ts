@@ -36,11 +36,12 @@ describe("silent input drop — queryParser filter whitelist", () => {
     expect(result.filters).toEqual({});
   });
 
-  it("CURRENT: the bracket-envelope spelling is dropped the same way", () => {
-    // This is the exact shape that shipped: `?filters[status]=pending`.
-    // `filters` is not in allowedFilterFields, so the whole envelope vanishes.
-    const result = parser.parse({ "filters[status]": "pending" });
-    expect(result.filters).toEqual({});
+  it("FIXED (inverted): the plural envelope spelling is refused, never dropped", () => {
+    // The exact shape that shipped: `?filters[status]=pending`. It is not query grammar (the
+    // envelope is `filter[...]`), so it is a 400 naming the problem — even when not strict.
+    expect(() => parser.parse({ "filters[status]": "pending" })).toThrow(
+      expect.objectContaining({ statusCode: 400 }),
+    );
   });
 
   it("CURRENT: a whitelisted key on its own does narrow correctly", () => {

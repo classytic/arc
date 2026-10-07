@@ -112,7 +112,9 @@ export function createOperation(
     descParts.push(
       `**Permission**: ${
         permAnnotation.type === "public"
-          ? "Public"
+          ? permAnnotation.rowFiltered
+            ? "Public (row-filtered: a policy narrows which records anyone can see)"
+            : "Public"
           : permAnnotation.type === "requireRoles"
             ? `Requires roles: ${(permAnnotation.roles ?? []).join(", ")}`
             : "Requires authentication"
@@ -176,7 +178,9 @@ export function createOperation(
  */
 export function describePermissionForOpenApi(
   check: unknown,
-): { type: string; roles?: readonly string[]; orgRoles?: readonly string[] } | undefined {
+):
+  | { type: string; roles?: readonly string[]; orgRoles?: readonly string[]; rowFiltered?: true }
+  | undefined {
   if (!check || typeof check !== "function") return undefined;
 
   const fn = check as PermissionCheck & {
@@ -185,7 +189,9 @@ export function describePermissionForOpenApi(
     _teamPermission?: string;
   };
 
-  if (fn._isPublic === true) return { type: "public" };
+  if (fn._isPublic === true) {
+    return fn._rowPolicy ? { type: "public", rowFiltered: true } : { type: "public" };
+  }
 
   const result: { type: string; roles?: readonly string[]; orgRoles?: readonly string[] } = {
     type: "requireAuth",

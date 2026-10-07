@@ -20,6 +20,10 @@ function check(label, fn) {
     console.log(`  [pass] ${label}`);
   } catch (e) {
     console.log(`  [FAIL] ${label}: ${e.message}`);
+    // execSync with stdio: "pipe" keeps the child's output — without it a failed
+    // npm install reports only "Command failed".
+    const detail = `${e.stderr ?? ""}${e.stdout ?? ""}`.trim();
+    if (detail) console.log(detail.split("\n").slice(-25).map((l) => `      ${l}`).join("\n"));
     failures++;
   }
 }
@@ -124,10 +128,17 @@ check("npm pack --dry-run", () => {
 if (process.argv.includes("--consumer") || process.env.SMOKE_CONSUMER === "1") {
   console.log("\n[5/5] Running consumer install + e2e (file:../..)...");
   check("examples/_consumer-smoke", () => {
+    // `npm run` exports the user's npmrc as npm_config_* env. npm >= 11.19 rejects
+    // an inherited `allow-scripts` in a project-scoped install (EALLOWSCRIPTS), so
+    // the nested install must not see it — the smoke is about arc, not this machine.
+    const env = { ...process.env };
+    delete env.npm_config_allow_scripts;
     // Clean install — file: deps don't update on plain `npm install` reliably
-    execSync("npm install --no-audit --no-fund --silent", {
+    // --loglevel=error, not --silent: --silent also swallows the error itself.
+    execSync("npm install --no-audit --no-fund --loglevel=error", {
       cwd: "examples/_consumer-smoke",
       stdio: "pipe",
+      env,
     });
     execSync("npm test --silent", {
       cwd: "examples/_consumer-smoke",

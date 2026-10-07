@@ -47,11 +47,24 @@ import { transactionContext } from "../context/transactionContext.js";
  */
 import type { ArcModule } from "../factory/module/types.js";
 import { type EventTransport, resolveEventTransport } from "./EventTransport.js";
+import { emitObserved } from "./eventPlugin.js";
+import {
+  canReportHealth,
+  DEFAULT_RELAY_LAG_UNHEALTHY_MS,
+  type OutboxHealth,
+  readOutboxHealth,
+} from "./outbox/health.js";
 import type { OutboxRelayErrorHandler } from "./outbox/relay.js";
 import { EventOutbox } from "./outbox.js";
 
 /** Default relay cadence. Frequent enough that a retry is not a user-visible delay. */
 const DEFAULT_RELAY_EVERY_MS = 5_000;
+
+/** How long the readiness check reuses a relay-health reading. See `health.probeCacheMs`. */
+const DEFAULT_PROBE_CACHE_MS = 5_000;
+
+/** How often an unhealthy outbox is logged. See `health.alertEveryMs`. */
+const DEFAULT_HEALTH_ALERT_EVERY_MS = 5 * 60_000;
 
 /**
  * One relay identity per RELAY INSTANCE — `<name>:<hostname>:<pid>:<random>`.
@@ -184,6 +197,43 @@ export interface OutboxModuleOptions {
    * the events the previous process failed to publish.
    */
   runOnStart?: boolean;
+  /**
+   * The relay's readiness check (`/_health/ready`, name `<name>.relay`). NON-critical:
+   * a stalled relay is a cluster problem, and pulling this instance from rotation would
+   * not drain it. Unhealthy when anything is dead-lettered or the oldest pending event
+   * is older than `relayLagUnhealthyMs` (default 5 min), and when the store cannot
+   * report either. `false` omits the check.
+   *
+   * `probeCacheMs` (default 5000) is how long the check reuses its last reading.
+   * The reading costs two status counts and an oldest-pending lookup, and a
+   * readiness probe runs on EVERY replica every few seconds — uncached, 50 pods
+   * probed every 5 s is ~30 outbox queries a second, and a status count is at
+   * its most expensive during a backlog, the moment the database has least to
+   * spare. Concurrent probes also share one in-flight reading. Keep it at or
+   * below the probe interval; `0` reads on every probe. The `health()` export is
+   * never cached — an operator asking wants the current answer.
+   *
+   * `alertEveryMs` (default 5 min, `0` disables) schedules `<name>.health`, which logs
+   * while unhealthy: `marker: 'OUTBOX_RELAY_LAG'` at error, `marker: 'OUTBOX_DEAD_LETTER'`
+   * at warn. A readiness check is PULLED — nobody is paged by a degraded row in a probe
+   * body, so the stall is also pushed into the log where alerting reads it. It is a
+   * `kind: 'relay'` arm, so it runs wherever the relay runs (including a `role: 'relay'`
+   * process). A store that cannot report counts is warned about once, not every tick.
+   */
+  health?: { relayLagUnhealthyMs?: number; probeCacheMs?: number; alertEveryMs?: number } | false;
+}
+
+/** Totals across the passes of one {@link OutboxModuleExports.drain}. */
+export interface OutboxDrainResult {
+  passes: number;
+  relayed: number;
+  publishFailed: number;
+  deadLettered: number;
+  /**
+   * `true` once a pass found nothing VISIBLE to claim. Rows backing off after a failed
+   * publish are invisible until their retry time, so read `publishFailed` too.
+   */
+  drained: boolean;
 }
 
 /** What the module exports at `fastify.arc.modules.<name>`. */
@@ -205,6 +255,18 @@ export interface OutboxModuleExports {
    * The pass runs scope-free, so each event opens its own (see `runWorkScope`).
    */
   requestDrain: () => void;
+  /**
+   * Relay passes until nothing visible is pending, and resolve with the totals —
+   * including events published BY the handlers it ran. For tests that assert what
+   * an event eventually did, and for a shutdown that should empty the queue.
+   * Bounded by `maxPasses` (default 100). Runs outside the caller's request scope,
+   * like {@link requestDrain}. Waits for this module's own in-flight passes (a nudge,
+   * a scheduled tick), whose leased rows no other pass can see; rows leased by
+   * ANOTHER process are not awaited.
+   */
+  drain: (options?: { maxPasses?: number }) => Promise<OutboxDrainResult>;
+  /** The same reading as the readiness check. Throws when the store cannot report. */
+  health: () => Promise<OutboxHealth>;
 }
 
 /**
@@ -237,6 +299,55 @@ export interface OutboxModuleExports {
 export function createOutboxModule(options: OutboxModuleOptions): ArcModule<OutboxModuleExports> {
   const name = options.name ?? "outbox";
   const relayEveryMs = options.relayEveryMs ?? DEFAULT_RELAY_EVERY_MS;
+  const lagUnhealthyMs =
+    (options.health === false ? undefined : options.health?.relayLagUnhealthyMs) ??
+    DEFAULT_RELAY_LAG_UNHEALTHY_MS;
+  const probeCacheMs =
+    (options.health === false ? undefined : options.health?.probeCacheMs) ?? DEFAULT_PROBE_CACHE_MS;
+  // Refuse at construction, not at the first probe: a negative or non-finite
+  // window would either never reuse a reading or never refresh one.
+  if (!Number.isFinite(probeCacheMs) || probeCacheMs < 0) {
+    throw new Error(
+      `Outbox module "${name}": health.probeCacheMs must be a non-negative number, got ${String(probeCacheMs)}.`,
+    );
+  }
+  const alertEveryMs =
+    options.health === false ? 0 : (options.health?.alertEveryMs ?? DEFAULT_HEALTH_ALERT_EVERY_MS);
+  if (!Number.isFinite(alertEveryMs) || alertEveryMs < 0) {
+    throw new Error(
+      `Outbox module "${name}": health.alertEveryMs must be a non-negative number, got ${String(alertEveryMs)}.`,
+    );
+  }
+  let log: FastifyInstance["log"] | undefined;
+  /** The unmeasurable-store warning is said once, not every alert tick. */
+  let warnedUnmeasurable = false;
+
+  /**
+   * The readiness probe's reading, reused for `probeCacheMs` and shared by
+   * concurrent probes (single-flight). A failed or unmeasurable reading is
+   * cached as unhealthy for the same window — retrying a failing store on
+   * every probe is load on the thing that is already failing.
+   */
+  let probeReading: { at: number; healthy: boolean } | undefined;
+  let probeInFlight: Promise<boolean> | undefined;
+  const probeHealthy = (read: () => Promise<OutboxHealth>): Promise<boolean> => {
+    if (probeReading && Date.now() - probeReading.at < probeCacheMs) {
+      return Promise.resolve(probeReading.healthy);
+    }
+    probeInFlight ??= read()
+      .then(
+        (h) => h.healthy,
+        () => false,
+      )
+      .then((healthy) => {
+        probeReading = { at: Date.now(), healthy };
+        return healthy;
+      })
+      .finally(() => {
+        probeInFlight = undefined;
+      });
+    return probeInFlight;
+  };
 
   /**
    * Built at bootstrap and reused by the schedule.
@@ -247,10 +358,22 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
    */
   let exports: OutboxModuleExports | undefined;
 
+  /** Passes THIS module started (nudge, schedule) that have not settled — `drain()` waits on them. */
+  const inFlightPasses = new Set<Promise<unknown>>();
+  const trackPass = <T>(pass: Promise<T>): Promise<T> => {
+    inFlightPasses.add(pass);
+    const untrack = (): void => {
+      inFlightPasses.delete(pass);
+    };
+    pass.then(untrack, untrack);
+    return pass;
+  };
+
   return {
     name,
 
     bootstrap: (fastify: FastifyInstance): OutboxModuleExports => {
+      log = fastify.log;
       const store = typeof options.store === "function" ? options.store(fastify) : options.store;
       /**
        * The RAW transport, never `fastify.events`.
@@ -291,6 +414,7 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
       const relay = new EventOutbox({
         store,
         transport,
+        onPublished: (event) => emitObserved(fastify.events, event),
         ...(options.batchSize !== undefined ? { batchSize: options.batchSize } : {}),
         ...(options.leaseMs !== undefined ? { leaseMs: options.leaseMs } : {}),
         consumerId: options.consumerId ?? mintConsumerId(name),
@@ -324,6 +448,9 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
       const requestDrain = (): void => {
         if (drainQueued) return;
         drainQueued = true;
+        let passDone: () => void = () => {};
+        // Tracked, never awaited: the caller must not wait on the pass it nudged.
+        void trackPass(new Promise<void>((resolve) => (passDone = resolve)));
         setImmediate(() => {
           drainQueued = false;
           // `exit` — NOT merely cosmetic. `setImmediate` preserves the caller's
@@ -337,16 +464,74 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
           // event published from one is stamped with its `requestId` as
           // `correlationId`. A relay pass belongs to no request; say so.
           requestContext.storage.exit(() => {
-            relay.relayBatch().catch((err: unknown) => {
-              fastify.log.error({ err }, `outbox relay "${name}" requested drain failed`);
-            });
+            relay
+              .relayBatch()
+              .catch((err: unknown) => {
+                fastify.log.error({ err }, `outbox relay "${name}" requested drain failed`);
+              })
+              .finally(passDone);
           });
         });
       };
 
-      exports = { store, relay, requestDrain };
+      const drain = ({
+        maxPasses = 100,
+      }: {
+        maxPasses?: number;
+      } = {}): Promise<OutboxDrainResult> =>
+        requestContext.storage.exit(async () => {
+          const total: OutboxDrainResult = {
+            passes: 0,
+            relayed: 0,
+            publishFailed: 0,
+            deadLettered: 0,
+            drained: false,
+          };
+          while (total.passes < maxPasses) {
+            // A nudged or scheduled pass may hold rows under lease — invisible to
+            // this pass. Wait for it, or "nothing visible" is not "nothing pending".
+            if (inFlightPasses.size > 0) await Promise.allSettled([...inFlightPasses]);
+            const r = await relay.relayBatch();
+            total.passes++;
+            total.relayed += r.relayed;
+            total.publishFailed += r.publishFailed;
+            total.deadLettered += r.deadLettered;
+            if (r.attempted === 0 && inFlightPasses.size === 0) {
+              total.drained = true;
+              break;
+            }
+          }
+          return total;
+        });
+
+      const health = async (): Promise<OutboxHealth> => {
+        if (!canReportHealth(store)) {
+          throw new Error(
+            `Outbox module "${name}": relay health needs BOTH countByStatus and ` +
+              "oldestPendingAgeMs on the store, and it is missing at least one.",
+          );
+        }
+        return readOutboxHealth(store, lagUnhealthyMs);
+      };
+
+      exports = { store, relay, requestDrain, drain, health };
       return exports;
     },
+
+    ...(options.health === false
+      ? {}
+      : {
+          healthChecks: [
+            {
+              name: `${name}.relay`,
+              critical: false,
+              // Unmeasurable is not healthy — `health()` throws, the probe reports
+              // false. Read through `probeHealthy`: cached + single-flight.
+              check: (): Promise<boolean> =>
+                exports ? probeHealthy(exports.health) : Promise.resolve(false),
+            },
+          ],
+        }),
 
     /**
      * The relay runs on the module's OWN schedule arm, so the host stops owning the tick — and
@@ -361,9 +546,53 @@ export function createOutboxModule(options: OutboxModuleOptions): ArcModule<Outb
         handler: async (): Promise<void> => {
           // Undefined only if a schedule somehow fires before bootstrap; skipping is correct —
           // the next tick has the relay, and there is nothing to drain into yet.
-          await exports?.relay.relay();
+          if (exports) await trackPass(exports.relay.relay());
         },
       },
+      ...(alertEveryMs > 0
+        ? [
+            {
+              name: `${name}.health`,
+              // `relay`, not the default `job`: the alarm must run wherever the
+              // relay it watches runs. A `role: 'relay'` process mounts ONLY
+              // relay-kind arms, so as a plain job this was skipped in exactly
+              // the split topology `role` exists for — the relay ran, and its
+              // stall alarm ran nowhere.
+              kind: "relay" as const,
+              every: alertEveryMs,
+              handler: async (): Promise<void> => {
+                if (!exports || !log) return;
+                // A store without `countByStatus`/`oldestPendingAgeMs` cannot be
+                // measured. The readiness check already reports that (red); here
+                // it would throw every tick and log a schedule failure forever,
+                // so say it ONCE and stop.
+                if (!canReportHealth(exports.store)) {
+                  if (!warnedUnmeasurable) {
+                    warnedUnmeasurable = true;
+                    log.warn(
+                      { marker: "OUTBOX_HEALTH_UNMEASURABLE", outbox: name },
+                      `outbox "${name}" store lacks countByStatus or oldestPendingAgeMs — relay stalls cannot be alerted on`,
+                    );
+                  }
+                  return;
+                }
+                const h = await exports.health();
+                if (h.deadLetter > 0) {
+                  log.warn(
+                    { marker: "OUTBOX_DEAD_LETTER", outbox: name, ...h },
+                    `outbox "${name}" has dead-lettered events — inspect and replay them`,
+                  );
+                }
+                if (h.relayLagMs !== null && h.relayLagMs >= lagUnhealthyMs) {
+                  log.error(
+                    { marker: "OUTBOX_RELAY_LAG", outbox: name, ...h },
+                    `outbox "${name}" relay is behind — events are committed but not delivered`,
+                  );
+                }
+              },
+            },
+          ]
+        : []),
     ],
   };
 }

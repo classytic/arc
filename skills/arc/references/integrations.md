@@ -238,7 +238,7 @@ Single configuration point for both SSE and WebSocket with shared auth, org-scop
 ```typescript
 await fastify.register(eventGatewayPlugin, {
   auth: true,                     // Fail-closed for both SSE and WebSocket
-  orgScoped: true,                // Filter events by org
+  // orgScoped: omitted → SSE's default (true). Set false only for a cross-tenant ops stream.
   roomPolicy: (client, room) => {
     return ['product', 'order', 'invoice'].includes(room);
   },

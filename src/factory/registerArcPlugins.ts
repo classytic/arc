@@ -1,11 +1,6 @@
 /**
- * Arc plugin registration for createApp.
- *
- * Extracted from createApp steps 7–8:
- * - Arc core (fastify.arc, hooks, registry)
- * - Events (pub/sub transport)
- * - RequestId, Health, Graceful Shutdown
- * - Caching, QueryCache, SSE, Metrics, Versioning
+ * Arc plugin registration for createApp: core + events, then the opt-in
+ * plugins (requestId, health, gracefulShutdown, caching, SSE, metrics, ...).
  */
 
 import type { FastifyInstance } from "fastify";
@@ -47,14 +42,9 @@ export async function registerArcCore(
     const eventOpts = typeof config.arcPlugins?.events === "object" ? config.arcPlugins.events : {};
     await fastify.register(eventPlugin, {
       /**
-       * An EXPLICIT `runtime: 'memory'` is the host's single-instance
-       * declaration (its JSDoc says exactly that), so it flows down as the
-       * event plugin's `singleProcess` flag — one topology axis, declared
-       * once, no second knob to keep in sync. The comparison is against the
-       * literal, not the resolved default: `runtime` UNSET also means memory
-       * stores, but an unstated topology must keep the forgotten-default
-       * warn. `eventOpts` spreads after, so a direct
-       * `arcPlugins.events.singleProcess` still wins either way.
+       * Only an EXPLICIT `runtime: 'memory'` declares single-instance — an
+       * UNSET runtime must keep the forgotten-default warn. `eventOpts`
+       * spreads after, so `arcPlugins.events.singleProcess` still wins.
        */
       ...(config.runtime === "memory" ? { singleProcess: true } : {}),
       ...eventOpts,
@@ -88,15 +78,11 @@ export async function registerArcPlugins(
   }
 
   if (config.arcPlugins?.health !== false) {
-    // 2.15.1 — `health` accepts a HealthOptions object so hosts can pass
-    // readiness checks (Mongo connectivity, engine warmup, queue probes,
-    // etc.) inline instead of disabling Arc's plugin and re-registering.
     const appHealth: HealthOptions =
       typeof config.arcPlugins?.health === "object" && config.arcPlugins.health !== null
         ? config.arcPlugins.health
         : {};
-    // Modules-first, host-last (arc's additive convention). Module checks are
-    // already inter-module unique (collectModuleHealthChecks); this union check
+    // Modules-first, host-last. Module checks are already mutually unique; this
     // catches an app-level check colliding with a module's name.
     const checks = mergeHealthChecks([
       { owner: "the module graph", checks: moduleHealthChecks },
@@ -108,8 +94,6 @@ export async function registerArcPlugins(
   }
 
   if (config.arcPlugins?.gracefulShutdown !== false) {
-    // Same shape as `health`: `true` = defaults, an object = inline options
-    // (`drainDelayMs` is the one LB deployments need).
     const shutdownOpts: GracefulShutdownOptions =
       typeof config.arcPlugins?.gracefulShutdown === "object"
         ? config.arcPlugins.gracefulShutdown

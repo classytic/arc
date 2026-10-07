@@ -42,6 +42,9 @@ const LAYERS = {
   migrations: 0,
   sync: 0,
   discovery: 0,
+  // Pure data-structure helpers (bounded LRU maps) — zero arc imports, so
+  // every layer, `context` included, can use them.
+  collections: 0,
   // 1 — shared vocabulary + identity
   types: 1,
   scope: 1,

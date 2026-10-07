@@ -5,8 +5,18 @@
  */
 
 import type { SchemaBuilderOptions } from "@classytic/repo-core/schema";
+import type { RequestScope } from "../../scope/types.js";
 import type { MiddlewareHandler } from "../fastify.js";
 import type { ArcFieldRule } from "./fields.js";
+
+/**
+ * One client-requestable join. The base collection's tenant filter never reaches a joined
+ * collection, so its scope is REQUIRED and is always the server's — a client `where` is discarded.
+ */
+export interface LookupPolicy {
+  /** Filter on the JOINED rows (tenant, soft-delete, visibility). `{}` only for a genuinely global collection. */
+  scope: (ctx: { scope: RequestScope | undefined }) => Record<string, unknown>;
+}
 
 /**
  * Schema-shaping options for a resource.
@@ -104,11 +114,10 @@ export interface RouteSchemaOptions extends SchemaBuilderOptions {
      */
     allowedPopulate?: string[];
     /**
-     * Lookup-collection whitelist for `QueryResolver.sanitizeLookups`.
-     * When set, only the listed collections may be `$lookup`'d. Omit to
-     * disable the whitelist (kit-level rules still apply).
+     * Client-requestable joins, keyed by collection, each with the SERVER-owned scope of its
+     * joined side. Omit to deny every client lookup (the default).
      */
-    allowedLookups?: string[];
+    allowedLookups?: Readonly<Record<string, LookupPolicy>>;
   };
 }
 

@@ -343,7 +343,7 @@ export interface McpPluginOptions {
   /** Instructions for the LLM — guidance on tool usage, constraints */
   instructions?: string;
   /**
-   * Resources to exclude by name (ignored if `expose`/`include` is set).
+   * Resources to exclude by name. Mutually exclusive with `expose`.
    *
    * Drift-prone for LLM-facing surfaces: a new `defineResource()` is exposed
    * by default and you have to remember to add it here. Prefer `expose` when
@@ -356,10 +356,8 @@ export interface McpPluginOptions {
    * inverse of `exclude`), matching the principle-of-least-authority that
    * LLM-driven tool surfaces want.
    *
-   * Mutually exclusive with `include` (a deprecated alias) — passing both
-   * throws at registration. Mutually exclusive with `exclude`: the deny
-   * default would render the exclude list redundant; passing both throws
-   * with a hint to drop `exclude`.
+   * Mutually exclusive with `exclude` (the deny default makes it redundant);
+   * passing both throws with a hint to drop `exclude`.
    *
    * @example
    * ```ts

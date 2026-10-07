@@ -18,4 +18,4 @@ export type {
   UsagePluginOptions,
   UsageTrackOptions,
 } from "./usagePlugin.js";
-export { default, usagePlugin } from "./usagePlugin.js";
+export { default, default as usagePlugin } from "./usagePlugin.js";

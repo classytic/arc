@@ -20,7 +20,6 @@
 
 import { MUTATION_OPERATIONS } from "../../constants.js";
 import { arcLog } from "../../logger/index.js";
-import type { AnyRecord } from "../../types/index.js";
 import type { ResourceWrites, WriteVerbKey } from "../../types/resource/writes.js";
 import { detectOverriddenWriteSlots, isWriteVerbCapable } from "../crud/requestPipeline.js";
 import type { InternalResourceConfig } from "./config.js";
@@ -46,7 +45,7 @@ function declaredWriteVerbs(writes: ResourceWrites | undefined): WriteVerbKey[] 
  * Throws before any option threading, so a rejected resource has no partial
  * side effects to reason about.
  */
-export function enforceWriteVerbReachability<TDoc extends AnyRecord>(
+export function enforceWriteVerbReachability<TDoc extends object>(
   controller: unknown,
   resolvedConfig: InternalResourceConfig<TDoc>,
 ): void {
@@ -92,7 +91,7 @@ export function enforceWriteVerbReachability<TDoc extends AnyRecord>(
  * when protection is actually declared. A slot WITH a verb never reaches here —
  * `enforceWriteVerbReachability` already threw.
  */
-export function warnOnWriteMethodOverride<TDoc extends AnyRecord>(
+export function warnOnWriteMethodOverride<TDoc extends object>(
   controller: unknown,
   resolvedConfig: InternalResourceConfig<TDoc>,
 ): void {

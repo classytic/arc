@@ -226,8 +226,9 @@ export function repositoryAsOutboxStore(
       candidates.map((candidate) => {
         const claimNow = new Date();
         const leaseExpiresAt = new Date(claimNow.getTime() + leaseMs);
+        // The row's own key — present even when its event is malformed.
         return r.findOneAndUpdate(
-          and(eqFilter(idField, candidate.event.meta.id), claimableFilter(claimNow)),
+          and(eqFilter(idField, candidate[idField]), claimableFilter(claimNow)),
           update({
             set: { leaseOwner: consumerId, leaseExpiresAt },
             inc: { attempts: 1, fenceToken: 1 },
@@ -237,11 +238,49 @@ export function repositoryAsOutboxStore(
       }),
     );
 
+    const claimed = results.filter((doc): doc is OutboxDoc => doc !== null);
+    // A malformed row can never be published: dead-letter it under the lease just taken, so it is
+    // quarantined visibly instead of re-leased forever or aborting the relay's batch behind it.
+    await Promise.all(
+      claimed
+        .filter((doc) => !isWellFormed(doc.event))
+        .map((doc) =>
+          r.findOneAndUpdate(
+            and(
+              eqFilter(idField, doc[idField]),
+              eqFilter("leaseOwner", consumerId),
+              eqFilter("fenceToken", doc.fenceToken ?? 0),
+            ),
+            update({
+              set: {
+                status: "dead_letter",
+                leaseOwner: null,
+                leaseExpiresAt: null,
+                lastFailedAt: new Date(),
+                firstFailedAt: doc.firstFailedAt ?? new Date(),
+                lastError: {
+                  message: "outbox row holds no event with a type and meta.id",
+                  code: "MALFORMED_EVENT",
+                },
+              },
+            }),
+            { returnDocument: "after" },
+          ),
+        ),
+    );
+
     // Promise.all preserves candidate order → claims stay FIFO.
-    return results
-      .filter((doc): doc is OutboxDoc => doc !== null)
+    return claimed
       .filter((doc) => isWellFormed(doc.event))
-      .map((doc) => ({ event: doc.event, fencingToken: doc.fenceToken ?? 0 }));
+      .map((doc) => ({
+        event: doc.event,
+        fencingToken: doc.fenceToken ?? 0,
+        // The DURABLE count, incremented by the same CAS that claimed the row
+        // (`returnDocument: 'after'`). Reporting it is what lets a failure
+        // policy's `attempts >= N` survive relay restarts and a fleet of relays;
+        // the relay's own in-process count cannot do either.
+        ...(typeof doc.attempts === "number" ? { attempts: doc.attempts } : {}),
+      }));
   };
 
   return {

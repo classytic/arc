@@ -147,7 +147,12 @@ describe("Elevation Plugin (real auth flow)", () => {
     });
 
     expect(res.statusCode).toBe(403);
-    expect(JSON.parse(res.body).code).toBe("ELEVATION_FORBIDDEN");
+    // The canonical ErrorContract — no legacy `success`/`error` envelope.
+    expect(JSON.parse(res.body)).toEqual({
+      code: "arc.elevation.forbidden",
+      message: "Insufficient privileges for platform elevation",
+      status: 403,
+    });
   });
 
   it("unauthenticated request with elevation header gets 401 from auth (not elevation)", async () => {

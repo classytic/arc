@@ -13,6 +13,9 @@ import type { AuthOption } from "./auth.js";
 import type { MultipartOptions, RawBodyOptions, UnderPressureOptions } from "./plugin-options.js";
 import type { CorsOptions, HelmetOptions, RateLimitOpts } from "./security.js";
 
+/** Releases what `beforeBoot` acquired — see `CreateAppOptions.beforeBoot`. */
+export type BootDisposer = () => void | Promise<void>;
+
 /**
  * Configuration for `createApp()`.
  *
@@ -45,8 +48,9 @@ export interface CreateAppOptions {
   mountRoutes?: boolean;
 
   /**
-   * Runtime profile for store backends.
-   * - 'memory' (default): Uses in-memory stores. Suitable for single-instance deployments.
+   * Runtime profile for store backends — the deployment's TOPOLOGY. REQUIRED under
+   * `preset: 'production'` (boot fails without it); defaults to 'memory' elsewhere.
+   * - 'memory': Uses in-memory stores. Correct for exactly ONE instance.
    * - 'distributed': Requires durable adapters for events, and for any enabled
    *   shared subsystems such as caching/queryCache/rate limiting.
    *   Idempotency remains per-resource opt-in: memory-backed stores are rejected,
@@ -484,7 +488,7 @@ export interface CreateAppOptions {
    * - `'number'` — LOSSY above `Number.MAX_SAFE_INTEGER` (2^53-1). Only for
    *   an audited, bounded range.
    */
-  serializeBigInt?: boolean | "number" | "string";
+  serializeBigInt?: false | "number" | "string";
 
   // ============================================
   // Resources & Lifecycle
@@ -500,6 +504,19 @@ export interface CreateAppOptions {
    * always before the app-level entry for that phase. See [[modules]].
    */
   modules?: ReadonlyArray<import("../module/index.js").ArcModuleInput>;
+  /**
+   * Host collaborators modules declare in `requires.ports` (a connection, an outbox, a
+   * calendar…). Every `'required'` port of every active module is checked before any module
+   * boots — all gaps in one error — and each module's setup phases receive only the ports it
+   * declared, as `context.ports`. Nothing is defaulted.
+   */
+  ports?: import("../module/types.js").ArcPorts;
+  /**
+   * The module graph check. `events: 'strict'` fails boot when an event has two owners, is
+   * published outside its module's namespace, or is consumed with no active publisher and no
+   * `externalEvents` entry. Default `'off'`. The graph is always on `fastify.arc.moduleGraph`.
+   */
+  moduleGraph?: import("../module/graph.js").ModuleGraphOptions;
 
   /**
    * Resources to register. An ARRAY is resolved at module import, so every
@@ -632,9 +649,15 @@ export interface CreateAppOptions {
    * ```
    *
    * Runs after option validation (config bugs fail fast without touching
-   * the DB). Cleanup stays host-owned — pair with `onClose`.
+   * the DB). Return a disposer to hand cleanup to arc: it runs once, on
+   * `app.close()` after every plugin's `onClose`, AND on a boot that fails —
+   * including one that fails before Fastify exists, where no `onClose` can.
+   *
+   * ```ts
+   * beforeBoot: async () => { await mongoose.connect(uri); return () => mongoose.disconnect(); },
+   * ```
    */
-  beforeBoot?: () => void | Promise<void>;
+  beforeBoot?: () => void | BootDisposer | Promise<void | BootDisposer>;
 
   /**
    * Custom plugin registration — runs after Arc core (security, auth, events)

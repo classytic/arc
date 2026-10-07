@@ -41,8 +41,10 @@ function declarationExports(dtsPath) {
     return [];
   }
   const names = new Set();
-  // `export { A, type B, C as D, ... }` blocks (possibly multiline).
-  for (const block of text.matchAll(/export\s*\{([\s\S]*?)\}/g)) {
+  // `export { A, type B, C as D, ... }` and `export type { ... }` blocks (possibly
+  // multiline). rolldown-dts emits type-only barrels as `export type {`; missing
+  // that form left whole subpaths (`./types`) with no tracked names.
+  for (const block of text.matchAll(/export\s+(?:type\s+)?\{([\s\S]*?)\}/g)) {
     for (const raw of block[1].split(",")) {
       const entry = raw.trim();
       if (!entry) continue;

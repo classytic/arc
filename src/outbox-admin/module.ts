@@ -38,9 +38,10 @@ import type { DeadLetteredEvent } from "@classytic/primitives/events";
 import type { OutboxStore } from "@classytic/primitives/outbox";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { defineResource } from "../core/defineResource.js";
+import { DEFAULT_RELAY_LAG_UNHEALTHY_MS, readOutboxHealth } from "../events/outbox/health.js";
 import type { OutboxModuleExports } from "../events/outbox-module.js";
 import { defineModule, getModuleExports } from "../factory/module/index.js";
-import type { ArcModule } from "../factory/module/types.js";
+import type { ArcModule, ModuleName } from "../factory/module/types.js";
 import type { PermissionCheck } from "../permissions/types.js";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
 
@@ -82,7 +83,7 @@ export interface OutboxAdminModuleDeps {
    * Name the outbox module was composed under, used to resolve the relay and
    * declared as a `dependsOn` edge. Default `outbox`.
    */
-  outboxModuleName?: string;
+  outboxModuleName?: ModuleName;
   /** Resource names this module supersedes. */
   owns?: readonly string[];
   /** Cap on `?limit`. Default 500 — a dead-letter list is for triage, not export. */
@@ -173,7 +174,7 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
   const maxLimit = deps.maxDeadLetterLimit ?? 500;
   const view = deps.permissions.view;
   const replay = deps.permissions.replay ?? deps.permissions.view;
-  const lagUnhealthyMs = deps.relayLagUnhealthyMs ?? 5 * 60_000;
+  const lagUnhealthyMs = deps.relayLagUnhealthyMs ?? DEFAULT_RELAY_LAG_UNHEALTHY_MS;
 
   // Boot-time, not request-time: a misconfigured operator surface should never
   // reach its first request. `_platformOnly` is unprovable from outside the
@@ -210,20 +211,8 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
         path: "/health",
         summary: "Outbox health — pending, dead-letter and relay lag",
         permissions: view,
-        rawHandler: async (_req: FastifyRequest, reply: FastifyReply) => {
-          const [pending, deadLetter, relayLagMs] = await Promise.all([
-            deps.store.countByStatus("pending"),
-            deps.store.countByStatus("dead_letter"),
-            deps.store.oldestPendingAgeMs(),
-          ]);
-          // `healthy` folds BOTH signals. Keying it off the dead-letter count
-          // alone would report healthy: true for a relay wedged hours behind a
-          // single poison row — a health number that lies at exactly the moment
-          // someone is relying on it. A dead letter is unrecoverable without an
-          // operator; a stalled relay is recoverable but equally unattended.
-          const healthy = deadLetter === 0 && (relayLagMs === null || relayLagMs < lagUnhealthyMs);
-          return reply.send({ pending, deadLetter, relayLagMs, healthy });
-        },
+        rawHandler: async (_req: FastifyRequest, reply: FastifyReply) =>
+          reply.send(await readOutboxHealth(deps.store, lagUnhealthyMs)),
       },
       {
         method: "GET",

@@ -51,6 +51,28 @@ export function isFieldReadable(rule: ArcFieldRule | undefined): boolean {
 }
 
 /**
+ * Does `path` touch a blocked field? The ONE path rule every read surface uses: blocked by its own
+ * name or by ANY ancestor (a rule on a parent covers its children). With `descendants`, a blocked
+ * field UNDER `path` counts too — for surfaces that return the value raw (`_distinct`, aggregation
+ * groups), where the parent object carries the hidden child.
+ */
+export function pathTouchesBlocked(
+  path: string,
+  blocked: ReadonlySet<string>,
+  options: { descendants?: boolean } = {},
+): boolean {
+  if (blocked.has(path)) return true;
+  for (let dot = path.indexOf("."); dot > 0; dot = path.indexOf(".", dot + 1)) {
+    if (blocked.has(path.slice(0, dot))) return true;
+  }
+  if (options.descendants) {
+    const prefix = `${path}.`;
+    for (const field of blocked) if (field.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
  * The set of field names blocked from read-side surfaces (used by
  * `QueryResolver.sanitizeSelectAny` and `BaseCrudController._distinct`).
  *

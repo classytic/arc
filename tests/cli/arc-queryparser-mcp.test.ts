@@ -249,7 +249,8 @@ describe("ArcQueryParser whitelist enforcement", () => {
 
   it("accepts allowed operators", () => {
     const parsed = queryParser.parse({ status: { eq: "open" } });
-    expect(parsed.filters.status).toEqual({ $eq: "open" });
+    // `[eq]` is plain equality.
+    expect(parsed.filters.status).toBe("open");
   });
 
   it("rejects disallowed operators", () => {

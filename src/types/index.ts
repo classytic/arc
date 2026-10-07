@@ -23,17 +23,12 @@
  * - `./auth.ts`        — JWT context, authenticator, auth plugin options
  * - `./plugins.ts`     — plugin option types + `CrudRouterOptions`
  * - `./registry.ts`    — registry / introspection metadata
- * - `./validation.ts`  — config validation result types
  * - `./utility.ts`     — type-level inference helpers
  * - `./handlers.ts`    — controller / route handler shapes
  * - `./repository.ts`  — `CrudRepository`, pagination, write/delete results
  * - `./storage.ts`     — storage contract types
  */
 
-// ──────────────────────────────────────────────────────────────────────
-// Re-export Fastify primitives users commonly need
-// ──────────────────────────────────────────────────────────────────────
-export type { RouteHandlerMethod } from "fastify";
 // ──────────────────────────────────────────────────────────────────────
 // Base controller options — canonical definition lives in core/
 // ──────────────────────────────────────────────────────────────────────
@@ -165,6 +160,7 @@ export type {
   CrudSchemas,
   EventDefinition,
   FieldRule,
+  LookupPolicy,
   MiddlewareConfig,
   MutationWriteContext,
   OnTenantDeleteConfig,
@@ -195,11 +191,4 @@ export type {
   InferAdapterDoc,
   InferDocType,
   InferResourceDoc,
-  TypedController,
-  TypedRepository,
-  TypedResourceConfig,
 } from "./utility.js";
-// ──────────────────────────────────────────────────────────────────────
-// Validation
-// ──────────────────────────────────────────────────────────────────────
-export type { ConfigError, ValidateOptions, ValidationResult } from "./validation.js";

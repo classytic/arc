@@ -24,8 +24,10 @@ import type {
 } from "@classytic/primitives/outbox";
 import { InvalidOutboxEventError, OutboxOwnershipError } from "@classytic/primitives/outbox";
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
+import { evictToSize, touch } from "../../collections/boundedMap.js";
 import type { DeadLetteredEvent, DomainEvent, EventTransport } from "../EventTransport.js";
 import { repositoryAsOutboxStore } from "../repository-outbox-adapter.js";
+import { claimedAttempts } from "./claimed.js";
 
 /** Default outbox retention — delivered events older than this are eligible for purge */
 const DEFAULT_OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -142,6 +144,8 @@ export interface EventOutboxOptions {
    * logging and metrics. Must not throw — exceptions are swallowed.
    */
   readonly onError?: OutboxRelayErrorHandler;
+  /** Called with each event the transport accepted — observation only, never affects the batch. */
+  readonly onPublished?: (event: DomainEvent) => void;
   /**
    * Enable {@link EventTransport.publishMany} when the transport implements it.
    * Default: `true`. Set to `false` to force per-event `publish()` — useful
@@ -215,6 +219,7 @@ export class EventOutbox {
   private readonly _consumerId: string;
   private readonly _leaseMs: number;
   private readonly _onError?: OutboxRelayErrorHandler;
+  private readonly _onPublished?: (event: DomainEvent) => void;
   private readonly _usePublishMany: boolean;
   private readonly _sessionProvider?: () => unknown;
   private readonly _traceContextProvider?: () => Record<string, string> | undefined;
@@ -224,9 +229,11 @@ export class EventOutbox {
    * process; resets on restart. Populated as failures occur and cleared on
    * successful ack or dead-letter transition; additionally hard-capped at
    * {@link MAX_TRACKED_ATTEMPTS} (oldest-write evicted first) so events
-   * resolved by another relay worker can't accumulate forever. For durable
-   * authoritative counts, apps can query the store directly inside
-   * {@link OutboxFailurePolicy}.
+   * resolved by another relay worker can't accumulate forever.
+   *
+   * A FALLBACK only: when the store reports `attempts` on the fenced claim
+   * (`repositoryAsOutboxStore` and primitives' `MemoryOutboxStore` do), the
+   * durable count wins — see the failure path in `relayBatch`.
    */
   private readonly _attempts = new Map<string, number>();
 
@@ -251,6 +258,7 @@ export class EventOutbox {
     this._consumerId = opts.consumerId ?? `relay-${Math.random().toString(36).slice(2, 10)}`;
     this._leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
     this._onError = opts.onError;
+    this._onPublished = opts.onPublished;
     this._usePublishMany = opts.usePublishMany ?? true;
     this._failurePolicy = opts.failurePolicy;
     this._sessionProvider = opts.sessionProvider;
@@ -397,6 +405,9 @@ export class EventOutbox {
     // store rejects a stale epoch — the overlap consumer-id ownership
     // narrows but cannot close (holder ids recur; epochs do not).
     const fenceTokens = new Map<string, number>();
+    // Durable per-event attempt counts, when the store reports them on the
+    // fenced claim. See `_attempts` for why the in-process count alone is wrong.
+    const durableAttempts = new Map<string, number>();
     let pending: DomainEvent[];
     if (typeof this._store.claimPendingFenced === "function") {
       const claimed = await this._store.claimPendingFenced({
@@ -405,7 +416,11 @@ export class EventOutbox {
         leaseMs: this._leaseMs,
       });
       pending = claimed.map((c) => {
-        if (c.event?.meta?.id) fenceTokens.set(c.event.meta.id, c.fencingToken);
+        if (c.event?.meta?.id) {
+          fenceTokens.set(c.event.meta.id, c.fencingToken);
+          const attempts = claimedAttempts(c);
+          if (attempts !== undefined) durableAttempts.set(c.event.meta.id, attempts);
+        }
         return c.event;
       });
     } else if (this._store.claimPending) {
@@ -459,7 +474,7 @@ export class EventOutbox {
     if (canPublishMany && valid.length > 0) {
       try {
         const result = await this._transport.publishMany?.(valid);
-        publishOutcomes = new Map(result);
+        publishOutcomes = batchOutcomes(valid, result);
       } catch (batchErr) {
         // Whole-batch failure — synthesize a uniform failure outcome so the
         // downstream fail/ack logic still runs per event.
@@ -485,6 +500,17 @@ export class EventOutbox {
       }
     }
 
+    if (this._onPublished) {
+      for (const event of valid) {
+        if (publishOutcomes.get(event.meta.id) !== null) continue;
+        try {
+          this._onPublished(event);
+        } catch {
+          /* observation never affects the batch */
+        }
+      }
+    }
+
     let stopBatch = false;
 
     // Apply ack/fail per event based on publish outcome. Order of `valid`
@@ -505,16 +531,20 @@ export class EventOutbox {
         // Track attempts in-process; pass to the policy if configured. First
         // failure = attempts: 1, second = 2, etc. Cleared on ack or when the
         // event is dead-lettered (terminal state).
-        const attempts = (this._attempts.get(event.meta.id) ?? 0) + 1;
+        //
+        // The in-process count is only a FALLBACK. It restarts at 1 on every
+        // relay boot — so a poison event that crashes the relay never reaches
+        // `attempts >= N → deadLetter` — and every relay on a shared store keeps
+        // its own, so N means N × relays. When the store reports the durable
+        // count on the fenced claim, that one wins; `max` covers a store whose
+        // counter lags (e.g. one that only bumps it on `fail`).
+        const localAttempts = (this._attempts.get(event.meta.id) ?? 0) + 1;
+        const attempts = Math.max(localAttempts, durableAttempts.get(event.meta.id) ?? 0);
         // delete-then-set keeps actively-failing ids at the tail of the
         // Map's insertion order, so the cap below evicts the STALEST entry
         // (most likely already acked by another worker after lease expiry).
-        this._attempts.delete(event.meta.id);
-        this._attempts.set(event.meta.id, attempts);
-        if (this._attempts.size > MAX_TRACKED_ATTEMPTS) {
-          const oldest = this._attempts.keys().next().value;
-          if (oldest !== undefined) this._attempts.delete(oldest);
-        }
+        touch(this._attempts, event.meta.id, attempts);
+        evictToSize(this._attempts, MAX_TRACKED_ATTEMPTS);
 
         const fenceToken = fenceTokens.get(event.meta.id);
         let failOpts: OutboxFailOptions = {
@@ -612,6 +642,34 @@ export class EventOutbox {
     if (!this._store.purge) return 0;
     return this._store.purge(olderThanMs);
   }
+}
+
+/**
+ * A `publishMany` result must name exactly the events it was given. A missing outcome would read as
+ * success and be ACKNOWLEDGED unpublished, so any mismatch fails the whole batch — nothing is acked.
+ */
+function batchOutcomes(
+  events: readonly DomainEvent[],
+  result: ReadonlyMap<string, Error | null> | undefined,
+): Map<string, Error | null> {
+  const problem = batchContractProblem(events, result);
+  if (!problem) return new Map(result);
+  const err = new Error(
+    `[arc outbox] transport publishMany ${problem} — the whole batch is failed, none acknowledged`,
+  );
+  return new Map(events.map((e) => [e.meta.id, err]));
+}
+
+function batchContractProblem(
+  events: readonly DomainEvent[],
+  result: ReadonlyMap<string, Error | null> | undefined,
+): string | undefined {
+  if (!(result instanceof Map)) return "returned no outcome map";
+  const ids = new Set(events.map((e) => e.meta.id));
+  for (const id of ids) if (!result.has(id)) return `returned no outcome for event '${id}'`;
+  for (const id of result.keys())
+    if (!ids.has(id)) return `returned an outcome for unknown event '${id}'`;
+  return undefined;
 }
 
 function normalizeError(err: unknown): OutboxErrorInfo {

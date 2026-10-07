@@ -25,6 +25,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { assertCapacity, evictToSize, touch } from "../collections/boundedMap.js";
 import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import { hasEvents } from "../utils/typeGuards.js";
 
@@ -136,9 +137,7 @@ class LRUCache {
       return null;
     }
 
-    // Move to end (most recently used)
-    this.cache.delete(key);
-    this.cache.set(key, entry);
+    touch(this.cache, key, entry); // most recently used
     this.hits++;
     return entry;
   }
@@ -149,21 +148,12 @@ class LRUCache {
       return;
     }
 
-    // Delete first to reset position
-    if (this.cache.has(key)) {
-      this.cache.delete(key);
-    }
-
-    // Evict oldest (first in Map) if at capacity
-    while (this.cache.size >= this.maxEntries) {
-      const firstKey = this.cache.keys().next().value;
-      if (firstKey !== undefined) {
-        this.cache.delete(firstKey);
-        this.evictions++;
-      }
-    }
-
-    this.cache.set(key, entry);
+    // Insert as most-recent, THEN evict down to capacity. The old order —
+    // evict `while (size >= maxEntries)`, then insert — spun forever at
+    // `maxEntries: 0`: nothing to evict, the condition never changed, and the
+    // first cached GET froze the event loop.
+    touch(this.cache, key, entry);
+    this.evictions += evictToSize(this.cache, this.maxEntries);
   }
 
   /** Invalidate entries matching a path prefix and lock it from caching to allow DB replicas to catch up */
@@ -297,6 +287,7 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
         "queryCache with a Redis store instead.",
     );
   }
+  assertCapacity("responseCache maxEntries", maxEntries);
   const cache = new LRUCache(maxEntries);
   const invalidateMethods = new Set(invalidateOn.map((m) => m.toUpperCase()));
 

@@ -29,6 +29,7 @@
  * ```
  */
 
+import { ARC_ERROR_CODES, type ErrorContract } from "@classytic/repo-core/errors";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { arcLog } from "../logger/index.js";
@@ -106,11 +107,10 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
     if (!user) {
       log.debug("Elevation requested but no user after auth");
       reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
+        code: ARC_ERROR_CODES.ELEVATION_AUTH_REQUIRED,
         message: "Authentication required for platform elevation",
-        code: "ELEVATION_AUTH_REQUIRED",
-      });
+        status: 401,
+      } satisfies ErrorContract);
       return;
     }
 
@@ -122,11 +122,10 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
         required: platformRoles,
       });
       reply.code(403).send({
-        success: false,
-        error: "Forbidden",
+        code: ARC_ERROR_CODES.ELEVATION_FORBIDDEN,
         message: "Insufficient privileges for platform elevation",
-        code: "ELEVATION_FORBIDDEN",
-      });
+        status: 403,
+      } satisfies ErrorContract);
       return;
     }
 

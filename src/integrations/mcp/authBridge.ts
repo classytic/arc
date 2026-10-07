@@ -11,6 +11,7 @@
 
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { assertCapacity, evictToSize, touch } from "../../collections/boundedMap.js";
 import type { BetterAuthHandler, McpAuthResolver, McpAuthResult } from "./types.js";
 
 // ============================================================================
@@ -106,7 +107,10 @@ export class McpAuthCache {
 
   constructor(opts?: { ttlMs?: number; maxEntries?: number }) {
     this.ttlMs = opts?.ttlMs ?? DEFAULT_AUTH_CACHE_TTL_MS;
-    this.maxEntries = opts?.maxEntries ?? DEFAULT_AUTH_CACHE_MAX;
+    this.maxEntries = assertCapacity(
+      "McpAuthCache maxEntries",
+      opts?.maxEntries ?? DEFAULT_AUTH_CACHE_MAX,
+    );
   }
 
   get(key: string): McpAuthResult | null | undefined {
@@ -120,19 +124,18 @@ export class McpAuthCache {
   }
 
   set(key: string, result: McpAuthResult | null): void {
-    // Evict expired + enforce capacity
+    // Sweep expired entries first when full — cheaper to drop the dead than
+    // to evict a live one.
     if (this.cache.size >= this.maxEntries) {
       const now = Date.now();
       for (const [k, v] of this.cache) {
         if (now > v.expires) this.cache.delete(k);
       }
-      // If still at capacity, evict oldest
-      if (this.cache.size >= this.maxEntries) {
-        const firstKey = this.cache.keys().next().value;
-        if (firstKey) this.cache.delete(firstKey);
-      }
     }
-    this.cache.set(key, { result, expires: Date.now() + this.ttlMs });
+    touch(this.cache, key, { result, expires: Date.now() + this.ttlMs });
+    // Then the oldest, by the shared helper. The hand-rolled version guarded
+    // on `if (firstKey)` — falsy — so an empty-string key was never evicted.
+    evictToSize(this.cache, this.maxEntries);
   }
 }
 

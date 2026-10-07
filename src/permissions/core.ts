@@ -11,7 +11,12 @@ import { getUserId as getScopeUserId, isElevated, isMember } from "../scope/type
 import { normalizeToDecision } from "./authorizationDecision.js";
 import { scopeOf } from "./context.js";
 import { conjoinPolicyFilters } from "./filter-merge.js";
-import type { AuthorizationDecision, PermissionCheck, PermissionContext } from "./types.js";
+import type {
+  AuthorizationDecision,
+  DataPolicy,
+  PermissionCheck,
+  PermissionContext,
+} from "./types.js";
 import { getUserRoles } from "./types.js";
 
 // ============================================================================
@@ -53,19 +58,130 @@ export function normalizeVariadicOrArray(args: string[] | [readonly string[]]): 
 }
 
 /**
- * Allow public access (no authentication required).
+ * The row policy an `allowPublic` gate applies to the callers it admits: a
+ * filter, or a function of the request that returns one.
+ *
+ * The function form is the scope-aware one — it sees the caller, so anonymous
+ * visitors, the row's author and staff can each get a different filter from ONE
+ * gate. Return `{}` to admit a caller unrestricted (e.g. staff); returning
+ * nothing is treated as a bug, not as "no filter" (see {@link allowPublic}).
+ */
+export type PublicPolicy<TDoc = Record<string, unknown>> =
+  | DataPolicy
+  | ((ctx: PermissionContext<TDoc>) => DataPolicy | Promise<DataPolicy>);
+
+/** Options for {@link allowPublic}. */
+export interface AllowPublicOptions<TDoc = Record<string, unknown>> {
+  /**
+   * Narrow what anyone admitted by this gate can read or write. Enforced where
+   * every other row policy is: ANDed into the repository query for `list`, into
+   * the compound lookup for `get` / `update` / `delete`, into aggregations, and
+   * per event on realtime feeds. A caller cannot widen it with a query
+   * parameter — `?status=hidden` is conjoined with the policy, not substituted
+   * for it.
+   */
+  policy?: PublicPolicy<TDoc>;
+}
+
+/** A non-null, non-array object — the only shape a row policy can take. */
+function isPolicyObject(value: unknown): value is DataPolicy {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Own keys, symbol-keyed included (a branded adapter-native filter is symbol-keyed). */
+function hasPolicyKeys(policy: DataPolicy): boolean {
+  return Object.keys(policy).length > 0 || Object.getOwnPropertySymbols(policy).length > 0;
+}
+
+/**
+ * Allow public access (no authentication required) — optionally row-filtered.
+ *
+ * Without options, anyone passes and sees everything the query asks for.
+ *
+ * With `policy`, anyone still passes, but only the rows the policy admits are
+ * readable (or writable). This is the declarative form of a check that returns
+ * `allow({ policy })`, and it exists because the hand-written form has a trap:
+ * a check function is treated as PROTECTED unless it carries `_isPublic`, so a
+ * custom "public, but only published rows" check that forgets to set the flag
+ * answers every anonymous visitor with a 401 — the public page silently
+ * becomes a login wall. `allowPublic({ policy })` sets it for you.
+ *
+ * Fail-closed on both ends:
+ *  - a STATIC policy must be a non-empty object — `{}` filters nothing and is
+ *    almost certainly a mistake, so it throws at definition time (use
+ *    `allowPublic()` for an unrestricted gate);
+ *  - a RESOLVER that returns anything but an object throws per request, which
+ *    arc answers as a 403 for everyone. A forgotten branch that falls off the
+ *    end of the function must not quietly mean "no filter". Return `{}` when a
+ *    caller genuinely should be unrestricted.
+ *
+ * Composing: inside `anyOf`, the FIRST granting branch wins, and a public
+ * branch grants everyone — so `anyOf(allowPublic({ policy }), requireRoles("admin"))`
+ * filters admins too. Put the privileged branch first, or use the resolver
+ * form and return `{}` for staff.
  *
  * @example
  * ```typescript
- * permissions: {
- *   list: allowPublic(),
- *   get: allowPublic(),
- * }
+ * // Strangers see only published reviews, whatever filter they send.
+ * list: allowPublic({ policy: { status: { $in: ["published", "flagged"] } } }),
+ *
+ * // Scope-aware: the author also sees their own pending review; staff see all.
+ * list: allowPublic({
+ *   policy: (ctx) => {
+ *     const scope = scopeOf(ctx);
+ *     if (isElevated(scope)) return {};
+ *     const visible = { status: { $in: ["published", "flagged"] } };
+ *     const userId = getUserId(scope);
+ *     return userId ? { $or: [visible, { authorId: userId }] } : visible;
+ *   },
+ * }),
  * ```
  */
-export function allowPublic(): PermissionCheck {
-  const check: PermissionCheck = () => true;
+export function allowPublic<TDoc = Record<string, unknown>>(
+  options?: AllowPublicOptions<TDoc>,
+): PermissionCheck<TDoc> {
+  const policy = options?.policy;
+
+  if (policy === undefined) {
+    const check: PermissionCheck<TDoc> = () => true;
+    check._isPublic = true;
+    return check;
+  }
+
+  let check: PermissionCheck<TDoc>;
+  if (typeof policy === "function") {
+    check = async (ctx) => {
+      const resolved: unknown = await policy(ctx);
+      if (!isPolicyObject(resolved)) {
+        throw new Error(
+          `[arc] allowPublic({ policy }) resolver returned ${
+            resolved === null ? "null" : Array.isArray(resolved) ? "an array" : typeof resolved
+          } for '${ctx.resource}:${ctx.action}'. Return a filter object, or {} to admit this ` +
+            "caller unrestricted. Returning nothing is refused rather than read as 'no filter'.",
+        );
+      }
+      return hasPolicyKeys(resolved) ? allow({ policy: resolved }) : allow();
+    };
+  } else {
+    if (!isPolicyObject(policy)) {
+      throw new Error(
+        "[arc] allowPublic({ policy }) expects a filter object or a function returning one, got " +
+          `${policy === null ? "null" : Array.isArray(policy) ? "an array" : typeof policy}.`,
+      );
+    }
+    if (!hasPolicyKeys(policy)) {
+      throw new Error(
+        "[arc] allowPublic({ policy: {} }) filters nothing. Use allowPublic() for an unrestricted " +
+          "public gate, or give the policy a constraint.",
+      );
+    }
+    // Shared across requests safely: enforcement conjoins it into a fresh
+    // object per request (`conjoinPolicyFilters`) and never mutates it.
+    check = () => allow({ policy });
+  }
+
   check._isPublic = true;
+  check._rowPolicy = true;
   return check;
 }
 
@@ -366,6 +482,9 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
     check._isDenied = true;
   } else if (checks.length > 0 && checks.every((c) => c._isPublic)) {
     check._isPublic = true;
+    // AND: every branch's policy is conjoined, so ONE row-filtered branch
+    // filters the whole conjunction.
+    if (checks.some((c) => c._rowPolicy)) check._rowPolicy = true;
   } else if (roleBranches.length === 1) {
     const [rb] = roleBranches;
     if (rb?._roles?.length) check._roles = [...rb._roles];
@@ -462,6 +581,11 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
     check._isDenied = true;
   } else if (checks.some((c) => c._isPublic)) {
     check._isPublic = true;
+    // What an ANONYMOUS caller gets is decided by the first public branch in
+    // order (evaluation stops at the first grant, and a public branch grants
+    // everyone). So the public surface is row-filtered exactly when that
+    // branch is — a later unfiltered public branch is never reached.
+    if (checks.find((c) => c._isPublic)?._rowPolicy) check._rowPolicy = true;
   } else if (checks.every((c) => (c._roles?.length ?? 0) > 0 || (c._orgRoles?.length ?? 0) > 0)) {
     const roles = new Set<string>();
     const orgRoles = new Set<string>();
@@ -479,10 +603,32 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
     // unconditional sibling branch to conditional (a single boolean can't say
     // "admin→allow, editor→conditional"); the precise fix is an expression AST.
     if (checks.some((c) => c._conditional)) check._conditional = true;
+  } else if (
+    checks.some(isMembershipGate) &&
+    checks.every((c) => isMembershipGate(c) || isPlainRoleGate(c))
+  ) {
+    // "a member of the active org, OR one of these roles" — e.g. platform admin or branch staff.
+    check._orgPermission = "membership";
+    const roles = new Set<string>();
+    const orgRoles = new Set<string>();
+    for (const c of checks) {
+      for (const r of c._roles ?? []) roles.add(r);
+      for (const r of c._orgRoles ?? []) orgRoles.add(r);
+    }
+    if (roles.size > 0) check._roles = [...roles];
+    if (orgRoles.size > 0) check._orgRoles = [...orgRoles];
   }
 
   return check;
 }
+
+const isMembershipGate = (c: PermissionCheck): boolean =>
+  c._orgPermission === "membership" && !c._conditional && !c._scopeContext;
+
+const isPlainRoleGate = (c: PermissionCheck): boolean =>
+  ((c._roles?.length ?? 0) > 0 || (c._orgRoles?.length ?? 0) > 0) &&
+  !c._conditional &&
+  !c._scopeContext;
 
 /**
  * Invert a permission check. Grants when the wrapped check denies, denies

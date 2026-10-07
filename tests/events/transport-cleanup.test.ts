@@ -18,21 +18,17 @@ describe("MemoryEventTransport — cleanup on unsubscribe", () => {
     const unsub1 = await transport.subscribe("order.created", handler1);
     const unsub2 = await transport.subscribe("order.created", handler2);
 
-    // Two handlers registered — internal map should have the pattern
     // @ts-expect-error — accessing private for test
-    expect(transport.handlers.has("order.created")).toBe(true);
-    // @ts-expect-error
-    expect(transport.handlers.get("order.created")?.size).toBe(2);
+    const router = transport.router;
+    expect(router.size).toBe(1);
+    expect(router.route("order.created")).toHaveLength(2);
 
-    // Remove first handler
     unsub1();
-    // @ts-expect-error
-    expect(transport.handlers.get("order.created")?.size).toBe(1);
+    expect(router.route("order.created")).toHaveLength(1);
 
-    // Remove last handler — map entry should be cleaned up
+    // Remove last handler — the pattern itself is dropped
     unsub2();
-    // @ts-expect-error
-    expect(transport.handlers.has("order.created")).toBe(false);
+    expect(router.size).toBe(0);
   });
 
   it("should not leak entries across many subscribe/unsubscribe cycles", async () => {
@@ -44,8 +40,8 @@ describe("MemoryEventTransport — cleanup on unsubscribe", () => {
       unsub();
     }
 
-    // @ts-expect-error
-    expect(transport.handlers.size).toBe(0);
+    // @ts-expect-error — accessing private for test
+    expect(transport.router.size).toBe(0);
   });
 
   it("should still deliver events to remaining handlers after partial unsubscribe", async () => {

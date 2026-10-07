@@ -15,6 +15,7 @@ import {
   describePermissionMap,
   explainAccess,
   requireAuth,
+  requireOrgMembership,
   requireOrgRole,
   requireOwnership,
   requireRoles,
@@ -285,5 +286,31 @@ describe("denyAll propagates through allOf / anyOf", () => {
     const gate = allOf(denyAll(), requireAuth());
     expect(explainAccess(gate, { roles: ["admin"] }).decision).toBe("deny");
     expect(introspectCheck(gate).type).toBe("denied");
+  });
+});
+
+describe("membership is described as member, not authenticated", () => {
+  const staff = anyOf(requireRoles("admin"), requireOrgMembership());
+
+  it("requireOrgMembership() → member, and on the wire", () => {
+    expect(describePermission(requireOrgMembership())).toEqual({ kind: "member" });
+    expect(introspectCheck(requireOrgMembership())).toEqual({ type: "member", roles: [] });
+  });
+
+  it("anyOf(role, membership) → member carrying the role escape", () => {
+    expect(describePermission(staff)).toEqual({ kind: "member", roles: ["admin"] });
+    expect(introspectCheck(staff)).toEqual({ type: "member", roles: ["admin"] });
+  });
+
+  it("an opaque branch keeps the disjunction authenticated", () => {
+    const withOwner = anyOf(requireOrgMembership(), requireOwnership("createdBy"));
+    expect(describePermission(withOwner)).toEqual({ kind: "authenticated" });
+  });
+
+  it("explainAccess decides membership from the principal", () => {
+    expect(explainAccess(staff, { roles: ["admin"] }).decision).toBe("allow");
+    expect(explainAccess(staff, { roles: [], member: true }).decision).toBe("allow");
+    expect(explainAccess(staff, { roles: [], member: false }).decision).toBe("deny");
+    expect(explainAccess(staff, { roles: [] }).decision).toBe("conditional");
   });
 });

@@ -601,10 +601,13 @@ export function buildActionBodySchema(
   actionSchemas: Record<string, Record<string, unknown>> = {},
 ): Record<string, unknown> {
   // First pass: normalize every action's IR and accumulate the property
-  // union. Last branch wins on collision — actions that share a field name
-  // should agree on its type (the schema otherwise contradicts itself
-  // across branches).
+  // union. Two actions MAY declare one field name with different shapes
+  // (`return.lines` vs `write-off.lines`): the colliding key goes to the TOP
+  // level unconstrained, because top-level `properties` validate EVERY action
+  // — last-declaration-wins there made one action's schema reject another's
+  // valid body. Each branch still validates its own declaration.
   const unionProperties: Record<string, Record<string, unknown>> = {};
+  const conflicting = new Set<string>();
   const irs: Array<{ name: string; ir: ReturnType<typeof normalizeSchemaIR> }> = [];
 
   for (const actionName of actionEnum) {
@@ -617,9 +620,14 @@ export function buildActionBodySchema(
     const ir = normalizeSchemaIR(actionSchemas[actionName]);
     irs.push({ name: actionName, ir });
     for (const [key, val] of Object.entries(ir.properties)) {
+      const prior = unionProperties[key];
+      if (prior !== undefined && JSON.stringify(prior) !== JSON.stringify(val))
+        conflicting.add(key);
       unionProperties[key] = val;
     }
   }
+  const topLevelProperties: Record<string, Record<string, unknown>> = { ...unionProperties };
+  for (const key of conflicting) topLevelProperties[key] = {};
 
   // Second pass: emit each branch with the full union baked into its
   // `properties` (action discriminator is overridden per-branch). This is
@@ -630,7 +638,7 @@ export function buildActionBodySchema(
       schemaIRToJsonSchemaBranch(
         // Synthetic IR: branch keeps its own `required` + `additionalProperties`
         // but its `properties` is the full union.
-        { ...ir, properties: { ...unionProperties, ...ir.properties } },
+        { ...ir, properties: { ...topLevelProperties, ...ir.properties } },
         {
           properties: { action: { type: "string", const: name } },
           required: ["action"],
@@ -644,7 +652,7 @@ export function buildActionBodySchema(
     required: ["action"],
     properties: {
       action: { type: "string", enum: [...actionEnum] },
-      ...unionProperties,
+      ...topLevelProperties,
     },
     oneOf: branches,
   };

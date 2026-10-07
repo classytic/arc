@@ -105,9 +105,7 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     throw new Error("zod is required for MCP tool schemas. Install it: npm install zod");
   }
 
-  // ── 2. Filter resources — default-deny `expose` takes priority over
-  //                          the legacy `include` alias, which beats
-  //                          `exclude` (a default-allow opt-out). ──
+  // ── 2. Filter resources — default-deny `expose`, or the default-allow `exclude`. ──
   const enabledResources = filterResourcesForMcp(options.resources, {
     expose: options.expose,
     exclude: options.exclude,
@@ -630,11 +628,10 @@ interface ResourceFilterInputs {
 }
 
 /**
- * Resolve `expose` / `include` / `exclude` into the filtered resource list
- * `mcpPlugin` should surface. Three mutually exclusive intents:
+ * Resolve `expose` / `exclude` into the filtered resource list `mcpPlugin`
+ * should surface. Two mutually exclusive intents:
  *
  *  - `expose`: default-deny allowlist (preferred — new resources auto-deny).
- *  - `include`: legacy alias for `expose`, kept for back-compat.
  *  - `exclude`: default-allow opt-out (drift-prone — new resources auto-leak).
  *
  * Conflicting combinations throw with an actionable message so a host that

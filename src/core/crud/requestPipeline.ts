@@ -20,7 +20,7 @@ import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { QueryCacheConfig } from "../../cache/QueryCache.js";
 import { DEFAULT_ID_FIELD } from "../../constants.js";
 import type { HookSystem } from "../../hooks/HookSystem.js";
-import { getOrgId as getOrgIdFromScope, isElevated } from "../../scope/types.js";
+import { getOrgId as getOrgIdFromScope } from "../../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -33,6 +33,7 @@ import { createError, isArcError, NotFoundError } from "../../utils/errors.js";
 import { getUserId } from "../../utils/userHelpers.js";
 import type { FetchDenialReason } from "../AccessControl.js";
 import type { CacheStatus } from "../controllerTypes.js";
+import { resolveTenancy } from "../tenancy.js";
 
 // ============================================================================
 // Tenant / audit / trace repo-options bag
@@ -80,49 +81,49 @@ export function buildTenantRepoOptions(
   if (cached) return cached;
 
   const out: AnyRecord = {};
-  const scope = arcContext?._scope;
 
-  /**
-   * A cross-tenant read forwards NO tenant to the repository, and says so explicitly.
-   *
-   * Leaving the tenant out would be enough for a kit that treats missing context as "unscoped",
-   * but a kit wired `multiTenantPlugin({ required: true })` rejects the call instead, so silence
-   * reads as a bug rather than as permission. `bypassTenant` is the existing word for this — the
-   * same one elevated cross-tenant reads already use — so no kit needs to learn anything new.
-   */
-  const crossTenantRead =
-    (arcContext as { _crossTenantRead?: boolean } | undefined)?._crossTenantRead === true;
-  if (crossTenantRead) {
+  // 1. Tenant scope — `resolveTenancy` decides, as it does for every other
+  //    layer that scopes a read (`core/tenancy.ts`).
+  const tenancy = resolveTenancy(arcContext, tenantField);
+
+  if (tenancy.mode === "unscoped" && tenancy.reason === "cross-tenant") {
+    // A cross-tenant read forwards NO tenant to the repository, and says so
+    // explicitly. Leaving the tenant out would be enough for a kit that treats
+    // missing context as "unscoped", but a kit wired
+    // `multiTenantPlugin({ required: true })` rejects the call instead, so
+    // silence reads as a bug rather than as permission. `bypassTenant` is the
+    // existing word for this — the same one elevated cross-tenant reads use.
+    //
+    // This branch used to `return` here, which also skipped steps 2–3 below:
+    // every cross-tenant read reached the kit with no `userId`, `user`,
+    // `requestId` or `traceId`. Only the TENANT is dropped now.
     out.bypassTenant = true;
-    (req as IRequestContext & { _tenantRepoOptions?: AnyRecord })._tenantRepoOptions = out;
-    return out;
-  }
+  } else {
+    if (tenancy.mode === "scoped") out[tenancy.field] = tenancy.orgId;
 
-  // 1. Tenant scope — primary tenantField + multi-field preset overrides.
-  if (tenantField) {
-    const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    if (orgId) out[tenantField] = orgId;
-  }
-
-  const presetFields = (req as IRequestContext & { _tenantFields?: AnyRecord })._tenantFields;
-  if (presetFields && typeof presetFields === "object") {
-    for (const [key, value] of Object.entries(presetFields)) {
-      if (value != null && out[key] == null) out[key] = value;
+    const presetFields = (req as IRequestContext & { _tenantFields?: AnyRecord })._tenantFields;
+    if (presetFields && typeof presetFields === "object") {
+      for (const [key, value] of Object.entries(presetFields)) {
+        if (value != null && out[key] == null) out[key] = value;
+      }
     }
-  }
 
-  // 1b. Elevated bypass (2.15.3) — when the caller is acting in an
-  //     elevated capacity (platform admin via `x-arc-scope: platform`)
-  //     AND no specific tenant target was resolved (no `tenantField`
-  //     value in `out`), forward `bypassTenant: true` so kits with
-  //     `multiTenantPlugin({ required: true })` skip the tenant guard.
-  //     Without this, elevated cross-org reads (e.g. /super/* admin
-  //     dashboards aggregating across tenants) 500 with "Missing
-  //     'organizationId' in context". Elevated callers WITH a target
-  //     org keep the org filter — impersonation semantics are still
-  //     scoped, only true cross-tenant queries bypass.
-  if (tenantField && out[tenantField] == null && scope && isElevated(scope)) {
-    out.bypassTenant = true;
+    // 1b. Elevated bypass (2.15.3) — an elevated platform admin with no
+    //     tenant target resolved gets `bypassTenant: true`, so kits with
+    //     `multiTenantPlugin({ required: true })` skip the tenant guard.
+    //     Without it, elevated cross-org reads (e.g. /super/* dashboards)
+    //     500 with "Missing 'organizationId' in context". Elevated callers
+    //     WITH a target org resolve `scoped` and keep the org filter —
+    //     impersonation semantics stay scoped. Checked after the preset
+    //     fields merge, as before, so a preset-resolved tenant still wins.
+    if (
+      tenancy.mode === "unscoped" &&
+      tenancy.reason === "platform" &&
+      tenantField &&
+      out[tenantField] == null
+    ) {
+      out.bypassTenant = true;
+    }
   }
 
   // 2. Audit attribution — `userId` (canonical id) and `user` (full
@@ -316,6 +317,14 @@ export function resolveOpCacheConfig(
  * Extract user/org IDs from request for cache key scoping.
  * Only includes orgId when the resource uses tenant-scoped data (tenantField is set).
  * Universal resources (tenantField: false) get shared cache keys.
+ *
+ * Deliberately NOT `resolveTenancy`. That answers "is this read FILTERED by
+ * tenant?"; this answers "whose cache PARTITION is it?", and the two diverge on
+ * a cross-tenant read: unfiltered, yet still partitioned by the caller's org.
+ * A cross-tenant listing's row policy may differ per org ("plus anything your
+ * organization bought"), so dropping the org from the key would let one org's
+ * cached page answer another's. Over-partitioning costs hit rate; the other
+ * direction costs a leak.
  */
 export function deriveCacheScope(
   req: IRequestContext,

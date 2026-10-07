@@ -8,6 +8,12 @@
 export interface IdempotencyResult {
   /** The idempotency key */
   key: string;
+  /**
+   * `fingerprintRequest` of the body the key was first used with. A retry under the same key
+   * with a different body is refused (422), never answered with this response. Absent on
+   * entries written before 2.43 — those replay without the check.
+   */
+  requestFingerprint?: string;
   /** HTTP status code of the cached response */
   statusCode: number;
   /** Response headers to replay */
@@ -89,9 +95,11 @@ export function createIdempotencyResult(
   body: unknown,
   headers: Record<string, string>,
   ttlMs: number,
+  requestFingerprint?: string,
 ): Omit<IdempotencyResult, "key"> {
   const now = new Date();
   return {
+    ...(requestFingerprint ? { requestFingerprint } : {}),
     statusCode,
     headers,
     body,

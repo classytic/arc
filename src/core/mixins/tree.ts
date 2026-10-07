@@ -20,11 +20,11 @@ import type { MixinConstructor } from "../controllerTypes.js";
 
 /** Public surface contributed by TreeMixin. */
 export interface TreeExt {
-  getTree(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>>;
-  getChildren(req: IRequestContext): Promise<IControllerResponse<AnyRecord[]>>;
+  getTree(req: IRequestContext): Promise<IControllerResponse<object[]>>;
+  getChildren(req: IRequestContext): Promise<IControllerResponse<object[]>>;
 }
 
-export function TreeMixin<TBase extends MixinConstructor<BaseCrudController>>(
+export function TreeMixin<TBase extends MixinConstructor<BaseCrudController<object>>>(
   Base: TBase,
 ): TBase & MixinConstructor<TreeExt> {
   return class TreeController extends Base {

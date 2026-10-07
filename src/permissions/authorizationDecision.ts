@@ -202,9 +202,10 @@ type RequestSink = FastifyRequest & {
  */
 export function applyAuthorizationDecision(
   decision: AuthorizationDecision,
-  request: RequestSink,
+  req: FastifyRequest,
 ): void {
   if (decision.effect !== "allow") return;
+  const request = req as RequestSink;
 
   // Conjoin the data policy into _policyFilters with AND semantics — a later
   // source can ADD or narrow restrictions, never silently replace an earlier one

@@ -167,8 +167,8 @@ export interface RouteDefinition {
   /**
    * Opt this custom route into the multiTenant preset's tenant scoping.
    *
-   * When `true` AND the resource declares `multiTenantPreset` (or
-   * `flexibleMultiTenantPreset`), arc prepends the preset's tenant
+   * When `true` AND the resource declares `multiTenantPreset`, arc
+   * prepends the preset's tenant
    * filter + injection middleware to this route's chain — the same
    * pair `update` gets. The handler can then read the resolved tenant
    * via `getOrgId(req.scope)` / `req._tenantFields` (or, for write

@@ -30,24 +30,7 @@ import type {
   RouteSchemaOptions,
 } from "../types/index.js";
 
-export type { MultiTenantOptions, TenantFieldSpec } from "./multiTenant.js";
-export { multiTenantPreset } from "./multiTenant.js";
-export type { OwnedByUserOptions } from "./ownedByUser.js";
-
-export { ownedByUserPreset } from "./ownedByUser.js";
-export type { SlugLookupOptions } from "./slugLookup.js";
-export { slugLookupPreset } from "./slugLookup.js";
 // Export preset functions
-export { softDeletePreset } from "./softDelete.js";
-
-/**
- * Convenience alias for multiTenantPreset with public list/get routes
- * Equivalent to: multiTenantPreset({ allowPublic: ['list', 'get'] })
- */
-export const flexibleMultiTenantPreset = (
-  options: Omit<import("./multiTenant.js").MultiTenantOptions, "allowPublic"> = {},
-) => multiTenantPreset({ ...options, allowPublic: ["list", "get"] });
-
 export type { AuditedPresetOptions } from "./audited.js";
 export { auditedPreset } from "./audited.js";
 export type { BulkOperation, BulkPresetOptions } from "./bulk.js";
@@ -58,12 +41,19 @@ export type {
   FilesUploadPresetRoutes,
 } from "./filesUpload.js";
 export { filesUploadPreset } from "./filesUpload.js";
+export type { MultiTenantOptions, TenantFieldSpec } from "./multiTenant.js";
+export { multiTenantPreset } from "./multiTenant.js";
+export type { OwnedByUserOptions } from "./ownedByUser.js";
+export { ownedByUserPreset } from "./ownedByUser.js";
 export type {
   SearchHandler,
   SearchPresetOptions,
   SearchRouteConfig,
 } from "./search.js";
 export { searchPreset } from "./search.js";
+export type { SlugLookupOptions } from "./slugLookup.js";
+export { slugLookupPreset } from "./slugLookup.js";
+export { softDeletePreset } from "./softDelete.js";
 export type { TreeOptions } from "./tree.js";
 export { treePreset } from "./tree.js";
 
@@ -160,7 +150,7 @@ export function getAvailablePresets(): string[] {
 // Apply Presets
 // ============================================================================
 
-type PresetInput = string | PresetResult | { name: string; [key: string]: unknown };
+export type PresetInput = string | PresetResult | { name: string; [key: string]: unknown };
 
 // ============================================================================
 // Preset Conflict Detection

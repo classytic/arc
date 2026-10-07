@@ -179,6 +179,24 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
     expect(buildResourceManifest(r).tenantField).toBe("workspaceId");
   });
 
+  it("publishes the concurrency versionField (defaulted) — clients send If-Match from it", () => {
+    const base = {
+      permissions: { list: allowPublic(), get: allowPublic() },
+      disableDefaultRoutes: true,
+    } as const;
+    const defaulted = defineResource({ name: "o", prefix: "/os", concurrency: {}, ...base });
+    const custom = defineResource({
+      name: "p",
+      prefix: "/ps",
+      concurrency: { versionField: "rev" },
+      ...base,
+    });
+    const none = defineResource({ name: "q", prefix: "/qs", ...base });
+    expect(buildResourceManifest(defaulted).versionField).toBe("__v");
+    expect(buildResourceManifest(custom).versionField).toBe("rev");
+    expect("versionField" in buildResourceManifest(none)).toBe(false);
+  });
+
   it("emits empty arrays — never undefined — when slots are unused", () => {
     // FE codegen iterates these arrays; nullable shapes force defensive
     // checks on every consumer. Keep the contract strict.
@@ -223,5 +241,27 @@ describe("buildResourceManifestFromRegistry — from a registered entry", () => 
     const propose = fromReg.actions.find((a) => a.name === "propose");
     expect(propose?.requiresId).toBe(false);
     expect(propose?.mount).toBe("/action");
+  });
+
+  it("carries idField and versionField through the registry (idField was hardcoded `_id`)", () => {
+    const r = defineResource({
+      name: "sku",
+      prefix: "/skus",
+      idField: "code",
+      concurrency: { versionField: "rev" },
+      permissions: { list: allowPublic(), get: allowPublic() },
+      disableDefaultRoutes: true,
+    });
+    const registry = new ResourceRegistry();
+    registry.register(r);
+    const m = buildResourceManifestFromRegistry(
+      registry.get("sku") as NonNullable<ReturnType<ResourceRegistry["get"]>>,
+    );
+    expect(m.idField).toBe("code");
+    expect(m.versionField).toBe("rev");
+    expect(m).toMatchObject({
+      idField: buildResourceManifest(r).idField,
+      versionField: buildResourceManifest(r).versionField,
+    });
   });
 });

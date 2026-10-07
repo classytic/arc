@@ -1,40 +1,19 @@
 /**
- * ArcFactory - Production-ready Fastify application factory
+ * ArcFactory - Production-ready Fastify application factory.
  *
- * Enforces security best practices by making plugins opt-out instead of opt-in.
- * A developer must explicitly disable security features rather than forget to enable them.
- *
- * Note: Arc is database-agnostic. Connect your database separately and provide
- * adapters when defining resources. This allows multiple databases, custom
- * connection pooling, and full control over your data layer.
+ * Security plugins are opt-out, not opt-in. Arc is database-agnostic: connect
+ * your database separately and pass adapters to `defineResource`.
  *
  * @example
- * // 1. Connect your database(s) separately
- * import mongoose from 'mongoose';
- * await mongoose.connect(process.env.MONGO_URI);
- *
- * // 2. Create Arc app with resources
  * const app = await createApp({
  *   preset: 'production',
+ *   runtime: 'memory',
  *   auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } },
- *   cors: { origin: ['https://example.com'] },
  *   resources: [productResource, orderResource],
- * });
- *
- * @example
- * // Multiple databases example
- * const primaryDb = await mongoose.connect(process.env.PRIMARY_DB);
- * const analyticsDb = mongoose.createConnection(process.env.ANALYTICS_DB);
- *
- * const orderResource = defineResource({
- *   adapter: createMongooseAdapter({ model: OrderModel, repository: orderRepo }),
- * });
- *
- * const analyticsResource = defineResource({
- *   adapter: createMongooseAdapter({ model: AnalyticsModel, repository: analyticsRepo }),
  * });
  */
 
+import { readEnv } from "@classytic/primitives/environment";
 import Fastify, {
   type FastifyInstance,
   type FastifyRequest,
@@ -47,9 +26,9 @@ import {
   arcLog,
   configureArcLogger,
   createPinoWriter,
-  enterArcLoggerScope,
   runWithArcLogger,
 } from "../logger/index.js";
+import { enterArcLoggerScope } from "../logger/scope.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
 import {
@@ -57,7 +36,8 @@ import {
   initRuntimeCapabilityRegistry,
 } from "../utils/runtimeCapabilities.js";
 import { registerAssetRoots } from "./assets.js";
-import { collectModuleHealthChecks, orderModules, resolveModule } from "./module/index.js";
+import { collectModuleHealthChecks } from "./module/index.js";
+import { composeModules } from "./module/plan.js";
 import { getPreset } from "./presets.js";
 import { registerArcCore, registerArcPlugins } from "./registerArcPlugins.js";
 import {
@@ -71,10 +51,8 @@ import { registerSecurityPlugins, registerUtilityPlugins } from "./registerSecur
 import type { CreateAppOptions } from "./types/index.js";
 
 /**
- * The fail-loud switches, and what each one costs while OFF.
- *
- * Every one is a SPECIFIC instruction defeated by a GENERAL default, which is
- * why they are reported together rather than one at a time.
+ * The fail-loud switches — ON by default — and what each one costs when a deployment turns it OFF.
+ * Reported together at production boot, so an opt-out is never silent.
  */
 const STRICT_ENV_FLAGS: ReadonlyArray<readonly [string, string]> = [
   ["ARC_STRICT_PERMISSIONS", "An ungated write route warns instead of failing boot."],
@@ -87,18 +65,10 @@ const STRICT_ENV_FLAGS: ReadonlyArray<readonly [string, string]> = [
 const MEMORY_STORE_NAMES = new Set(["memory", "memory-cache"]);
 
 /**
- * Default redact paths layered into Fastify's pino logger when the host
- * doesn't supply a `logger.redact` of their own. Covers the common token /
- * cookie / password leak surfaces — `Authorization` and `Cookie` headers
- * (and their case-variants because Node lower-cases incoming headers but
- * outgoing logs may carry either), API-key headers, and any nested
- * `password` / `token` / `secret` / `apiKey` fields anywhere in the log
- * tree.
- *
- * Hosts that need NO redaction (test fixtures, security audits) opt out
- * with `logger: { redact: [] }`. Hosts that need MORE redaction supply
- * their own `redact` and arc steps aside — this default never overrides
- * an explicit setting.
+ * Default pino redact paths (auth/cookie/API-key headers, nested
+ * password/token/secret fields), applied only when the host supplies no
+ * `logger.redact`. Opt out with `logger: { redact: [] }`; an explicit
+ * `redact` always wins.
  */
 export const DEFAULT_LOGGER_REDACT_PATHS = [
   "req.headers.authorization",
@@ -118,16 +88,8 @@ export const DEFAULT_LOGGER_REDACT_PATHS = [
 ] as const;
 
 /**
- * Resolve the host's `logger` option, layering safe redact defaults
- * when the host hasn't supplied any. Returns the value Fastify expects
- * for its `logger` server option.
- *
- * Three branches:
- *   - `logger === false` → pass through (no logger).
- *   - `logger === undefined` → enable with default redact paths.
- *   - `logger === true` → enable with default redact paths.
- *   - `logger` is an object → respect explicit `redact` (host wins);
- *     otherwise inject defaults.
+ * Resolve the host's `logger` option for Fastify, layering the default redact
+ * paths unless it is `false` or an object with its own `redact`.
  */
 export function resolveLoggerConfig(
   logger: CreateAppOptions["logger"],
@@ -163,20 +125,14 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
   const deferredWarnings: string[] = [];
   if (options.runtime !== "distributed") return deferredWarnings;
 
-  // Each entry carries the config key the host must set AND a concrete
-  // hint, so the thrown error points at the exact fix instead of just
-  // naming what's absent.
   const missing: Array<{ key: string; hint: string }> = [];
 
-  // Events transport — always required for distributed
   const events = options.stores?.events;
   if (!events || MEMORY_STORE_NAMES.has(events.name)) {
     missing.push({ key: "stores.events", hint: "a Redis Streams or pub/sub transport" });
   }
 
-  // Cache store — only when caching is enabled. An adapter without a
-  // `name` (the bare repo-core `CacheAdapter` shape) is treated as
-  // external — caller opted in explicitly.
+  // An unnamed adapter (bare repo-core `CacheAdapter`) is treated as external.
   if (options.arcPlugins?.caching) {
     const cache = options.stores?.cache;
     if (!cache || (cache.name !== undefined && MEMORY_STORE_NAMES.has(cache.name))) {
@@ -184,7 +140,6 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     }
   }
 
-  // Idempotency store — warn when memory-backed or absent
   const idempotency = options.stores?.idempotency;
   if (idempotency && MEMORY_STORE_NAMES.has(idempotency.name)) {
     missing.push({
@@ -199,8 +154,6 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     );
   }
 
-  // QueryCache store — only when queryCache is enabled. Unnamed adapters
-  // are treated as external (see `cache` above).
   if (options.arcPlugins?.queryCache) {
     const qc = options.stores?.queryCache;
     if (!qc || (qc.name !== undefined && MEMORY_STORE_NAMES.has(qc.name))) {
@@ -208,21 +161,9 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     }
   }
 
-  // Schedules without a lock — EVERY replica fires EVERY tick.
-  //
-  // This was a warning, on the reasoning that duplicate execution is a hazard
-  // the host may have accepted for idempotent jobs. It does not survive
-  // comparison with the rest of this guard: a replica-local usage counter
-  // fails the boot, while "your billing cron runs on all six pods" only
-  // logged. Duplicate side effects — two invoices, two dunning emails, two
-  // charges — are the more expensive failure, and the jobs that are genuinely
-  // idempotent are the minority. An external audit of this file read the warn
-  // as an enforcement and wrote down that arc guarantees single-firer
-  // schedules; if a careful reader gets that wrong, a host will too.
-  //
-  // So it is held to the same standard as the stores, with the same escape
-  // arc already uses for a deliberate single-node topology
-  // (`eventPlugin, { singleProcess: true }`): declare `singleReplica: true`.
+  // Schedules without a lock — EVERY replica fires EVERY tick (duplicate
+  // invoices, charges). A hard failure like the stores, not a warning; a
+  // deliberate single-node topology declares `singleReplica: true`.
   const schedules = options.arcPlugins?.schedules;
   if (
     schedules &&
@@ -239,11 +180,9 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
     });
   }
 
-  // The guard validates what `createApp` can SEE (stores + arcPlugins).
-  // Subsystems wired inside `plugins()` / `bootstrap[]` — webhook stores,
-  // audit/usage stores, realtime broadcast adapters, outbox relays — are
-  // the host's checklist: wiki/delivery-guarantees.md, "Distributed
-  // deployment checklist".
+  // Only what `createApp` can SEE is validated here; subsystems wired inside
+  // `plugins()` / `bootstrap[]` are the host's checklist
+  // (wiki/delivery-guarantees.md, "Distributed deployment checklist").
 
   if (missing.length > 0) {
     const lines = missing.map((m) => `  • ${m.key.padEnd(20)} → ${m.hint}`).join("\n");
@@ -283,10 +222,20 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
  */
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
   /**
-   * ROLE contradiction check — before anything constructs. A relay/scheduler
-   * process declaring HTTP resources is a wiring error, not a preference:
-   * those roles exist to NOT serve traffic, and mounting routes anyway would
-   * hide the misdeployment behind a working endpoint.
+   * TOPOLOGY is declared, never guessed: a second replica on the in-memory runtime silently
+   * loses cross-instance events and caches.
+   */
+  if (options.preset === "production" && options.runtime === undefined) {
+    throw new Error(
+      "createApp: preset 'production' requires an explicit `runtime` — 'memory' for a single " +
+        "instance, 'distributed' before running a second replica (it requires shared stores and is " +
+        "audited at boot).",
+    );
+  }
+
+  /**
+   * A relay/scheduler process declaring HTTP resources is a wiring error —
+   * mounting routes anyway would hide the misdeployment behind a working endpoint.
    */
   const declaredRole = options.role ?? "all";
   if (
@@ -300,13 +249,10 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   }
 
   /**
-   * This app's own `arcLog` config, entered for the WHOLE boot.
-   *
-   * Held by reference and mutated in `buildApp` once `fastify.log` exists:
-   * boot starts before Fastify does, so a copied snapshot would send every
-   * post-construction boot warning to the console instead of this app's
-   * logger. Scoping it per app is what stops two apps in one process from
-   * overwriting each other's writer — see `src/logger/index.ts`.
+   * This app's own `arcLog` config, entered for the WHOLE boot. Held by
+   * reference and mutated in `buildApp` once `fastify.log` exists — a copy
+   * would send post-construction boot warnings to the console. Per-app so two
+   * apps in one process keep separate writers.
    */
   const loggerScope: ArcLoggerOptions = {};
   if (options.debug !== undefined && options.debug !== false) {
@@ -316,30 +262,25 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
   // The instance escapes `buildApp` the moment Fastify constructs it, so a
   // throw from ANY later phase still has something to close.
   let partial: FastifyInstance | undefined;
+  let disposeBoot: (() => Promise<void>) | undefined;
   try {
     return await runWithArcLogger(loggerScope, () =>
-      buildApp(options, loggerScope, (instance) => {
-        partial = instance;
-      }),
+      buildApp(
+        options,
+        loggerScope,
+        (instance) => {
+          partial = instance;
+        },
+        (dispose) => {
+          disposeBoot = dispose;
+        },
+      ),
     );
   } catch (err) {
-    // ── Failed-boot cleanup ──
-    //
-    // Phases 2–6 register plugins that take PROCESS-level and connection-level
-    // resources: gracefulShutdown adds SIGTERM/SIGINT listeners, and host
-    // `plugins()` typically opens a DB/Redis connection. Every one of those
-    // releases itself in an `onClose` hook — but a rejected `createApp` never
-    // hands the caller an instance to close, so before this the half-built app
-    // was orphaned with its listeners and sockets still held. (Measured: three
-    // failed boots leaked three SIGTERM listeners; three clean boot+close
-    // cycles leaked none.) Long-running hosts that retry boot, and test suites
-    // that assert on boot failures, both accumulated them.
-    //
-    // Module closers already ran in registerResources' rollback and are
-    // once-guarded, so this cannot double-close them.
-    //
-    // Best-effort and strictly subordinate: a failure to clean up is logged,
-    // never thrown, so the ORIGINAL boot error is what the caller sees.
+    // ── Failed-boot cleanup ── a rejected `createApp` hands the caller no
+    // instance to close, so release the half-built app's signal listeners and
+    // sockets here. Module closers are once-guarded, so no double-close.
+    // Best-effort: cleanup failures are logged; the ORIGINAL error is thrown.
     if (partial) {
       try {
         await partial.close();
@@ -347,6 +288,18 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         partial.log?.error?.(
           { err: closeErr },
           "[arc] cleanup of a partially-booted app failed; original boot error follows",
+        );
+      }
+    }
+    // Once-guarded: a no-op if `partial.close()` already ran it; the only
+    // release path if boot failed before Fastify existed.
+    if (disposeBoot) {
+      try {
+        await disposeBoot();
+      } catch (disposeErr) {
+        arcLog("createApp").error(
+          "beforeBoot disposer failed during failed-boot cleanup; original boot error follows",
+          disposeErr,
         );
       }
     }
@@ -359,20 +312,26 @@ async function buildApp(
   /** This app's live arcLog config — mutated below once `fastify.log` exists. */
   loggerScope: ArcLoggerOptions,
   onInstance: (instance: FastifyInstance) => void,
+  onBootDisposer: (dispose: () => Promise<void>) => void,
 ): Promise<FastifyInstance> {
-  // ── 0. Logger + validation ──
-  // `debug` is already on `loggerScope` (set by createApp before the scope was
-  // entered), so nothing to configure globally here.
+  // ── 0. Validation ──
 
   validateAuthOptions(options);
   const deferredWarnings = validateDistributedRuntime(options);
 
-  // ── 0.5 Pre-boot hook — DB connection etc. Runs after option validation
-  // (config bugs fail fast without touching infrastructure) and before
-  // ANYTHING else: no Fastify instance, no module resolution, no resource
-  // imports have happened yet. See `CreateAppOptions.beforeBoot`.
+  // ── 0.5 Pre-boot hook — after validation, before Fastify, module resolution
+  // or resource imports. See `CreateAppOptions.beforeBoot`.
+  let disposeBoot: (() => Promise<void>) | undefined;
   if (options.beforeBoot) {
-    await options.beforeBoot();
+    const dispose = await options.beforeBoot();
+    if (typeof dispose === "function") {
+      let once: Promise<void> | undefined;
+      disposeBoot = () => {
+        once ??= Promise.resolve().then(dispose);
+        return once;
+      };
+      onBootDisposer(disposeBoot);
+    }
   }
 
   // ── 1. Merge preset + create Fastify ──
@@ -380,89 +339,52 @@ async function buildApp(
   const presetConfig = options.preset ? getPreset(options.preset) : {};
   const config: CreateAppOptions = { ...presetConfig, ...options };
 
-  // The production preset ships `trustProxy: false` (2.24 flip — fail
-  // closed; it was `true` = trust EVERY proxy). A framework can't know the
-  // host's proxy topology: behind an LB, `false` means `request.ip` is the
-  // LB's address (rate-limit keys collapse onto one bucket, audit IPs are
-  // wrong), so we warn ONLY when the host inherited the default without
-  // deciding — an explicit `trustProxy` (hop count, CIDR, function, or a
-  // deliberate true/false) silences this.
+  // Production defaults `trustProxy: false` (fail closed). Behind an LB that
+  // makes `request.ip` the LB's address, so warn when the host inherited the
+  // default without deciding; any explicit `trustProxy` silences it.
   const inheritedTrustProxyDefault =
     options.preset === "production" && options.trustProxy === undefined;
 
   /**
-   * A NUMERIC `trustProxy` is a no-op on Fastify >= 5.12.1.
-   *
-   * Fastify made hop-count trust fail-closed on purpose — the comment in
-   * `lib/request.js` is explicit: "Hop-count-only trust cannot validate the
-   * immediate peer. Fail closed so direct clients cannot spoof X-Forwarded-*
-   * values by supplying enough hops." So `trustProxy: 1` now trusts NOTHING.
-   *
-   * That is the right call upstream and the wrong thing to inherit silently:
-   * `request.ip` becomes the proxy's address, which is the exact failure the
-   * production-preset warning below describes — rate-limit keys collapse onto
-   * one bucket and audit rows record the wrong client. The host asked for
-   * proxy trust and got none, with no error.
-   *
-   * Warn rather than refuse: the app still serves, and a hard boot failure on
-   * a transitive `fastify` bump would be a harsher surprise than the one being
-   * reported. The replacement is named so the fix is a copy-paste.
+   * A NUMERIC `trustProxy` trusts NOTHING on Fastify >= 5.12.1 (hop-count
+   * trust fails closed upstream), so the host silently gets the proxy's IP.
+   * Warn rather than refuse — a boot failure on a transitive bump is harsher.
    */
   const numericTrustProxy = typeof config.trustProxy === "number";
 
-  // ── 1.5 Resolve + order the module graph — pure work (dynamic imports +
-  // stable topological sort), hoisted BEFORE any side-effecting phase: a
-  // broken composition root (dup name, missing/self dep, cycle) now aborts
-  // before security plugins or the DB-touching app plugins run. Hoisting
-  // also lets module-shipped `errorMappers` merge into the error handler,
-  // which registers at phase 6 — long before the old resolution point
-  // inside registerResources. Thunks fire exactly once, here.
-  const resolvedModules = orderModules(
-    await Promise.all((config.modules ?? []).map((m) => resolveModule(m))),
+  // ── 1.5 Resolve + order the module graph BEFORE any side-effecting phase,
+  // so a broken composition aborts early and module `errorMappers` reach the
+  // error handler (phase 6). Thunks fire exactly once, here. Bridges whose
+  // domains are not all composed drop out silently (a deployment choice).
+  // Every unmet `requires` (ports, presence-only modules) fails here, in one error.
+  const { modules: resolvedModules, skipped: skippedBridges } = await composeModules(
+    config.modules ?? [],
+    config.ports,
   );
   const moduleErrorMappers = resolvedModules.flatMap((m) => m.errorMappers ?? []);
-  // Module readiness checks — collected in dependency order (fails on a
-  // duplicate name across modules). Merged modules-first with the host's
-  // app-level checks in registerArcPlugins; exposed on `fastify.arc` so the
-  // worker probe (createWorker) gets the identical union.
+  // Also exposed on `fastify.arc` so the worker probe gets the identical union.
   const moduleHealthChecks = collectModuleHealthChecks(resolvedModules);
 
   const resolvedLogger = resolveLoggerConfig(config.logger);
 
   const fastify: FastifyInstance = Fastify<RawServerDefault>({
     logger: resolvedLogger,
-    // Request-id resolution belongs at the SERVER level, not in a hook:
-    // Fastify binds `request.log = logger.child({ reqId: request.id })` at
-    // request construction, BEFORE any onRequest hook runs — an id assigned
-    // in a hook never reaches the logs. `genReqId` adopts a sanitized
-    // incoming `x-request-id` (≤128 chars, [\w.:-]) or generates a UUID;
-    // the requestId plugin echoes it on the response header and handles
-    // W3C trace-context propagation.
+    // Server-level, not a hook: `request.log` binds `reqId` at request
+    // construction, before any onRequest hook — a hook-assigned id never
+    // reaches the logs.
     genReqId: createRequestIdGenerator(),
     trustProxy: config.trustProxy ?? false,
     pluginTimeout: config.pluginTimeout ?? 10_000,
-    // Honour an explicit override; Fastify's default (1 MiB) applies otherwise.
     ...(config.bodyLimit !== undefined ? { bodyLimit: config.bodyLimit } : {}),
-    // Server timeout knobs — pass-throughs only. Arc deliberately ships no
-    // defaults here: Node ≥18 already bounds slow-loris (headersTimeout
-    // ~60s, requestTimeout 300s), and an opinionated requestTimeout would
-    // 408 legitimate slow uploads while SSE/streaming responses are
-    // unaffected either way. See the JSDoc on each option.
+    // Pass-throughs only — no arc defaults: Node already bounds slow-loris,
+    // and an opinionated requestTimeout would 408 legitimate slow uploads.
     ...(config.requestTimeout !== undefined ? { requestTimeout: config.requestTimeout } : {}),
     ...(config.connectionTimeout !== undefined
       ? { connectionTimeout: config.connectionTimeout }
       : {}),
     ...(config.keepAliveTimeout !== undefined ? { keepAliveTimeout: config.keepAliveTimeout } : {}),
-    // Arc deliberately replaces Fastify 5's default error handler with the
-    // canonical ErrorContract converter (see plugins/errorHandler.ts).
-    // Fastify 5 emits FSTWRN004 when `setErrorHandler` runs in a scope
-    // that already has one — true for our case because the default
-    // handler counts as "set" at root. The value semantics are:
-    //   - undefined / 'warn' (default) → allow + emit FSTWRN004
-    //   - true                          → allow silently
-    //   - false                         → throw FST_ERR_ERROR_HANDLER_ALREADY_SET
-    // Pick `true`: the cross-cutting handler is the documented arc
-    // contract, override is intentional, no need to bark at boot.
+    // Arc intentionally replaces the default error handler; `true` silences
+    // Fastify's FSTWRN004 for that override.
     allowErrorHandlerOverride: true,
     routerOptions: {
       querystringParser: (str: string) =>
@@ -472,11 +394,8 @@ async function buildApp(
           arrayLimit: 20,
           allowPrototypes: false,
         }),
-      // 2.16 — Fastify 5.8+ moved maxParamLength under `routerOptions`
-      // (the top-level option is deprecated, emits FSTDEP022). Default 400
-      // overrides Fastify's stock 100 so modern signed-token URLs
-      // (HMAC, magic-link, JWT-in-URL, OAuth state) route correctly
-      // without per-host wiring.
+      // Must live under `routerOptions` (top-level is deprecated). Raised
+      // above Fastify's stock default so signed-token URLs route.
       maxParamLength: config.maxParamLength ?? 400,
     },
     ajv: {
@@ -484,59 +403,40 @@ async function buildApp(
         coerceTypes: true,
         useDefaults: true,
         removeAdditional: false,
-        // Disable Ajv `strictTypes` because mongokit (and other kits) emit
-        // `additionalProperties: true` WITHOUT `type: 'object'` for
-        // `Schema.Types.Mixed` fields. That's deliberate: a `Mixed` field
-        // accepts ANY JS value (string, number, boolean, object, array,
-        // null), so adding `type: 'object'` would reject valid primitives
-        // at AJV validation. See `mongokit/src/utils/mongooseToJsonSchema.ts`
-        // line 481-487 for the rationale. Strict mode flags this combo
-        // and pollutes boot logs even though the schemas validate
-        // correctly. Other strict-mode signals (`strict`, `strictSchema`,
-        // `strictNumbers`, `strictRequired`) stay on by Ajv default.
+        // Kits emit `additionalProperties: true` WITHOUT `type: 'object'` for
+        // any-value (`Mixed`) fields — correct, but `strictTypes` would flag
+        // it at boot. Other Ajv strict checks stay on.
         strictTypes: false,
         keywords: ["example", ...(config.ajv?.keywords ?? [])],
       },
     },
   });
 
-  // Publish the instance to the caller IMMEDIATELY — every phase below can
-  // throw, and each one may leave process listeners / sockets behind that only
-  // `close()` releases. See the failed-boot cleanup in `createApp`.
+  // Publish IMMEDIATELY so a later throw still has an instance to close.
   onInstance(fastify);
+  // Registered first on the root, so it runs after every plugin's onClose —
+  // whatever `beforeBoot` opened outlives everything that used it.
+  if (disposeBoot) fastify.addHook("onClose", disposeBoot);
 
-  // Seed the capability registry on the ROOT, before anything can declare into
-  // it. A Fastify child writes symbols to itself but READS through the
-  // prototype chain, so seeding first is what makes a declaration from inside
-  // an encapsulated `register()` reach this instance's audit instead of dying
-  // on the child. See `initRuntimeCapabilityRegistry`.
+  // Seed on the ROOT before anything declares: children read through the
+  // prototype chain, so encapsulated declarations reach this audit.
   initRuntimeCapabilityRegistry(fastify);
 
-  // Route arc's internal logger (`arcLog`) through the host's pino instance
-  // so framework warnings inherit the app's transports, level, AND redaction
-  // — the console fallback bypassed all three. `logger: false` keeps the
-  // console fallback: silent apps still surface arc warnings somewhere.
-  //
-  // Written onto THIS APP's scope, not the process global: two apps in one
-  // process (a multi-app test file, a warm serverless container) each keep
-  // their own writer instead of the last boot winning for everyone.
+  // Route `arcLog` through the host's pino (transports, level, redaction),
+  // on THIS APP's scope so co-resident apps keep their own writer.
+  // `logger: false` keeps the console fallback.
   if (resolvedLogger !== false) {
     const writer = createPinoWriter(fastify.log);
     loggerScope.writer = writer;
-    // ALSO seed the process fallback, for arc code that runs OUTSIDE any app
-    // scope — a host calling into arc after `createApp` returns, a shutdown
-    // path, a job tick. That fallback is still last-app-wins by nature, which
-    // is why it is only a fallback: anything inside a boot or a request
-    // resolves through `loggerScope` and is correct with N apps in a process.
+    // Also seed the (last-app-wins) process fallback for arc code running
+    // outside any app scope.
     configureArcLogger({
       ...(options.debug !== undefined && options.debug !== false ? { debug: options.debug } : {}),
       writer,
     });
   }
 
-  // Carry the scope across the request lifecycle. Same shape arcCorePlugin
-  // uses for requestContext: `run(store, done)` wraps everything downstream,
-  // so a warning raised deep in a handler still resolves to this app.
+  // Carry the scope across the request lifecycle.
   fastify.addHook("onRequest", (_request, _reply, done) => {
     enterArcLoggerScope(loggerScope, done);
   });
@@ -559,58 +459,37 @@ async function buildApp(
 
   if (inheritedTrustProxyDefault) {
     fastify.log.warn(
-      "[arc] preset: 'production' now defaults to trustProxy: false (fail-closed; " +
-        "was true before 2.24). If this app runs behind a load balancer or reverse " +
-        "proxy, request.ip is currently the PROXY's address — rate-limit keys collapse " +
-        "onto one bucket and audit logs record the wrong client. Set trustProxy " +
-        "explicitly: a hop count (trustProxy: 1), a CIDR allow-list ('10.0.0.0/8'), " +
-        "a resolver function, or false if clients truly connect directly.",
+      "[arc] preset: 'production' defaults to trustProxy: false (fail-closed). If this " +
+        "app runs behind a load balancer or reverse proxy, request.ip is currently the " +
+        "PROXY's address — rate-limit keys collapse onto one bucket and audit logs record " +
+        "the wrong client. Set trustProxy explicitly: the proxies' addresses ('loopback', " +
+        "'10.0.0.0/8', a comma-separated list), a resolver function, or false if clients " +
+        "truly connect directly. A hop count trusts nothing on Fastify >= 5.12.1.",
     );
   }
 
   /**
-   * `preset: 'production'` REPORTS the fail-loud switches it cannot set.
-   *
-   * All three are read where the object is CONSTRUCTED — `defineResource` at
-   * define time, `QueryParser` and `BodySanitizer` in their constructors — and a
-   * host imports its resources before it calls `createApp`. So setting
-   * `process.env` here would be too late for everything already built: wired to
-   * read, doing nothing. Reporting cannot fail that way.
-   *
-   * Set them in the process entrypoint, BEFORE the first resource import, with
-   * `??=` so an operator's explicit `false` still wins.
+   * Production names every fail-loud switch turned OFF. They are read before `createApp`, so this
+   * reports rather than sets.
    */
   if (config.preset === "production") {
-    const off = STRICT_ENV_FLAGS.filter(([name]) => process.env[name] !== "true");
+    const env = readEnv(process.env);
+    const off = STRICT_ENV_FLAGS.filter(([name]) => !env.bool(name, true));
     if (off.length > 0) {
       fastify.log.warn(
-        `[arc] preset: 'production' with fail-loud OFF: ${off.map(([n]) => n).join(", ")}. ` +
+        `[arc] preset: 'production' with fail-loud turned OFF: ${off.map(([n]) => n).join(", ")}. ` +
           `${off.map(([, what]) => what).join(" ")} ` +
-          "Set them in the entrypoint BEFORE any resource import — they are read when " +
-          "resources, parsers and sanitizers are CONSTRUCTED, so setting them later is " +
-          "silently too late. Per-resource options still override.",
+          "They default ON; unset them to restore enforcement. Per-resource options still override.",
       );
     }
   }
 
-  // NOTE: arc deliberately does NOT swap Fastify's validator compiler for
-  // TypeBoxValidatorCompiler. TypeBox v1 is for schema construction +
-  // compile-time inference; Fastify's standard AJV pipeline owns runtime
-  // request validation and serialization for EVERY route (plain JSON Schema,
-  // Zod-converted, and TypeBox schemas alike). Fastify already accepts the
-  // JSON Schema that `Type.*` produces — no global provider switch, so
-  // validation/coercion/property-stripping defaults stay consistent. Use
-  // `@fastify/type-provider-typebox`'s `FastifyPluginAsyncTypebox` only at
-  // typed plugin/route boundaries for inference. See src/schemas/index.ts.
+  // Arc deliberately keeps Fastify's AJV validator compiler (no TypeBox
+  // compiler swap) so every schema flavour validates identically. See
+  // src/schemas/index.ts.
 
-  // Fix empty JSON body on DELETE/GET requests.
-  // Some clients send Content-Type: application/json with no body on DELETE/GET.
-  // Fastify's default parser rejects this (FST_ERR_CTP_EMPTY_JSON_BODY).
-  // `parseJsonBody` treats empty bodies as undefined, keeps Fastify's
-  // prototype-poisoning protection (secure-json-parse), and decorates parse
-  // failures with `statusCode: 400` — Fastify forwards parser errors to the
-  // error handler verbatim, so an undecorated SyntaxError would surface as a
-  // 500 `arc.internal_error` for client-sent bad JSON.
+  // Accept `application/json` with an empty body (DELETE/GET clients). Parse
+  // errors carry `statusCode: 400`, else bad client JSON would surface as 500.
   fastify.removeContentTypeParser("application/json");
   fastify.addContentTypeParser(
     "application/json",
@@ -639,9 +518,6 @@ async function buildApp(
   await registerUtilityPlugins(fastify, config);
 
   // ── 4. Arc core + events ──
-  // Note: `trackPlugin` is only invoked AFTER `registerArcCore` has registered
-  // arcCorePlugin, so `fastify.arc` is always present at call time. The
-  // declaration is optional (see arcCorePlugin.ts) so we narrow explicitly.
   const trackPlugin = (name: string, opts?: Record<string, unknown>) => {
     const arc = fastify.arc;
     if (!arc) return;
@@ -654,13 +530,9 @@ async function buildApp(
 
   const arcModules = await registerArcCore(fastify, config, trackPlugin);
 
-  // Expose the (dependency-ordered, frozen) module health checks on arc so the
-  // worker probe can reuse the identical union. arcCorePlugin ran inside
-  // registerArcCore, so `fastify.arc` is present here.
   if (fastify.arc) {
     fastify.arc.healthChecks = Object.freeze([...moduleHealthChecks]);
-    // Expose the dependency-ordered module definitions so integrations can
-    // collect their own arm at init time (e.g. streamline → collectModuleWorkflows).
+    // Integrations collect their own arm from these (e.g. collectModuleWorkflows).
     fastify.arc.moduleDefinitions = Object.freeze([...resolvedModules]);
   }
 
@@ -674,7 +546,7 @@ async function buildApp(
   await registerErrorHandler(fastify, config, trackPlugin, moduleErrorMappers);
 
   // ── 7–11. Resources lifecycle (plugins → bootstrap → resources → after → hooks) ──
-  await registerResources(fastify, config, resolvedModules);
+  await registerResources(fastify, config, resolvedModules, skippedBridges);
 
   // ── Reply helpers (opt-in) ──
   if (config.replyHelpers) {
@@ -682,24 +554,11 @@ async function buildApp(
     await fastify.register(replyHelpersPlugin);
   }
 
-  // ── BigInt serialization (opt-in) ──
-  //
-  // Modes (see `CreateAppConfig.serializeBigInt` JSDoc for full rationale):
-  //   - 'string' — lossless, recommended for IDs / money / counters
-  //   - 'number' — lossy above MAX_SAFE_INTEGER; ONLY for bounded ranges
-  //   - true     — back-compat alias for 'number'; emits warn (slated for removal)
-  //   - false / unset — no hook; JSON.stringify throws on bigint (default)
+  // ── BigInt serialization (opt-in; modes documented on `serializeBigInt`) ──
   if (config.serializeBigInt) {
-    const mode: "number" | "string" = config.serializeBigInt === "string" ? "string" : "number";
+    const mode = config.serializeBigInt;
 
-    if (config.serializeBigInt === true) {
-      arcLog("createApp").warn(
-        "serializeBigInt: true is a back-compat alias for 'number' (lossy above " +
-          "Number.MAX_SAFE_INTEGER = 9007199254740991). For IDs / money / counters / " +
-          "ledger values use serializeBigInt: 'string' (lossless). The boolean form " +
-          "will be removed in a future major.",
-      );
-    } else if (mode === "number") {
+    if (mode === "number") {
       arcLog("createApp").warn(
         "serializeBigInt: 'number' loses precision above Number.MAX_SAFE_INTEGER " +
           "(9007199254740991). Use 'string' instead unless you've audited that no " +
@@ -709,9 +568,7 @@ async function buildApp(
 
     fastify.addHook("preSerialization", async (_request, _reply, payload) => {
       if (payload === null || payload === undefined) return payload;
-      // JSON.stringify with a replacer walks nested values once; we
-      // re-parse to hand Fastify a plain object/array tree (some
-      // serializer plugins inspect the value before final stringify).
+      // Re-parse: some serializer plugins inspect the value before stringify.
       try {
         return JSON.parse(
           JSON.stringify(payload, (_key, value) =>
@@ -730,10 +587,8 @@ async function buildApp(
 
   // ── Log summary ──
   const authMode = config.auth === false ? "none" : config.auth ? config.auth.type : "none";
-  // Capability audit — LAST, after every declarant (arc plugins, host
-  // plugins(), module phases) has spoken. This is the enforcement half the
-  // constructor-time guard cannot provide: it validates what hosts wired,
-  // not just what createApp received.
+  // Capability audit LAST, after every declarant — it validates what hosts
+  // actually wired, not just what createApp received.
   auditRuntimeCapabilities(fastify, config.runtime ?? "memory");
 
   fastify.log.info(

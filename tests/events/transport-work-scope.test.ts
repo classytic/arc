@@ -12,8 +12,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { requestContext } from "../../src/context/requestContext.js";
 import { requestScopedCache } from "../../src/context/requestScopedCache.js";
-import { MemoryEventTransport } from "../../src/events/EventTransport.js";
 import type { DomainEvent } from "../../src/events/EventTransport.js";
+import { MemoryEventTransport } from "../../src/events/EventTransport.js";
 import { RedisEventTransport } from "../../src/events/transports/redis.js";
 import { RedisStreamTransport } from "../../src/events/transports/redis-stream.js";
 
@@ -23,71 +23,81 @@ function evt(meta: Partial<DomainEvent["meta"]> = {}): DomainEvent {
   return {
     type: "order:created",
     payload: { orderNumber: "ORD-1" },
-    meta: { id: "e1", timestamp: new Date(), correlationId: "corr-1", organizationId: "org-1", ...meta },
+    meta: {
+      id: "e1",
+      timestamp: new Date(),
+      correlationId: "corr-1",
+      organizationId: "org-1",
+      ...meta,
+    },
   } as DomainEvent;
 }
 
-describe.each(["sequential", "parallel"] as const)("MemoryEventTransport (%s) work scope", (handlerDispatch) => {
-  it("a handler published OUTSIDE a request runs inside an event scope", async () => {
-    const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
-    let seen: ReturnType<typeof requestContext.get>;
-    t.subscribe("order:*", async () => {
-      seen = requestContext.get();
-    });
+describe.each(["sequential", "parallel"] as const)(
+  "MemoryEventTransport (%s) work scope",
+  (handlerDispatch) => {
+    it("a handler published OUTSIDE a request runs inside an event scope", async () => {
+      const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
+      let seen: ReturnType<typeof requestContext.get>;
+      t.subscribe("order:*", async () => {
+        seen = requestContext.get();
+      });
 
-    expect(requestContext.get()).toBeUndefined();
-    await t.publish(evt());
-
-    expect(seen?.kind).toBe("event");
-    expect(seen?.requestId).toBe("corr-1");
-    expect(seen?.organizationId).toBe("org-1");
-  });
-
-  it("ALL handlers of one event share ONE requestScopedCache()", async () => {
-    const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
-    const stores: unknown[] = [];
-    for (let i = 0; i < 3; i++) t.subscribe("order:*", async () => void stores.push(requestScopedCache()));
-
-    await t.publish(evt());
-
-    expect(stores).toHaveLength(3);
-    expect(stores[0]).toBeDefined();
-    expect(new Set(stores).size).toBe(1);
-  });
-
-  it("two publishes do NOT share a store", async () => {
-    const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
-    const stores: unknown[] = [];
-    t.subscribe("order:*", async () => void stores.push(requestScopedCache()));
-
-    await t.publish(evt({ id: "e1", correlationId: "c1" }));
-    await t.publish(evt({ id: "e2", correlationId: "c2" }));
-
-    expect(stores[0]).not.toBe(stores[1]);
-  });
-
-  it("a publish INSIDE a request inherits the request's store (no shadowing)", async () => {
-    const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
-    let inner: unknown;
-    t.subscribe("order:*", async () => {
-      inner = requestScopedCache();
-    });
-
-    await requestContext.run({ startTime: 1, requestId: "req-1", kind: "request" }, async () => {
-      const outer = requestScopedCache();
+      expect(requestContext.get()).toBeUndefined();
       await t.publish(evt());
-      expect(inner).toBe(outer);
-      expect(requestContext.get()?.requestId).toBe("req-1");
-    });
-  });
 
-  it("the scope ends with the publish — nothing leaks to the caller", async () => {
-    const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
-    t.subscribe("order:*", async () => {});
-    await t.publish(evt());
-    expect(requestContext.get()).toBeUndefined();
-  });
-});
+      expect(seen?.kind).toBe("event");
+      expect(seen?.requestId).toBe("corr-1");
+      expect(seen?.organizationId).toBe("org-1");
+    });
+
+    it("ALL handlers of one event share ONE requestScopedCache()", async () => {
+      const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
+      const stores: unknown[] = [];
+      for (let i = 0; i < 3; i++)
+        t.subscribe("order:*", async () => void stores.push(requestScopedCache()));
+
+      await t.publish(evt());
+
+      expect(stores).toHaveLength(3);
+      expect(stores[0]).toBeDefined();
+      expect(new Set(stores).size).toBe(1);
+    });
+
+    it("two publishes do NOT share a store", async () => {
+      const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
+      const stores: unknown[] = [];
+      t.subscribe("order:*", async () => void stores.push(requestScopedCache()));
+
+      await t.publish(evt({ id: "e1", correlationId: "c1" }));
+      await t.publish(evt({ id: "e2", correlationId: "c2" }));
+
+      expect(stores[0]).not.toBe(stores[1]);
+    });
+
+    it("a publish INSIDE a request inherits the request's store (no shadowing)", async () => {
+      const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
+      let inner: unknown;
+      t.subscribe("order:*", async () => {
+        inner = requestScopedCache();
+      });
+
+      await requestContext.run({ startTime: 1, requestId: "req-1", kind: "request" }, async () => {
+        const outer = requestScopedCache();
+        await t.publish(evt());
+        expect(inner).toBe(outer);
+        expect(requestContext.get()?.requestId).toBe("req-1");
+      });
+    });
+
+    it("the scope ends with the publish — nothing leaks to the caller", async () => {
+      const t = new MemoryEventTransport({ logger: silent, handlerDispatch });
+      t.subscribe("order:*", async () => {});
+      await t.publish(evt());
+      expect(requestContext.get()).toBeUndefined();
+    });
+  },
+);
 
 describe("RedisStreamTransport work scope", () => {
   function redisStub() {
@@ -112,19 +122,24 @@ describe("RedisStreamTransport work scope", () => {
     const stores: unknown[] = [];
     let kind: string | undefined;
     // Register directly — subscribe() would start the poll loop.
-    const handlers = (t as unknown as { handlers: Map<string, Set<(e: DomainEvent) => Promise<void>>> }).handlers;
-    handlers.set(
-      "order:*",
-      new Set([
-        async () => {
-          kind = requestContext.get()?.kind;
-          stores.push(requestScopedCache());
-        },
-        async () => void stores.push(requestScopedCache()),
-      ]),
-    );
+    const router = (
+      t as unknown as { router: { add(p: string, h: (e: DomainEvent) => Promise<void>): void } }
+    ).router;
+    for (const h of [
+      async () => {
+        kind = requestContext.get()?.kind;
+        stores.push(requestScopedCache());
+      },
+      async () => void stores.push(requestScopedCache()),
+    ])
+      router.add("order:*", h);
 
-    await (t as unknown as Internals).processEntry("1-0", ["type", "order:created", "data", JSON.stringify(evt())]);
+    await (t as unknown as Internals).processEntry("1-0", [
+      "type",
+      "order:created",
+      "data",
+      JSON.stringify(evt()),
+    ]);
 
     expect(kind).toBe("event");
     expect(stores).toHaveLength(2);
@@ -142,7 +157,11 @@ describe("RedisEventTransport work scope", () => {
       psubscribe: vi.fn(async () => 1),
       quit: vi.fn(async () => "OK"),
     };
-    const redis = { publish: vi.fn(async () => 1), duplicate: () => sub, quit: vi.fn(async () => "OK") };
+    const redis = {
+      publish: vi.fn(async () => 1),
+      duplicate: () => sub,
+      quit: vi.fn(async () => "OK"),
+    };
     const t = new RedisEventTransport(redis as never, { logger: silent });
 
     let seen: ReturnType<typeof requestContext.get>;

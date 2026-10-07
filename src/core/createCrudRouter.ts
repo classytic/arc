@@ -1,16 +1,8 @@
 /**
- * CRUD Router Factory
+ * CRUD Router Factory — standard REST routes plus custom routes.
  *
- * Creates standard REST routes with permission-based access control.
- * Delegates all cross-cutting concerns (auth, permission, pipeline,
- * preHandler composition, response shaping) to `routerShared` so the
- * action router (`createActionRouter`) wires the exact same ingredients.
- *
- * Features:
- * - Permission-based access control via PermissionCheck functions
- * - Multi-tenant scoping via multiTenant preset
- * - Consistent route patterns
- * - Framework-agnostic controllers via adapter pattern
+ * Cross-cutting concerns (auth, permission, pipeline, preHandler composition)
+ * live in `routerShared` so `createActionRouter` wires the same ingredients.
  */
 
 import type { FastifyInstance, FastifySchema, RouteHandlerMethod } from "fastify";
@@ -72,10 +64,7 @@ function mergeRouteConfig(
   return { config: { ...hostConfig, ...(arcConfig.config ?? {}) } };
 }
 
-/**
- * Mount custom routes (from presets or user-defined `routes`) on Fastify.
- * `wrapHandler` is derived inline from whether `rawHandler` was set.
- */
+/** Mount custom routes (from presets or user-defined `routes`) on Fastify. */
 function createCustomRoutes<TDoc = unknown>(
   fastify: FastifyWithDecorators,
   routes: readonly RouteDefinition[],
@@ -88,28 +77,13 @@ function createCustomRoutes<TDoc = unknown>(
     pluginMw: RouterPluginMw;
     pipeline?: PipelineConfig;
     routeGuards: RouteHandlerMethod[];
-    /**
-     * Tenant-scope middleware list emitted by `multiTenantPreset` (and
-     * compatible presets) on the `tenantScope` slot. Applied to any
-     * custom route that opts in via `RouteDefinition.tenantScope: true`.
-     * `undefined` when the resource has no multiTenant preset wired —
-     * in that case `tenantScope: true` is a config bug and we throw.
-     */
+    /** Multi-tenant preset's `tenantScope` slot; `undefined` when no such preset is wired. */
     tenantScopeMw?: readonly RouteHandlerMethod[];
-    /**
-     * Resource-level field permissions (`defineResource({ fields })`).
-     * When set + the route is body-bearing + no `rawHandler` +
-     * `route.fieldWrite !== false`, a field-write preHandler is appended
-     * to the route's chain so custom routes match auto-CRUD's enforcement.
-     */
+    /** Resource-level field permissions (`defineResource({ fields })`). */
     fieldPermissions?: import("../permissions/fields.js").FieldPermissionMap;
     /** Resource-level `onFieldWriteDenied` policy (default: 'reject'). */
     onFieldWriteDenied?: "reject" | "strip";
-    /**
-     * Resource-level plugin extensions (`defineResource({ extensions })`).
-     * Stamped onto each custom route's `config.arcExtensions` so plugins
-     * (encryption, …) read their typed slice at request time.
-     */
+    /** Stamped onto each route's `config.arcExtensions` for request-time plugins. */
     extensions?: ResourceExtensions;
   },
 ): void {
@@ -128,12 +102,8 @@ function createCustomRoutes<TDoc = unknown>(
   } = options;
 
   for (const route of routes) {
-    // 2.31 — `raw` was REMOVED in favour of the `handler` / `rawHandler` split.
-    // Ignoring a leftover flag silently pipeline-wraps a Fastify-native handler,
-    // which is precisely the failure mode the split exists to eliminate — and
-    // TypeScript catches it only in sources recompiled against 2.31, NOT in a
-    // dependency whose published dist still carries `raw: true`. So it is fatal
-    // at boot, where the message can name the route.
+    // Fatal, not ignored: a leftover `raw` flag (e.g. from a dependency's stale dist, which
+    // TypeScript won't catch) would silently pipeline-wrap a Fastify-native handler.
     if ("raw" in route) {
       throw new Error(
         `Route ${route.method} ${route.path}: \`raw\` was removed in arc 2.31 — the FIELD now carries the intent. ` +
@@ -142,10 +112,7 @@ function createCustomRoutes<TDoc = unknown>(
           "needs a release built against arc >=2.31.",
       );
     }
-    // 2.16 — `controllerMethod` (typed function-ref) is mutually exclusive
-    // with `handler`. Resolve one of the two into a single dispatch target
-    // BEFORE the rest of the per-route wiring, so the downstream code
-    // sees a uniform "have a function or have a string" decision.
+    // Resolve `handler` / `rawHandler` / `controllerMethod` into ONE dispatch target first.
     const routeWithRefs = route as typeof route & {
       controllerMethod?: (controller: unknown) => unknown;
     };
@@ -164,11 +131,6 @@ function createCustomRoutes<TDoc = unknown>(
       );
     }
 
-    // Resolve `controllerMethod` against the live controller — this is
-    // the typed counterpart of the string-handler lookup. Throws if no
-    // controller is available, or if the function returns a non-function
-    // (defensive — TS catches this normally, but a host might still
-    // forget to return the method).
     let resolvedHandler: RouteDefinition["handler"] | RouteHandlerMethod;
     if (hasControllerMethod) {
       if (!controller) {
@@ -189,8 +151,7 @@ function createCustomRoutes<TDoc = unknown>(
         | ControllerHandler
         | RouteHandlerMethod;
     } else {
-      // `rawHandler` and `handler` are mutually exclusive — the field IS the
-      // declaration of which execution model this route uses.
+      // The field IS the declaration of which execution model this route uses.
       if (route.rawHandler && route.handler) {
         throw new Error(
           `Route ${route.method} ${route.path}: set either \`handler\` (arc pipeline) ` +
@@ -200,24 +161,21 @@ function createCustomRoutes<TDoc = unknown>(
       resolvedHandler = route.rawHandler ?? route.handler;
     }
 
-    // Derive logical operation name for pipeline keys and permission actions.
-    // Priority: explicit operation > handler name (string) > method+path slug
+    // Operation name for pipeline keys and permission actions:
+    // explicit operation > string handler name > method+path slug.
     const opName =
       route.operation ??
       (typeof resolvedHandler === "string"
         ? resolvedHandler
         : `${route.method.toLowerCase()}${route.path.replace(/[/:]/g, "_")}`);
 
-    // The chosen FIELD decides the execution model. `controllerMethod` may
-    // return either shape, so it keeps the pipeline (its documented behaviour)
-    // unless the host declared `rawHandler` instead.
+    // `controllerMethod` keeps the pipeline; only `rawHandler` opts out.
     const isRaw = route.rawHandler !== undefined;
     const wrapHandler = !isRaw;
 
     let handler: RouteHandlerMethod;
 
     if (typeof resolvedHandler === "string") {
-      // String handlers require a controller
       if (!controller) {
         throw new Error(
           `Route ${route.method} ${route.path}: string handler '${resolvedHandler}' requires a controller. ` +
@@ -263,7 +221,7 @@ function createCustomRoutes<TDoc = unknown>(
       }
     }
 
-    // Build schema with tags (auto-convert Zod schemas, no-op for JSON Schema)
+    // Zod schemas are auto-converted; JSON Schema passes through.
     const routeTags = route.tags ?? (tag ? [tag] : undefined);
     const convertedSchema = route.schema ? convertRouteSchema(route.schema) : undefined;
     const schema = {
@@ -273,43 +231,30 @@ function createCustomRoutes<TDoc = unknown>(
       ...(convertedSchema ?? {}),
     } as Record<string, unknown>;
 
-    // Resolve preHandler — accepts an array OR a `(fastify) => array` factory.
-    // The shared resolver (a) discriminates the two valid shapes by `typeof`,
-    // (b) validates a factory's RETURN is actually an array, and (c) throws an
-    // actionable error pointing at the route + the canonical fix when a single
-    // `RouteHandlerMethod` (e.g. `multipartBody({...})`) was passed where an
-    // array was expected. Pre-2.11.3 the bare-handler mistake produced a
-    // cryptic `Cannot read properties of undefined (reading 'content-type')`
-    // because the handler ran with `fastify` in the request slot.
+    // Array OR `(fastify) => array`; a bare handler (e.g. `multipartBody()`) throws
+    // an actionable error instead of running with `fastify` in the request slot.
     const customPreHandlers = resolveRoutePreHandlers(
       route.preHandler,
       fastify,
       `${route.method} ${route.path}`,
     );
 
-    // tenantScope: true → prepend the multiTenant preset's filter +
-    // injection middlewares so this custom route sees the same tenant
-    // wiring auto-CRUD does. Fail-fast on misconfig: if the flag is set
-    // but no preset emitted the `tenantScope` slot, the route would be
-    // silently insecure for read paths (returns all-org data) — reject
-    // at registration time with an actionable message.
+    // Prepend the preset's tenant filter + injection. Fail-fast without a preset:
+    // the route would otherwise silently return all-org data.
     if (route.tenantScope === true) {
       if (!tenantScopeMw || tenantScopeMw.length === 0) {
         throw new Error(
           `Route ${route.method} ${route.path}: \`tenantScope: true\` requires a multi-tenant preset. ` +
-            `Add \`multiTenantPreset()\` (or \`flexibleMultiTenantPreset()\`) to the resource's \`presets\`, ` +
+            `Add \`multiTenantPreset()\` to the resource's \`presets\`, ` +
             `or remove the \`tenantScope\` flag from this route.`,
         );
       }
       customPreHandlers.unshift(...(tenantScopeMw as RouteHandlerMethod[]));
     }
 
-    // Auto-apply resource-level field-write permissions on body-bearing
-    // custom routes. Auto-CRUD gets this for free via `BodySanitizer` inside
-    // `BaseController`; without this step a custom `POST /users/promote`
-    // bypassed `writableBy(['admin'])` rules and silently accepted
-    // restricted fields. `rawHandler` opts out of the pipeline entirely;
-    // `fieldWrite: false` is the per-route escape hatch.
+    // Field-write permissions on body-bearing custom routes (auto-CRUD gets this via
+    // `BodySanitizer`); without it custom routes accept restricted fields.
+    // Opt-outs: `rawHandler`, `fieldWrite: false`.
     const shouldApplyFieldWrite =
       !isRaw &&
       (route as { fieldWrite?: boolean }).fieldWrite !== false &&
@@ -332,18 +277,9 @@ function createCustomRoutes<TDoc = unknown>(
       customMws: customPreHandlers,
     });
 
-    // streamResponse: true → SSE-style raw pipe. Two contracts:
-    //   1) Handler writes to `reply.raw` directly (NDJSON, custom SSE) —
-    //      arc just pre-sets SSE headers and gets out of the way. This is
-    //      the historical contract.
-    //   2) Handler RETURNS a Web `ReadableStream` (Vercel AI SDK's
-    //      `result.toUIMessageStream()`, raw `fetch().body`, etc.). Pre-2.17.1
-    //      this crashed with `chunk must be a string or Buffer` because
-    //      Fastify can't serialise structured chunks. arc now auto-detects
-    //      the stream and routes it through `pipeUIMessageStreamToReply()`,
-    //      which JSON-encodes each chunk into an SSE `data:` frame and
-    //      wires client-disconnect → stream.cancel(). Hosts get the
-    //      one-liner the framework should have shipped all along.
+    // streamResponse: true → SSE. The handler either writes to `reply.raw` itself,
+    // or RETURNS a Web `ReadableStream` that arc pipes via `pipeUIMessageStreamToReply()`
+    // (Fastify cannot serialise structured chunks).
     const isStream = (route as { streamResponse?: boolean }).streamResponse === true;
 
     tryRegisterRoute(
@@ -355,55 +291,27 @@ function createCustomRoutes<TDoc = unknown>(
         ...routeHookOptions(hooks),
         handler: isStream
           ? async function streamRoute(this: FastifyInstance, request, reply) {
-              // Pre-set SSE headers via `reply.raw` so handlers that write
-              // to `reply.raw` directly (the legacy pattern) keep working.
-              // `pipeUIMessageStreamToReply` re-applies them via
-              // `reply.header()` for the auto-pipe branch — Fastify dedupes.
+              // Pre-set on `reply.raw` for handlers that write there directly.
               reply.raw.setHeader("Content-Type", "text/event-stream");
               reply.raw.setHeader("Cache-Control", "no-cache");
               reply.raw.setHeader("Connection", "keep-alive");
-              // `.call(this, …)` — Fastify binds the instance as `this` when it
-              // invokes a handler, and `RawRouteHandler` declares that context.
-              // Calling the inner handler bare would silently drop it, so the
-              // SAME handler would read `this.myDecorator` fine as a plain raw
-              // route and break the moment `streamResponse` was switched on.
+              // `.call(this, …)` preserves Fastify's `this` binding so `this.myDecorator`
+              // works the same with `streamResponse` on as off.
               const result = await (
                 handler as (this: unknown, req: unknown, rep: unknown) => unknown
               ).call(this, request, reply);
-              // Auto-pipe a returned ReadableStream so AI-SDK callers don't
-              // hand-roll `JsonToSseTransformStream`. Handlers that already
-              // wrote to `reply.raw` return undefined / a value that isn't a
-              // stream — those keep working unchanged.
               if (isReadableStream(result)) {
                 await pipeUIMessageStreamToReply(reply, result);
-                // Return `reply` (not `result`) — the helper already called
-                // `reply.send()`, so propagating the original ReadableStream
-                // would make Fastify try to send it a SECOND time and crash
-                // with ERR_HTTP_HEADERS_SENT. Returning `reply` signals
-                // "response is owned; do not touch."
+                // Return `reply`, not `result`: the helper already sent, and returning
+                // the stream makes Fastify send again (ERR_HTTP_HEADERS_SENT).
                 return reply;
               }
               return result;
             }
           : handler,
-        /**
-         * ONE `config` object, merging the host's `route.config` with arc's own
-         * derived keys (per-route rate limit, cors, `arcExtensions`).
-         *
-         * It has to be merged HERE because Fastify does not merge for us: it
-         * builds the context from a single `opts.config`
-         * (`{ ...opts.config, url, method }` — lib/route.js), so two spreads
-         * writing `config` means the later one silently replaces the earlier.
-         * Emitting them separately dropped `route.config` on every resource
-         * that declared extensions, a rate limit or per-route cors — which is
-         * the same silent-absence bug `config` was added to fix, just narrowed
-         * to the resources most likely to have it.
-         *
-         * Arc's derived keys win on collision: they come from the declared
-         * `route.rateLimit` / `route.cors` / `extensions` fields, so letting a
-         * hand-written `config.rateLimit` override them would give one setting
-         * two sources that can disagree.
-         */
+        // ONE merged `config`: Fastify reads a single `opts.config`, so two spreads
+        // writing `config` silently drop the host's. Arc's derived keys (rate limit,
+        // cors, `arcExtensions`) win on collision — they come from declared fields.
         ...mergeRouteConfig(
           route.config,
           buildRouteConfig(
@@ -452,21 +360,14 @@ export function createCrudRouter<TDoc = unknown>(
     fields: fieldPermissions,
     onFieldWriteDenied,
     updateMethod = DEFAULT_UPDATE_METHOD,
-    // Surfaces on `req.arc.idField` for every CRUD route — handlers
-    // and downstream middleware compose `findOne` filters via
-    // `getEntityQuery(req)` without re-reading resource config.
+    // Surfaces on `req.arc.idField` (read by `getEntityQuery(req)`).
     idField,
-    // Plugin extensions stamped onto every route's `config.arcExtensions`
-    // so request-time plugins (encryption, …) read their typed slice.
     extensions,
   } = options;
 
   const rateLimitConfig = buildRateLimitConfig(rateLimit);
 
-  // Resolve cache/idempotency plugin middlewares once.
-  // Skip response-cache when the resource has QueryCache active — QueryCache
-  // handles caching at the controller level with SWR; a second HTTP-level
-  // cache would double-cache.
+  // Skip the HTTP response-cache when controller-level QueryCache is active (double-caching).
   const resourceHasQueryCache =
     fastify.hasDecorator("queryCache") &&
     controller &&
@@ -474,7 +375,7 @@ export function createCrudRouter<TDoc = unknown>(
     (controller as unknown as Record<string, unknown>)._cacheConfig !== undefined;
   const pluginMw = resolveRouterPluginMw(fastify, Boolean(resourceHasQueryCache));
 
-  // Arc metadata decorator — stamps `req.arc` with resource-scoped wiring.
+  // Stamps `req.arc` with resource-scoped wiring.
   const arcDecorator = buildArcDecorator({
     resourceName,
     schemaOptions,
@@ -485,7 +386,6 @@ export function createCrudRouter<TDoc = unknown>(
     idField,
   });
 
-  // Per-op middlewares (user-declared route guards for individual CRUD ops)
   const mw = {
     list: (middlewares.list ?? []) as RouteHandlerMethod[],
     get: (middlewares.get ?? []) as RouteHandlerMethod[],
@@ -494,16 +394,9 @@ export function createCrudRouter<TDoc = unknown>(
     delete: (middlewares.delete ?? []) as RouteHandlerMethod[],
   };
 
-  // Tenant-scope middleware slot — emitted by `multiTenantPreset` so custom
-  // routes can opt in via `RouteDefinition.tenantScope: true`. The slot rides
-  // on the same `MiddlewareConfig` map the CRUD slots use (its string index
-  // signature accepts arbitrary keys); we read it here and forward it to
-  // `createCustomRoutes` instead of having that function reach back through
-  // the options bag. Stays `undefined` when no multi-tenant preset is wired
-  // — `createCustomRoutes` then throws when a route tries to opt in.
+  // Emitted by `multiTenantPreset` for custom routes with `tenantScope: true`.
   const tenantScopeMw = middlewares.tenantScope as RouteHandlerMethod[] | undefined;
 
-  // ID params schema
   const idParamsSchema = {
     type: "object" as const,
     properties: { id: { type: "string" as const } },
@@ -513,11 +406,7 @@ export function createCrudRouter<TDoc = unknown>(
   // Default response/querystring schemas for fast-json-stringify serialization
   const defaultSchemas = getDefaultCrudSchemas();
 
-  /**
-   * Merge: base (tags/summary) → defaults (response/querystring) → user overrides.
-   * User-provided schemas always win; defaults enable fast-json-stringify when
-   * no user schema is set.
-   */
+  // Later wins: defaults → base (tags/summary) → user schema.
   const buildSchema = (
     base: Record<string, unknown>,
     defaults: Record<string, unknown> | undefined,
@@ -528,18 +417,9 @@ export function createCrudRouter<TDoc = unknown>(
     ...(userSchema ?? {}),
   });
 
-  // Default CRUD routes
-  //
-  // Every CRUD route shares the same shape: disabled check → arc decorator →
-  // auth → permission → (cache | idempotency) → route guards → per-op
-  // middlewares → handler, with rate-limit config applied uniformly. Only a
-  // handful of fields differ per op (HTTP method, URL, summary, id params,
-  // which cross-cutting middlewares apply). The table below drives
-  // registration from those fields so any future cross-cutting concern
-  // touches ONE block instead of five.
+  // Default CRUD routes — table-driven so a cross-cutting concern touches one block.
+  // Chain: arc decorator → auth → permission → (cache | idempotency) → guards → per-op mw.
   if (!disableDefaultRoutes) {
-    // Controller is required when default CRUD routes are enabled. When only
-    // custom routes are declared, hosts pass `disableDefaultRoutes: true`.
     if (!controller) {
       throw new Error(
         "Controller is required when disableDefaultRoutes is not true. " +
@@ -549,7 +429,6 @@ export function createCrudRouter<TDoc = unknown>(
 
     const ctrl = controller as IController<TDoc>;
 
-    // Wrap handlers with pipeline execution when configured.
     const handlers = buildCrudHandlers(ctrl, pipeline, resourceName);
 
     type CrudOp = "list" | "get" | "create" | "update" | "delete";
@@ -596,9 +475,7 @@ export function createCrudRouter<TDoc = unknown>(
         customMws: mw[spec.op],
       });
 
-      // `update` is the only op that registers multiple methods: PUT
-      // (replace semantics), PATCH (partial update), or both. Every other
-      // op is a single-method registration.
+      // `update` may register PUT, PATCH, or both.
       const methodsToRegister: HttpMethod[] =
         spec.op === "update"
           ? updateMethod === "both"
@@ -634,10 +511,7 @@ export function createCrudRouter<TDoc = unknown>(
     }
   }
 
-  // Custom routes (presets and user-declared). These work independently of
-  // CRUD — `disableDefaultRoutes: true` with `routes: [...]` is the
-  // first-class "custom routes only" configuration for resources that need
-  // action endpoints, stats/aggregates, or operations that don't fit CRUD.
+  // Custom routes work independently of CRUD (`disableDefaultRoutes: true` + `routes`).
   if (customRoutes.length > 0) {
     createCustomRoutes(fastify, customRoutes, controller, {
       tag,
@@ -680,13 +554,12 @@ function buildCrudHandlers<TDoc>(
 }
 
 // ============================================================================
-// Public helper re-export (kept for host-level custom route registration)
+// Public helper
 // ============================================================================
 
 /**
- * Build a permission middleware from a PermissionCheck — useful when hosts
- * register their own routes outside the resource system but still want to
- * evaluate permissions through the shared applicator.
+ * Build a permission middleware from a PermissionCheck, for host routes
+ * registered outside the resource system.
  */
 export function createPermissionMiddleware(
   permission: PermissionCheck,

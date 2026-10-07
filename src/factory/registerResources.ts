@@ -1,11 +1,18 @@
-/**
- * Resource registration for createApp.
- *
- * Handles: resourcePrefix, skipGlobalPrefix, bootstrap, afterResources.
- */
+/** Resource registration and the module/app lifecycle for createApp. */
 
+import { createEventRouter } from "@classytic/primitives/events";
 import type { FastifyInstance } from "fastify";
+import { defineEvent, type EventRegistry } from "../events/defineEvent.js";
+import { CRUD_EVENT_SCHEMA } from "../events/eventTypes.js";
 import type { ResourceLike } from "./loadResources.js";
+import {
+  analyzeModuleGraph,
+  buildModuleGraph,
+  crudEventsOf,
+  type DerivedPublishes,
+  type SkippedBridge,
+  verifyModuleGraph,
+} from "./module/graph.js";
 import {
   type ArcModule,
   collectModuleScheduledJobs,
@@ -13,12 +20,11 @@ import {
   createModuleTeardown,
   describeResolvedModule,
   initModuleStates,
-  orderModules,
-  resolveModule,
   setModuleState,
   subscribeModuleEventHandlers,
   unsubscribeModuleEventHandlers,
 } from "./module/index.js";
+import { composeModules, portsForModule } from "./module/plan.js";
 import type { FastifyPlugin } from "./shared.js";
 import type { CreateAppOptions } from "./types/index.js";
 
@@ -33,32 +39,25 @@ function isResourcesFactory(value: CreateAppOptions["resources"]): value is Reso
 /** Register a single resource with descriptive error on failure. */
 async function registerOne(
   parent: FastifyInstance,
-  resource: import("./loadResources.js").ResourceLike,
+  resource: ResourceLike,
   mountRoutes?: boolean,
 ): Promise<void> {
   const name = resource.name ?? "unknown";
   try {
-    // `arcMountRoutes: false` (worker role, 2.23) — the resource plugin
-    // registers shared runtime state (registry/hooks/cache rules) and
-    // returns before any route mounts. See wiki/factory.md § createWorker.
+    // `arcMountRoutes: false` (worker role) registers shared runtime state but
+    // mounts no routes. See wiki/factory.md § createWorker.
     await parent.register(
       resource.toPlugin() as FastifyPlugin,
       mountRoutes === false ? { arcMountRoutes: false } : {},
     );
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
-    // Underlying ArcError messages already start with `Resource "name"
-    // ...` — strip the redundant prefix so the wrapper isn't a Russian
-    // doll of "Resource "x" failed to register: Resource "x" aggregation
-    // ..." with its trailing double period. Cause chain still preserves
-    // the original via `{ cause }`.
+    // ArcError messages already start with `Resource "name"` — strip it (and
+    // the trailing period) so the wrapper doesn't repeat it.
     const stripped = rawMsg
       .replace(new RegExp(`^Resource "${name}"\\s*`), "")
       .replace(/\.+\s*$/, "");
     parent.log.error(`Failed to register resource "${name}": ${rawMsg}`);
-    // Preserve the original via `{ cause }` so adapter / plugin / Mongoose
-    // errors keep their stack + any custom properties (statusCode, code,
-    // etc.). Node + V8 both render `err.cause` in stacks.
     throw new Error(`Resource "${name}" failed to register — ${stripped}.`, {
       cause: err,
     });
@@ -72,8 +71,8 @@ async function registerOne(
  * infra. Every phase below iterates that order; each module phase runs BEFORE
  * its app-level counterpart:
  *
- * 1.  resolve + orderModules     — validate the graph (dup names, missing/self
- *                                  deps, cycles fail fast) BEFORE side effects
+ * 1.  composeModules             — validate the graph (dup names, missing/self
+ *                                  deps, cycles, unmet `requires`) BEFORE side effects
  * 2.  plugins()                  — app infra (DB, data, webhooks)
  * 3.  module.plugins             — module infra, dependsOn order, before bootstraps
  * 4a. module.bootstrap           — engine init (return value → arc.modules[name])
@@ -92,74 +91,46 @@ async function registerOne(
  *                                  THEN app onClose, in ONE hook so module
  *                                  teardown runs before shared infra closes.
  *
- * Boot is TRANSACTIONAL for module-held resources: phases 2–6 run inside one
- * try/catch. On any failure, arc unsubscribes already-active module event
- * handlers, then closes every module that ENTERED an init phase — reverse
- * composition order, best-effort (see module/teardown.ts) — and rethrows the
- * ORIGINAL boot error. Without this, a failure after module A's bootstrap but
- * before the §7b hook registration leaked A's clients/timers/engines with no
- * teardown path.
- *
- * "Entered", not "completed": a module is eligible for teardown from the
- * moment it enters `plugins()`/`bootstrap()`, so the callback that allocates a
- * client and THEN throws — the commonest partial-init shape — gets its closer
- * called too.
+ * Boot is TRANSACTIONAL for module-held resources: on any failure in phases
+ * 2–6, arc unsubscribes live module event handlers, closes every module that
+ * ENTERED an init phase (see module/teardown.ts), and rethrows the ORIGINAL
+ * boot error.
  */
 export async function registerResources(
   fastify: FastifyInstance,
   config: CreateAppOptions,
   preResolvedModules?: readonly ArcModule[],
+  skippedBridges: readonly SkippedBridge[] = [],
 ): Promise<void> {
-  // v2.11 — production preset defaults `strictResources` + `strictResourceDir`
-  // to `true`. Field report: a stale `dist/` registered 17 ghost
-  // `.resource.js` files that triggered a downstream Mongoose model collision
-  // mid-boot; arc's duplicate-name detector only WARNed, which was easy to
-  // miss in the log stream. Flipping both strict modes in production surfaces
-  // the stale-build / empty-discovery case before the app takes traffic, with
-  // opt-out for hosts that legitimately duplicate names (rare — usually a bug).
+  // Duplicate resource names fail boot in every preset (usually a stale
+  // `dist/` alongside `src/`); an explicit `strictResources: false` downgrades
+  // them to a warning and the registry keeps the first. Production also fails
+  // boot on an empty `resourceDir`.
+  if (config.strictResources === undefined) config = { ...config, strictResources: true };
   if (config.preset === "production") {
-    if (config.strictResources === undefined) config = { ...config, strictResources: true };
     if (config.strictResourceDir === undefined) config = { ...config, strictResourceDir: true };
   }
+  if (config.strictResources === false) {
+    fastify.arc?.registry?.tolerateDuplicateNames();
+  }
 
-  // ── 1. Resolve + validate the module graph FIRST — before any side-effecting
-  // plugin runs. Resolving thunks (dynamic imports) and the stable topological
-  // sort (`orderModules`) is where duplicate names, missing/self deps, and
-  // dependency cycles fail fast. Doing it up front means a broken composition
-  // root aborts BEFORE `config.plugins` connects a DB / registers a webhook /
-  // opens Redis — no half-initialised infra on a bad module set.
-  //
-  // A thunk is where a conditional `import()` fires (region packs, tier
-  // gating), so unselected packs are never evaluated. `dependsOn` orders
-  // COMPOSITION, not import — every thunk resolves here regardless of edges.
-  // Every phase below iterates this one ordered list. (see wiki/modules.md)
-  //
-  // 2.21 — `createApp` pre-resolves the graph even earlier (before security
-  // plugins / the error handler, so module-shipped `errorMappers` can merge)
-  // and passes it in; thunks then fire exactly once. Resolving here remains
-  // for direct callers of `registerResources` (tests, embedded hosts).
+  // ── 1. Resolve + validate the module graph FIRST, so a broken composition
+  // aborts before `config.plugins` opens any infra. `createApp` passes a
+  // pre-resolved graph (so thunks fire exactly once); resolving here is for
+  // direct callers (tests, embedded hosts). See wiki/modules.md.
   const modules =
-    preResolvedModules ??
-    orderModules(await Promise.all((config.modules ?? []).map((m) => resolveModule(m))));
+    preResolvedModules ?? (await composeModules(config.modules ?? [], config.ports)).modules;
 
-  // Lifecycle-state map (`arc.moduleStates`) — every composed module is
-  // `resolved` from here on, so `hasModule()` / `getModuleState()` answer for
-  // the whole graph before any lifecycle callback runs. This is also what lets
-  // `lazyRequiredModuleExports` validate presence at COMPOSITION time instead
-  // of surfacing a missing hard dependency on the first request.
+  // Every module is `resolved` before any callback runs, so
+  // `lazyRequiredModuleExports` can validate presence at composition time.
   initModuleStates(
     fastify,
     modules.map((m) => m.name),
   );
-  // Teardown controller — tracks which modules completed an init phase, and
-  // once-guards every closer so the rollback path and the §7b shutdown hook
-  // can never both run one (see module/teardown.ts).
-  // Per-module `defer` stacks. Handed to every setup phase; drained by the
-  // teardown controller on whichever path fires first (see module/disposers.ts).
-  const disposers = createDisposerRegistry(fastify);
+  const portsByModule = new Map(modules.map((m) => [m.name, portsForModule(m, config.ports)]));
+  const disposers = createDisposerRegistry(fastify, (name) => portsByModule.get(name) ?? {});
   const teardown = createModuleTeardown(fastify, modules, disposers);
-  // Populated at §6; declared here so the catch below can unsubscribe
-  // whatever fraction of the handlers went live before the failure.
+  // Declared here so the catch can unsubscribe a partial activation.
   let eventUnsubscribes: Array<() => void | Promise<void>> = [];
 
   try {
@@ -169,16 +140,12 @@ export async function registerResources(
       fastify.log.debug("Custom plugins registered");
     }
 
-    // ── 3. Module plugins (infra) — ordered, AFTER app `plugins()` (so module
-    // infra can build on app foundations like a DB connection) and BEFORE any
-    // module bootstrap. The module-level analog of the app plugins slot; a
-    // dependency's plugins run first (dependsOn order), so a decorator it
-    // installs is available to dependents' plugins.
+    // ── 3. Module plugins (infra) — after app `plugins()`, before any module
+    // bootstrap, in dependsOn order.
     for (const m of modules) {
       if (!m.plugins) continue;
-      // Marked BEFORE the call, not after: `plugins()` may open a socket and
-      // THEN throw, and that half-open resource is exactly what its closer
-      // exists to release. Marking on success would leak it.
+      // Marked BEFORE the call: a `plugins()` that opens a socket and THEN
+      // throws must still have its closer run.
       teardown.markInitialized(m);
       try {
         // A returned disposer is shorthand for a single `defer` — registered
@@ -195,27 +162,20 @@ export async function registerResources(
       }
     }
 
-    // ── 4. Bootstrap (domain init) — module bootstraps (dependsOn order) then
-    // app-level, so app-level init can depend on a module's live engine. A module
-    // bootstrap failure is fail-fast (wrapped with the module name).
+    // ── 4. Bootstrap — modules (dependsOn order) then app-level, so app init
+    // can depend on a module's live engine.
     for (const m of modules) {
       if (!m.bootstrap) {
-        // No init of its own — ready the moment its slot in the order is
-        // reached (and eligible for teardown, so a resource-only module with
-        // an `onClose` still closes).
+        // Still teardown-eligible, so a resource-only module's `onClose` runs.
         setModuleState(fastify, m.name, "ready");
         teardown.markInitialized(m);
         continue;
       }
       let exported: unknown;
-      // Same rule as `plugins` above — a bootstrap that allocates a client and
-      // then throws on a later init step must still get its closer called.
+      // Marked before the call — same reason as `plugins` above.
       teardown.markInitialized(m);
       setModuleState(fastify, m.name, "bootstrapping");
       try {
-        // A bootstrap return value is the module's PUBLIC EXPORT — recorded at
-        // `fastify.arc.modules[name]` so later modules (dependsOn order = init
-        // order) can wire cross-module ports without a DI container. (wiki/modules.md)
         exported = await m.bootstrap(fastify, disposers.contextFor(m.name));
       } catch (err) {
         setModuleState(fastify, m.name, "failed");
@@ -226,22 +186,17 @@ export async function registerResources(
       if (exported !== undefined) {
         const arc = fastify.arc;
         if (!arc) {
-          // arcCorePlugin always decorates `fastify.arc` before this phase runs;
-          // if it hasn't, the module's public export would vanish silently —
-          // the opposite of the fail-fast contract. Throw, don't guard.
+          // Throw, don't guard — otherwise the export would vanish silently.
           throw new Error(
             `[arc] module "${m.name}" returned a public export but fastify.arc is not decorated — arcCorePlugin must register first.`,
           );
         }
-        // Null-proto map: a module named "__proto__" would corrupt a plain
-        // object (the assignment sets the prototype, not an own key); a null
-        // prototype makes every module name a plain own property.
+        // Null prototype: a module named "__proto__" must be an own key.
         if (!arc.modules) arc.modules = Object.create(null) as Record<string, unknown>;
         arc.modules[m.name] = exported;
       }
     }
     if (modules.length) {
-      // Ordered by dependsOn — the log doubles as the resolved composition order.
       fastify.log.debug(
         `${modules.length} module(s) composed (in dependency order): ${modules.map((m) => m.name).join(" → ")}`,
       );
@@ -253,19 +208,8 @@ export async function registerResources(
       fastify.log.debug(`${config.bootstrap.length} bootstrap function(s) executed`);
     }
 
-    // ── 5. Resolve resources factory (if supplied) ──
-    //
-    // A `resources` function form runs AFTER bootstrap so engine-backed
-    // adapters can await their dependencies before `defineResource(...)` is
-    // called. Thrown errors bubble to the Fastify boot — a bad factory is a
-    // fail-fast condition, not a best-effort skip.
-    //
-    // Factory errors are wrapped with a diagnostic prefix + `{ cause }` so
-    // adapter / engine-boot failures walk back to the original throw site.
-    // Pre-this-extension hosts had to write per-resource lazy-bridge
-    // adapters that awaited the engine on every CRUD call — this factory
-    // slot is the clean answer to "my repository lives in an engine that
-    // boots asynchronously."
+    // ── 5. Resolve resources factory — runs AFTER bootstrap so adapters get
+    // booted engines. A throw is fail-fast, not a best-effort skip.
     let resolvedResources: ReadonlyArray<ResourceLike> | undefined;
     if (isResourcesFactory(config.resources)) {
       try {
@@ -292,21 +236,11 @@ export async function registerResources(
       resolvedResources = config.resources;
     }
 
-    // ── 4. Resources (split by prefix) ──
+    // ── 5'. resourceDir discovery — only when `resources` is ABSENT. An
+    // explicit `resources` (including `[]` or a factory returning `[]`) always
+    // wins; test for `undefined`, never `!length`.
     //
-    // Contract (matches the `resourceDir` JSDoc in types.ts): an explicit
-    // `resources` array ALWAYS wins over `resourceDir`, including when it's
-    // empty. Pre-2.11 the check was `!config.resources?.length`, which
-    // silently triggered auto-discovery when a caller passed `resources: []`
-    // to explicitly disable resource registration — a subtle footgun for
-    // shared-config factories that spread a base and override `resources`.
-    // Auto-discovery now fires only when `resources` is absent (undefined).
-    // The factory form (resolved above) also honors this: a factory that
-    // returns `[]` suppresses discovery the same way a literal `[]` does.
-    //
-    // Track the discovery input + resolved path so the final log line (even
-    // at N=0) can echo both — critical for diagnosing the "deploy 404s
-    // everything" case where a misconfigured path yields zero resources.
+    // The raw + resolved path are kept so the final summary can echo them.
     let discoveryRawDir: string | undefined;
     let discoveryPath: string | undefined;
     let discoveryYieldedZero = false;
@@ -314,29 +248,21 @@ export async function registerResources(
       const { loadResources } = await import("./loadResources.js");
       const { resolve, dirname } = await import("node:path");
       const { fileURLToPath } = await import("node:url");
-      // v2.10.9 — accept `import.meta.url` directly. Before this, a string
-      // like 'src/resources' was the only form, and it resolved against
-      // process.cwd() — which mismatches `dist/` layouts at runtime and
-      // produced "deployed app 404s everything" outages. The file:// URL
-      // form mirrors loadResources's own signature so hosts can use the
-      // same value for both.
+      // Accepts `import.meta.url` (resolves correctly under `dist/`) or a path
+      // relative to process.cwd().
       const rawDir = config.resourceDir;
       const dir = rawDir.startsWith("file://") ? dirname(fileURLToPath(rawDir)) : resolve(rawDir);
       discoveryRawDir = rawDir;
       discoveryPath = dir;
       const discovered = await loadResources(dir, { logger: fastify.log });
       if (discovered.length === 0) {
-        // strictResourceDir still throws immediately — that's the "fail
-        // boot before taking traffic" guarantee hosts opt into. In the
-        // non-strict path we stash the flag and let the final zero-count
-        // summary below be the single WARN. Pre-fix this emitted one WARN
-        // here AND a second WARN in the final summary, reading as two
-        // separate problems rather than one discovery failure + summary.
+        // Non-strict: no WARN here — the final zero-count summary is the
+        // single diagnostic.
         if (config.strictResourceDir) {
           throw new Error(
             `[arc] loadResources: resourceDir "${rawDir}" resolved to "${dir}" but ` +
               "yielded 0 resources. Check the path, file naming (*.resource.{ts,js,mts,mjs}), " +
-              "and runtime layout (src/ vs dist/). Use `strictResourceDir: true` to fail boot.",
+              "and runtime layout (src/ vs dist/).",
           );
         }
         discoveryYieldedZero = true;
@@ -344,24 +270,11 @@ export async function registerResources(
       resolvedResources = discovered;
     }
 
-    // ── 5a. Module resources — RESOLVE (registration happens below) ──
-    //
-    // TWO distinct orderings, deliberately different — both documented so neither
-    // surprises a maintainer:
-    //   • RESOLUTION order: app `resources`/`resourceDir` resolve FIRST (above),
-    //     THEN module resource factories run here. This keeps the app-factory's
-    //     semantics (e.g. `resources: []` suppressing discovery) untouched, and
-    //     both run post-bootstrap so factories receive live engines.
-    //   • REGISTRATION order: module resources are PREPENDED, so they register
-    //     (routes mounted, dedup, prefix-split) BEFORE app resources — matching
-    //     the "modules before app-level in every phase" contract users rely on.
-    // A module resource is not special-cased; it flows the SAME registration path
-    // below as an app resource.
-    //
-    // Resolution happens BEFORE the ownership filter (5b) so `owns` can be
-    // verified against what each module actually SUPPLIES, not merely what it
-    // claims. Ordering the other way round is what let a bad claim delete a
-    // route with nothing to replace it.
+    // ── 5a. Module resources — RESOLVE here, after app resources (so
+    // `resources: []` semantics stay untouched), but REGISTER first (prepended
+    // below). Must precede 5b so `owns` is checked against what each module
+    // actually SUPPLIES — otherwise a bad claim deletes a route with nothing
+    // replacing it.
     const moduleResourceNames = new Map<string, Set<string>>();
     const perModuleResources = new Map<string, readonly ResourceLike[]>();
     const moduleResources: ResourceLike[] = [];
@@ -378,22 +291,16 @@ export async function registerResources(
           { cause: err },
         );
       }
-      // A JS consumer, a mistyped `as never`, or a factory that forgot to
-      // return can hand back `null` / an object / a Promise of the wrong
-      // shape. Without this the failure surfaces as an unattributed
-      // "is not iterable" three frames away, naming neither the module nor the
-      // arm. Validate at the boundary where the culprit is still known.
+      // Validate here, where the culprit module is still known — otherwise a
+      // bad return surfaces later as an unattributed "is not iterable".
       if (!Array.isArray(rs)) {
         throw new TypeError(
           `[arc] module "${m.name}" resources factory must return an array — received ` +
             `${rs === null ? "null" : typeof rs}.`,
         );
       }
-      // Duplicate names WITHIN one module are always an authoring bug — arc
-      // registers one route group per name, so the second silently loses. The
-      // app-wide duplicate check below is opt-in (`strictResources`) because a
-      // host can legitimately have forks mid-migration; a module contradicting
-      // ITSELF has no such excuse, so this one is unconditional.
+      // Duplicates WITHIN one module are always a bug, so unlike the app-wide
+      // check below this ignores `strictResources: false`.
       const names = new Set<string>();
       for (const r of rs) {
         if (r.name == null) continue;
@@ -413,34 +320,10 @@ export async function registerResources(
 
     // ── 5b. Module ownership — verify the claim, THEN drop app forks ──
     //
-    // A module declares `owns: [...names]` for the app-level resources it
-    // authoritatively provides (see `ArcModule.owns`). Any app resource of that
-    // name is DROPPED, so the module's own version is the one that registers —
-    // the host keeps NO hand-maintained "which resources did modules take over"
-    // filter set.
-    //
-    // `owns` is an EXPLICIT authoritative claim, so it is verified
-    // unconditionally (not gated behind `strictResources`, which governs the
-    // much softer duplicate-discovery case). A module that claims a name it
-    // does not supply — a typo, a factory that returned early, a resource
-    // deleted without updating `owns` — would otherwise boot "successfully"
-    // with the app's route silently deleted and nothing serving it. That is a
-    // silent 404 in production, which is precisely the failure mode arc's
-    // fail-fast contract exists to prevent.
-    //
-    // The claim must be satisfied by the CLAIMING module itself: cross-module
-    // satisfaction would make ownership non-local and undo the colocation the
-    // arm exists for.
-    // `owns: "provided"` (2.32) DERIVES the claim from what the module actually
-    // returned, so the two cannot disagree at all — the drift class above stops
-    // being representable rather than merely detected. Resolution already
-    // happened at §5a, so this is a lookup, not a second phase.
-    //
-    // Downstream (`@classytic/spine-kit`) had built an entire wrapper to
-    // approximate this by resolving resources itself before handing arc an
-    // array. That workaround exists only because arc read `owns` before
-    // resolving; with this it becomes unnecessary, and every arc module — not
-    // just ERP ones — gets the guarantee.
+    // Verified unconditionally (not gated by `strictResources`): an unmet claim
+    // would silently delete the app's route with nothing serving it. The claim
+    // must be met by the CLAIMING module itself, keeping ownership local.
+    // `owns: "provided"` derives the claim, so it cannot disagree at all.
     const effectiveOwns = new Map<string, readonly string[]>();
     for (const m of modules) {
       const supplied = moduleResourceNames.get(m.name);
@@ -493,11 +376,8 @@ export async function registerResources(
       resolvedResources = [...moduleResources, ...(resolvedResources ?? [])];
     }
 
-    // Descriptors are PUBLISHED at §6c — after the contribution arms resolve —
-    // so their subscription/schedule counts are real. Publishing here (where
-    // the resource half is known) would have frozen them at zero, which is
-    // worse than omitting them: tooling cannot tell "no subscriptions" from
-    // "not counted yet".
+    // Descriptors are published at §6c, not here — the contribution counts
+    // aren't known yet and would freeze at zero.
 
     if (resolvedResources && resolvedResources.length > 0) {
       // Detect duplicate resource names early — a common mistake with loadResources + manual array
@@ -508,16 +388,11 @@ export async function registerResources(
             const msg =
               `Duplicate resource name "${resource.name}" detected. ` +
               "This will cause route conflicts. Check your resources array and loadResources() output. " +
-              "Common cause: stale compiled files in dist/ alongside src/. Use `strictResources: true` to fail boot.";
-            // v2.10.9 — opt-in strict mode. A reporter hit Mongoose model
-            // collisions downstream of arc's registry because 17 ghost
-            // .resource.js files from a stale dist/ registered duplicate
-            // names; a warn was easy to miss in the log stream. Strict
-            // mode raises the signal before the downstream collision.
+              "Common cause: stale compiled files in dist/ alongside src/.";
             if (config.strictResources) {
               throw new Error(msg);
             }
-            fastify.log.warn(msg);
+            fastify.log.warn(`${msg} Boot continues because strictResources is false.`);
           }
           seen.add(resource.name);
         }
@@ -561,20 +436,8 @@ export async function registerResources(
       const prefix = config.resourcePrefix ? ` (prefix: ${config.resourcePrefix})` : "";
       fastify.log.info(`${resolvedResources.length} resource(s) registered${prefix}: ${names}`);
     } else {
-      // v2.11 — always announce the count, even at N=0. Before this the
-      // "N resource(s) registered" info line was gated on N>0, so an app
-      // that booted with zero resources emitted nothing at all — the exact
-      // shape of the silent-deploy outage the field report flagged. When a
-      // discoveryPath is known (resourceDir was set), echo it to help
-      // operators diagnose "right path, wrong extension" or "src vs dist"
-      // mismatches. Escalated to WARN because N=0 is almost never what the
-      // author intended outside of testing.
-      //
-      // When discovery yielded zero, fold the diagnostic path hints into
-      // this single WARN instead of emitting a separate upstream WARN — the
-      // caller sees ONE diagnostic for one failure mode. Raw input + resolved
-      // path both appear so operators can spot "wrong dir", "src vs dist",
-      // and "relative to cwd vs import.meta.url" mismatches at a glance.
+      // Always announce N=0, as a WARN — a silent zero-resource boot is a
+      // deploy that 404s everything. Discovery hints fold into this ONE line.
       const prefix = config.resourcePrefix ? ` (prefix: ${config.resourcePrefix})` : "";
       const scanned = discoveryPath
         ? ` — resourceDir "${discoveryRawDir}" resolved to "${discoveryPath}"`
@@ -586,17 +449,10 @@ export async function registerResources(
     }
 
     // ── 6. After resources — modules (dependsOn order) first, then app-level ──
-    //
-    // Module post-wiring runs before app-level `afterResources`, so the app-level
-    // hook can wire across modules once every module's routes are mounted. Errors
-    // are wrapped with the module name — same fail-fast diagnostics as the
-    // plugins / bootstrap / resources phases (so "which module?" is never lost).
     for (const m of modules) {
       if (!m.afterResources) continue;
       try {
-        // Every module is already teardown-eligible by now (the bootstrap loop
-        // marks even the bootstrap-less ones), so disposers deferred here are
-        // swept on both paths like any other.
+        // Every module is teardown-eligible by now, so these disposers sweep too.
         const returned = await m.afterResources(fastify, disposers.contextFor(m.name));
         if (typeof returned === "function") disposers.contextFor(m.name).defer(returned);
       } catch (err) {
@@ -604,17 +460,13 @@ export async function registerResources(
         throw new Error(`[arc] module "${m.name}" afterResources() threw: ${msg}`, { cause: err });
       }
     }
-    // Module schedules resolve exactly once, then flow through Arc's canonical
-    // schedules plugin. Do this BEFORE event activation so invalid schedule
-    // configuration cannot leave already-subscribed handlers behind.
+    // Schedules BEFORE event activation, so an invalid schedule config cannot
+    // leave already-subscribed handlers behind.
     const scheduleCounts = new Map<string, number>();
     const collectedJobs = await collectModuleScheduledJobs(fastify, modules, scheduleCounts);
     /**
-     * ROLE gate (CreateAppOptions.role). Arms a role does not run are SKIPPED
-     * and logged by name, never fatal: a module legitimately declares arms
-     * that a different deployment of the same codebase executes. 'relay' runs
-     * only kind:'relay' arms (the outbox relays); 'api'/'worker' run none;
-     * 'scheduler'/'all' run everything.
+     * ROLE gate: arms this role does not run are skipped and logged, never
+     * fatal — another deployment of the same codebase runs them.
      */
     const role = config.role ?? "all";
     const scheduledJobs =
@@ -657,23 +509,99 @@ export async function registerResources(
       }
     }
 
-    // Module event handlers — transactional subscription in dependency order.
-    // The helper rolls back its own partial activation; the outer catch below
-    // rolls back if anything AFTER full activation fails.
+    // The helper rolls back its own partial activation; the outer catch covers
+    // failures after full activation.
     const subscriptionCounts = new Map<string, number>();
-    eventUnsubscribes = await subscribeModuleEventHandlers(fastify, modules, subscriptionCounts);
+    const consumedByModule = new Map<string, string[]>();
+    eventUnsubscribes = await subscribeModuleEventHandlers(
+      fastify,
+      modules,
+      subscriptionCounts,
+      consumedByModule,
+    );
 
-    // ── 6c. Publish resolved descriptors ──
-    //
-    // Everything reported is now settled: resources resolved, duplicates
-    // rejected, `owns` effective, contribution arms resolved and counted.
-    // Consumers read THIS rather than re-deriving from `ArcModule`'s AUTHORING
-    // shape — which they cannot do correctly, since a resource factory hides
-    // its names until resolved and `owns` may be the literal `"provided"`.
-    //
-    // Counts come from the sinks the collectors filled during their single
-    // resolution pass; re-running those factories to introspect them would run
-    // host code twice.
+    // ── 6b'. The module graph — who owns which event, who consumes it — checked here, where
+    // every handler is resolved; a strict failure throws into the rollback below.
+    // CRUD events arc auto-emits are DERIVED from what mounted — a module owns its resources'
+    // events; an app-level resource's events count as external publishers.
+    const registry = fastify.arc?.registry;
+    const emitsCrud = config.arcPlugins?.emitEvents !== false && registry !== undefined;
+    const derived = new Map<string, DerivedPublishes>();
+    const moduleOwned = new Set<string>();
+    if (emitsCrud) {
+      for (const [moduleName, names] of moduleResourceNames) {
+        const publishes: string[] = [];
+        for (const name of names) {
+          moduleOwned.add(name);
+          const entry = registry.get(name);
+          if (entry) publishes.push(...crudEventsOf(entry));
+        }
+        derived.set(moduleName, { publishes, namespaces: [...names] });
+      }
+    }
+    const appCrudEvents = emitsCrud
+      ? registry
+          .getAll()
+          .filter((e) => !moduleOwned.has(e.name))
+          .flatMap((e) => crudEventsOf(e))
+      : [];
+    // Every mounted CRUD event gets a registry entry with arc's envelope — so every published
+    // event has a contract. A host's own definition of the same name is never replaced.
+    const eventRegistry = (fastify as { events?: { registry?: EventRegistry } }).events?.registry;
+    if (emitsCrud && eventRegistry) {
+      for (const entry of registry.getAll()) {
+        for (const name of crudEventsOf(entry)) {
+          if (eventRegistry.get(name)) continue;
+          eventRegistry.register(
+            defineEvent({
+              name,
+              description: `arc CRUD event — a ${entry.name} was ${name.slice(entry.name.length + 1)}.`,
+              schema: CRUD_EVENT_SCHEMA as never,
+            }),
+          );
+        }
+      }
+    }
+    const moduleGraph = buildModuleGraph(
+      modules,
+      consumedByModule,
+      skippedBridges,
+      [...(config.moduleGraph?.externalEvents ?? []), ...ARC_OWNED_EVENTS, ...appCrudEvents],
+      derived,
+    );
+    for (const bridge of moduleGraph.skippedBridges) {
+      fastify.log.info(
+        { bridge: bridge.name, missing: bridge.missing },
+        "[arc] bridge module inactive — a module it joins is not composed",
+      );
+    }
+    // Production verifies event ownership by default — it reports, never blocks; explicit wins.
+    const graphMode =
+      config.moduleGraph?.events ?? (config.preset === "production" ? "warn" : "off");
+    if (graphMode !== "off") {
+      const analysis = analyzeModuleGraph(moduleGraph);
+      const issues = verifyModuleGraph(moduleGraph, analysis);
+      if (issues.length > 0 && graphMode === "strict") {
+        throw new Error(
+          `[arc] module graph has ${issues.length} issue(s):\n${issues.map((i) => `  - ${i.message}`).join("\n")}`,
+        );
+      }
+      for (const issue of issues)
+        fastify.log.warn({ issue }, `[arc] module graph: ${issue.message}`);
+    }
+    if (fastify.arc) fastify.arc.moduleGraph = moduleGraph;
+
+    // ── 6b''. What is DECLARED is checked above; what is actually PUBLISHED is watched here.
+    // The events plugin can be disabled, so the facade is checked at runtime.
+    const events = (fastify as { events?: { observe?: unknown } }).events;
+    if (graphMode !== "off" && typeof events?.observe === "function" && fastify.arc) {
+      const undeclared = watchUndeclaredEvents(fastify, moduleGraph, graphMode);
+      fastify.arc.undeclaredEvents = undeclared;
+    }
+
+    // ── 6c. Publish resolved descriptors — consumers read these, not the
+    // AUTHORING shape (factories hide names; `owns` may be "provided"). Counts
+    // come from the collectors' sinks: never re-run host factories.
     if (fastify.arc) {
       fastify.arc.moduleDescriptors = Object.freeze(
         modules.map((m) =>
@@ -699,13 +627,9 @@ export async function registerResources(
       fastify.log.debug("afterResources hook executed");
     }
   } catch (err) {
-    // ── Boot rollback ── the §7b teardown hook is registered only AFTER this
-    // try block, so without an explicit rollback a failure here would leak
-    // every already-initialized module's clients/timers/engines. Order mirrors
-    // shutdown: unsubscribe live event handlers first (module engines still
-    // alive), then close initialized modules in reverse composition order.
-    // Both sweeps are best-effort; secondary failures are LOGGED and the
-    // ORIGINAL boot error is rethrown untouched.
+    // ── Boot rollback ── the §7b hook doesn't exist yet. Mirrors shutdown:
+    // unsubscribe handlers, then close modules. Secondary failures are logged;
+    // the ORIGINAL boot error is rethrown.
     const unsubscribeErrors = await unsubscribeModuleEventHandlers(eventUnsubscribes);
     for (const unsubscribeError of unsubscribeErrors) {
       fastify.log.error(
@@ -732,30 +656,16 @@ export async function registerResources(
   }
 
   // ── 7b. Teardown — module `onClose` (reverse composition order) THEN app
-  // `onClose`, in ONE hook.
+  // `onClose`, in ONE hook. Fastify runs `onClose` LIFO, so two hooks would
+  // close the app (and its shared DB/Redis) before modules finish flushing.
+  // Registering it LAST makes it fire before `config.plugins` infra closes.
   //
-  // Fastify runs `onClose` hooks LIFO (reverse registration). A separate
-  // module-teardown hook + a separate app-onClose hook would therefore fire in
-  // the WRONG order (app first, then modules) — the opposite of the documented
-  // contract, and unsafe because app onClose typically closes shared infra
-  // (DB/Redis) that module teardown still needs to flush outboxes / drain
-  // queues. Combining them makes the order explicit and independent of how many
-  // other close hooks exist. Registering this hook LAST also means it fires
-  // BEFORE the infra plugins registered back in `config.plugins` (their onClose
-  // was registered early → runs late under LIFO) — so both module teardown AND
-  // app onClose see live infra, and the underlying connections close last.
-  //
-  // Module closers flow through the teardown controller: best-effort (one
-  // throwing module cannot block the rest, nor the app's own onClose) and
-  // once-guarded (shared with the boot-rollback path above). The FIRST module
-  // close error is rethrown after every closer + the app onClose ran, so
-  // `fastify.close()` still reports the failure.
+  // Closers are best-effort and once-guarded (shared with rollback); the FIRST
+  // module error is rethrown after everything ran, so `fastify.close()` fails.
   const appOnClose = config.onClose;
   if (teardown.hasComposedModules() || appOnClose || eventUnsubscribes.length) {
     fastify.addHook("onClose", async () => {
-      // Unsubscribe module event handlers FIRST (reverse of subscription
-      // order), while module deps are still live — before any module onClose
-      // tears the engines they call down.
+      // Unsubscribe FIRST, while the engines handlers call are still live.
       const unsubscribeErrors = await unsubscribeModuleEventHandlers(eventUnsubscribes);
       for (const err of unsubscribeErrors) {
         fastify.log.error({ err }, "[arc] module event-handler shutdown unsubscribe failed");
@@ -771,15 +681,9 @@ export async function registerResources(
 }
 
 /**
- * `plugins()` is CALLED by arc, never handed to `fastify.register()` — so a
- * module author who returns a Fastify plugin expecting arc to register it
- * gets silence: nothing is registered, and the "disposer" shorthand then
- * invokes their plugin at shutdown with no arguments.
- *
- * The `fastify-plugin` case is unambiguous (its marker symbols are only ever
- * set by `fp()`), so it throws. A bare `(fastify, opts)` function is a strong
- * but not certain signal — arc's disposer contract calls it with ZERO
- * arguments, so a 2-parameter disposer is meaningless either way — and warns.
+ * `plugins()` is CALLED by arc, never `register()`ed — a returned Fastify
+ * plugin would be silently treated as a disposer. `fp()` markers are
+ * unambiguous, so that throws; a bare 2+-arg function only warns.
  */
 function assertNotAReturnedPlugin(
   returned: (...args: never[]) => unknown,
@@ -810,4 +714,34 @@ function assertNotAReturnedPlugin(
         "callback. If it really is a disposer, declare it with no parameters.",
     );
   }
+}
+
+/** Namespaces arc itself publishes — lifecycle (`arc.*`) and its streamline integration (`workflow.*`). */
+const ARC_OWNED_EVENTS = ["arc.*", "workflow.*"] as const;
+
+/**
+ * Record every published event type the graph has no owner for. Logs each name once; never
+ * touches delivery.
+ */
+function watchUndeclaredEvents(
+  fastify: FastifyInstance,
+  graph: import("./module/graph.js").ModuleGraph,
+  mode: "strict" | "warn",
+): ReadonlySet<string> {
+  const owned = new Set(graph.modules.flatMap((m) => m.publishes));
+  const external = createEventRouter<true>();
+  for (const pattern of graph.externalEvents) external.add(pattern, true);
+  const undeclared = new Set<string>();
+  const stop = fastify.events.observe((event) => {
+    const type = event.type;
+    if (owned.has(type) || undeclared.has(type) || type.startsWith("$")) return;
+    if (external.route(type).length > 0) return;
+    undeclared.add(type);
+    fastify.log[mode === "strict" ? "error" : "warn"](
+      { event: type },
+      `[arc] module graph: "${type}" was published but no module declares it — add it to its owner's \`publishes\` (or \`moduleGraph.externalEvents\`).`,
+    );
+  });
+  fastify.addHook("onClose", async () => stop());
+  return undeclared;
 }

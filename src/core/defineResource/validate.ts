@@ -40,6 +40,36 @@ const CRUD_OP_NAMES = new Set<string>(["create", "update", "delete", "list", "ge
  * resulting `ResourceDefinition` for the plugin layer to flush through
  * `fastify.log.warn` on first mount.
  */
+/**
+ * The checks NO flag may skip — `skipValidation` / `customRoutesOnly` skip structural and advisory
+ * checks only. A route without a permission would otherwise mount PUBLIC.
+ */
+export function validateSecurityInvariants<TDoc>(config: ResourceConfig<TDoc>): void {
+  validatePermissionsShape(config);
+  validateCustomRoutePermissions(config);
+  validateActionsShape(config);
+  validateLookupPolicies(config);
+}
+
+/** Every allowed join names the server scope of its joined side — a collection name alone authorizes nothing. */
+function validateLookupPolicies<TDoc>(config: ResourceConfig<TDoc>): void {
+  const allowed = config.schemaOptions?.query?.allowedLookups as unknown;
+  if (allowed === undefined) return;
+  if (Array.isArray(allowed) || typeof allowed !== "object" || allowed === null) {
+    throw new Error(
+      `[Arc] Resource '${config.name}': schemaOptions.query.allowedLookups must map each collection to ` +
+        "{ scope: ({ scope }) => filter } — the joined side is not tenant-scoped by arc, so a name list authorizes nothing.",
+    );
+  }
+  for (const [collection, policy] of Object.entries(allowed)) {
+    if (typeof (policy as { scope?: unknown } | undefined)?.scope !== "function") {
+      throw new Error(
+        `[Arc] Resource '${config.name}': allowedLookups.${collection} needs a scope function — the filter on its joined rows.`,
+      );
+    }
+  }
+}
+
 export function validateDefineResourceConfig<TDoc>(
   config: ResourceConfig<TDoc>,
 ): ResourceDiagnostic[] {
@@ -47,9 +77,7 @@ export function validateDefineResourceConfig<TDoc>(
     skipControllerCheck: true,
   });
 
-  validatePermissionsShape(config);
-  validateCustomRoutePermissions(config);
-  validateActionsShape(config);
+  validateSecurityInvariants(config);
   validateRouteCapabilities(config);
   return [
     ...collectRedundantFieldRuleDiagnostics(config),

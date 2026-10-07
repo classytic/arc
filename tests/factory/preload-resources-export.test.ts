@@ -5,11 +5,9 @@
  * `@classytic/arc/testing` — the naming nudges devs toward "unit tests
  * only", but the canonical use case (production-shaped compliance
  * smokes that scaffold `createApp` against real resources) wants it
- * next to `loadResources`. 2.17 re-exports the helper from `/factory`
- * so autocomplete + docs surface it where it's actually needed. The
- * canonical source lives in `src/factory/preloadResources.ts`;
- * `/factory` and `/testing` are just two entry points to the same
- * function.
+ * next to `loadResources`. 2.17 re-exported the helper from `/factory`;
+ * 2.43 dropped the `/testing` copy, so `/factory` is the ONE entry point.
+ * The canonical source lives in `src/factory/preloadResources.ts`.
  */
 
 import { describe, expect, it } from "vitest";
@@ -24,14 +22,10 @@ describe("@classytic/arc/factory — preloadResources re-export", () => {
     expect(typeof factory.createApp).toBe("function");
   });
 
-  it("is identical to the @classytic/arc/testing export (single source of truth)", async () => {
-    const factory = await import("../../src/factory/index.js");
-    const testing = await import("../../src/testing/index.js");
-    // Reference equality — both entry points point at the exact same
-    // function. Drift between the two homes would silently produce two
-    // implementations.
-    expect(factory.preloadResources).toBe(testing.preloadResources);
-    expect(factory.preloadResourcesAsync).toBe(testing.preloadResourcesAsync);
+  it("is NOT exported from @classytic/arc/testing (one home: /factory)", async () => {
+    const testing: Record<string, unknown> = await import("../../src/testing/index.js");
+    expect(testing.preloadResources).toBeUndefined();
+    expect(testing.preloadResourcesAsync).toBeUndefined();
   });
 
   it("normalizes an eager-glob result identically when imported via /factory", async () => {

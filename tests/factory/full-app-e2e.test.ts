@@ -208,7 +208,7 @@ export default defineResource({
         logger: { level: "warn", stream: { write: () => {} } } as never,
         resources: [product1, product2],
       }),
-    ).rejects.toThrow(/product.*failed to register/i);
+    ).rejects.toThrow(/Duplicate resource name "product"/);
   });
 
   it("JSON parser rejects prototype poisoning", async () => {

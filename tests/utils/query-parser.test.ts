@@ -34,14 +34,13 @@ describe("ArcQueryParser", () => {
       expect(result.limit).toBe(50);
     });
 
-    it("should enforce minimum page of 1", () => {
-      const result = parser.parse({ page: "0" });
-      expect(result.page).toBe(1);
-    });
-
-    it("should enforce minimum limit of 1", () => {
-      const result = parser.parse({ limit: "0" });
-      expect(result.limit).toBe(1);
+    it("refuses a page or limit below 1 — never silently clamped up", () => {
+      expect(() => parser.parse({ page: "0" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+      expect(() => parser.parse({ limit: "0" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
     it("should cap limit at maxLimit (default 1000)", () => {
@@ -61,14 +60,13 @@ describe("ArcQueryParser", () => {
       expect(result.limit).toBe(10);
     });
 
-    it("should handle non-numeric page gracefully", () => {
-      const result = parser.parse({ page: "abc" });
-      expect(result.page).toBe(1); // Falls back to default
-    });
-
-    it("should handle non-numeric limit gracefully", () => {
-      const result = parser.parse({ limit: "xyz" });
-      expect(result.limit).toBe(20); // Falls back to default
+    it("refuses a non-numeric page or limit — never a silent default", () => {
+      expect(() => parser.parse({ page: "abc" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+      expect(() => parser.parse({ limit: "xyz" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
     it("should handle null/undefined query", () => {
@@ -135,9 +133,10 @@ describe("ArcQueryParser", () => {
       expect(parser.parse({}).sort).toBeUndefined();
     });
 
-    it("should reject invalid field names in sort", () => {
-      const result = parser.parse({ sort: "$dangerous,name" });
-      expect(result.sort).toEqual({ name: 1 }); // $dangerous rejected
+    it("refuses an invalid sort field — a malformed token is never quietly skipped", () => {
+      expect(() => parser.parse({ sort: "$dangerous,name" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
     it("should allow dot notation in sort (nested fields)", () => {
@@ -145,10 +144,10 @@ describe("ArcQueryParser", () => {
       expect(result.sort).toEqual({ "address.city": -1, name: 1 });
     });
 
-    it("should reject sort fields with special characters", () => {
-      const result = parser.parse({ sort: "name;DROP TABLE" });
-      // "name;DROP TABLE" is a single field, fails regex validation
-      expect(result.sort).toBeUndefined();
+    it("refuses sort fields with special characters", () => {
+      expect(() => parser.parse({ sort: "name;DROP TABLE" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
   });
 
@@ -182,9 +181,10 @@ describe("ArcQueryParser", () => {
       expect(parser.parse({}).select).toBeUndefined();
     });
 
-    it("should reject invalid field names in select", () => {
-      const result = parser.parse({ select: "name,$invalid" });
-      expect(result.select).toEqual({ name: 1 }); // $invalid rejected
+    it("refuses an invalid field name in select", () => {
+      expect(() => parser.parse({ select: "name,$invalid" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
   });
 
@@ -208,16 +208,19 @@ describe("ArcQueryParser", () => {
       expect(parser.parse({ search: "   " }).search).toBeUndefined();
     });
 
-    it("should truncate search exceeding maxSearchLength", () => {
-      const longSearch = "a".repeat(300);
-      const result = parser.parse({ search: longSearch });
-      expect(result.search).toHaveLength(200); // Default MAX_SEARCH_LENGTH
+    it("refuses a search longer than maxSearchLength — a cut term matches rows nobody asked for", () => {
+      expect(() => parser.parse({ search: "a".repeat(300) })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+      expect(parser.parse({ search: "a".repeat(200) }).search).toHaveLength(200);
     });
 
-    it("should respect custom maxSearchLength", () => {
+    it("respects a custom maxSearchLength", () => {
       const customParser = new ArcQueryParser({ maxSearchLength: 50 });
-      const result = customParser.parse({ search: "a".repeat(100) });
-      expect(result.search).toHaveLength(50);
+      expect(() => customParser.parse({ search: "a".repeat(100) })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+      expect(customParser.parse({ search: "a".repeat(50) }).search).toHaveLength(50);
     });
   });
 
@@ -235,9 +238,34 @@ describe("ArcQueryParser", () => {
       expect(parser.parse({ populate: "" }).populate).toBeUndefined();
     });
 
-    // Note: Advanced populate with bracket notation (e.g., populate[author][select]=name)
-    // is handled by MongoKit's QueryParser, not ArcQueryParser.
-    // ArcQueryParser treats populate as a simple string.
+    it("ANDs equality and a range on one field, in either key order", () => {
+      expect(parser.parse({ price: "5", "price[gte]": "1" }).filters).toEqual({
+        price: { $eq: 5, $gte: 1 },
+      });
+      expect(parser.parse({ "price[gte]": "1", price: "5" }).filters).toEqual({
+        price: { $gte: 1, $eq: 5 },
+      });
+      expect(parser.parse({ "price[lte]": "9", price: { gte: "1" } }).filters).toEqual({
+        price: { $lte: 9, $gte: 1 },
+      });
+    });
+
+    it("keeps a bracket-form populate match of field equality", () => {
+      const result = parser.parse({ populate: { customer: { match: { status: "active" } } } });
+      expect(result.populateOptions).toEqual([{ path: "customer", match: { status: "active" } }]);
+    });
+
+    it("refuses an operator, a nested object, or a JSON-string match", () => {
+      for (const match of [
+        { $where: "sleep(1)" },
+        { status: { $ne: "x" } },
+        '{"status":"active"}',
+      ]) {
+        expect(() => parser.parse({ populate: { customer: { match } } })).toThrow(
+          /Populate match on "customer"/,
+        );
+      }
+    });
   });
 
   // ============================================================================
@@ -293,14 +321,23 @@ describe("ArcQueryParser", () => {
       expect(result.filters).toEqual({ status: "active" });
     });
 
-    it("should skip fields with invalid names", () => {
-      const result = parser.parse({
-        $inject: "malicious",
-        "0startWithDigit": "bad",
-        valid_field: "good",
-        "also.valid": "good",
+    it("refuses a $-prefixed key outright — an operator attempt is never dropped quietly", () => {
+      expect(() => parser.parse({ $inject: "malicious", valid_field: "good" })).toThrow(
+        /"\$inject": `\$` operators are not part of the query grammar/,
+      );
+    });
+
+    it("refuses a malformed key even when not strict — only allowlist misses are dropped", () => {
+      expect(() => parser.parse({ "0startWithDigit": "bad", valid_field: "good" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+      const lenient = new ArcQueryParser({
+        strictFilterFields: false,
+        allowedFilterFields: ["valid_field"],
       });
-      expect(result.filters).toEqual({ valid_field: "good", "also.valid": "good" });
+      expect(lenient.parse({ secret: "x", valid_field: "good" }).filters).toEqual({
+        valid_field: "good",
+      });
     });
   });
 
@@ -328,12 +365,14 @@ describe("ArcQueryParser", () => {
 
     it("should parse ne operator", () => {
       const result = parser.parse({ status: { ne: "deleted" } });
-      expect(result.filters).toEqual({ status: { $ne: "deleted" } });
+      // `ne` never matches a null or missing value (SQL three-valued logic, the IR's rule).
+      expect(result.filters).toEqual({ status: { $nin: ["deleted", null] } });
     });
 
     it("should parse eq operator", () => {
       const result = parser.parse({ status: { eq: "active" } });
-      expect(result.filters).toEqual({ status: { $eq: "active" } });
+      // `[eq]` is plain equality.
+      expect(result.filters).toEqual({ status: "active" });
     });
 
     it("should parse gt and lt operators", () => {
@@ -343,20 +382,21 @@ describe("ArcQueryParser", () => {
 
     it("should parse exists operator (true)", () => {
       const result = parser.parse({ avatar: { exists: "true" } });
-      expect(result.filters).toEqual({ avatar: { $exists: true } });
+      // `exists` means has a non-null value (the IR's rule, identical on SQL backends).
+      expect(result.filters).toEqual({ avatar: { $ne: null } });
     });
 
     it("should parse exists operator (false)", () => {
       const result = parser.parse({ avatar: { exists: "false" } });
-      expect(result.filters).toEqual({ avatar: { $exists: false } });
+      expect(result.filters).toEqual({ avatar: null });
     });
 
     it("should parse exists with numeric 1/0", () => {
       const resultTrue = parser.parse({ avatar: { exists: "1" } });
-      expect(resultTrue.filters).toEqual({ avatar: { $exists: true } });
+      expect(resultTrue.filters).toEqual({ avatar: { $ne: null } });
 
       const resultFalse = parser.parse({ avatar: { exists: "0" } });
-      expect(resultFalse.filters).toEqual({ avatar: { $exists: false } });
+      expect(resultFalse.filters).toEqual({ avatar: null });
     });
   });
 
@@ -376,17 +416,23 @@ describe("ArcQueryParser", () => {
       expect(result.filters).toEqual({ age: { $gt: 18 } });
     });
 
-    it("should pass through non-operator objects as raw filter values", () => {
-      // When object keys are NOT operators, the object is stored as a raw equality filter
-      // This allows for custom/nested query structures
-      const result = parser.parse({ metadata: { color: "red", size: "large" } });
-      expect(result.filters).toEqual({ metadata: { color: "red", size: "large" } });
+    it("refuses a non-operator nested key and points at the dot path", () => {
+      expect(() => parser.parse({ metadata: { color: "red" } })).toThrow(
+        /unknown operator "color".*a nested field is a dot path: metadata\.color/,
+      );
+      expect(parser.parse({ "metadata.color": "red" }).filters).toEqual({
+        "metadata.color": "red",
+      });
     });
 
-    it("should pass through mixed operator/non-operator objects as raw values", () => {
-      // When not ALL keys are operators, the whole object is kept raw
-      const result = parser.parse({ price: { gte: "10", notAnOp: "val" } });
-      expect(result.filters).toEqual({ price: { gte: "10", notAnOp: "val" } });
+    it("refuses a mixed operator/non-operator object — nothing is passed through raw", () => {
+      expect(() => parser.parse({ price: { gte: "10", notAnOp: "val" } })).toThrow(/"notAnOp"/);
+    });
+
+    it("refuses a $ operator smuggled in either bracket form", () => {
+      expect(() => parser.parse({ price: { $ne: "x" } })).toThrow(/price\[\$ne\]/);
+      expect(() => parser.parse({ status: { $where: "1" } })).toThrow(/status\[\$where\]/);
+      expect(() => parser.parse({ "price[$ne]": "x" })).toThrow(/not part of the query grammar/);
     });
   });
 
@@ -412,7 +458,7 @@ describe("ArcQueryParser", () => {
 
     it("should parse nin operator", () => {
       const result = parser.parse({ status: { nin: "deleted,archived" } });
-      expect(result.filters).toEqual({ status: { $nin: ["deleted", "archived"] } });
+      expect(result.filters).toEqual({ status: { $nin: ["deleted", "archived", null] } });
     });
 
     it("should wrap single value in array", () => {
@@ -448,20 +494,15 @@ describe("ArcQueryParser", () => {
       expect(result.filters).toEqual({ status: "active", priority: "high" });
     });
 
-    it("bare top-level filter wins on key clash with envelope", () => {
-      // Deterministic precedence: ?status=closed&filter[status]=active → 'closed'
-      const result = parser.parse({
-        filter: { status: "active" },
-        status: "closed",
-      });
-      expect(result.filters).toEqual({ status: "closed" });
+    it("an envelope value and a bare value for one field are a union, never one dropped", () => {
+      const result = parser.parse({ filter: { status: "active" }, status: "closed" });
+      expect(result.filters).toEqual({ status: { $in: ["active", "closed"] } });
     });
 
-    it("ignores `filter` when it is not a plain object", () => {
-      // `?filter=bogus` should be silently dropped (not treated as a filter
-      // field named "filter") since the param is reserved as the envelope.
-      const result = parser.parse({ filter: "bogus" });
-      expect(result.filters).toEqual({});
+    it("refuses a `filter` that is not an envelope object", () => {
+      expect(() => parser.parse({ filter: "bogus" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
     it("respects allowedFilterFields whitelist through the envelope path", () => {
@@ -505,33 +546,34 @@ describe("ArcQueryParser", () => {
       expect(result.filters).toEqual({ email: { $regex: "^test@" } });
     });
 
-    it("should truncate long regex patterns", () => {
-      const longPattern = "a".repeat(600);
-      const result = parser.parse({ name: { regex: longPattern } });
-      const regex = (result.filters as any).name.$regex;
-      expect(regex.length).toBeLessThanOrEqual(500);
+    // An unsafe or over-long regex is REFUSED — never truncated or escaped, both of which would
+    // silently change what the caller asked for.
+    it("refuses a regex longer than maxRegexLength", () => {
+      expect(() => parser.parse({ name: { regex: "a".repeat(600) } })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
-    it("should escape dangerous regex patterns (ReDoS)", () => {
-      // Pattern with catastrophic backtracking: (a+)+
-      const result = parser.parse({ name: { regex: "(a+)+" } });
-      const regex = (result.filters as any).name.$regex;
-      expect(regex).not.toBe("(a+)+");
-      expect(regex).toContain("\\");
+    it("refuses a ReDoS-shaped regex", () => {
+      expect(() => parser.parse({ name: { regex: "(a+)+" } })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
-    it("should escape patterns with possessive quantifiers (*+)", () => {
-      // *+ is a possessive quantifier detected by DANGEROUS_REGEX_PATTERNS
-      const result = parser.parse({ name: { regex: "a*+b" } });
-      const regex = (result.filters as any).name.$regex;
-      expect(regex).toContain("\\");
+    it("refuses an invalid regex", () => {
+      expect(() => parser.parse({ name: { regex: "a*+b" } })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
-    it("should respect custom maxRegexLength", () => {
+    it("respects a custom maxRegexLength", () => {
       const customParser = new ArcQueryParser({ maxRegexLength: 20 });
-      const result = customParser.parse({ name: { regex: "a".repeat(50) } });
-      const regex = (result.filters as any).name.$regex;
-      expect(regex.length).toBeLessThanOrEqual(20);
+      expect(() => customParser.parse({ name: { regex: "a".repeat(50) } })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
+      expect(
+        (customParser.parse({ name: { regex: "a".repeat(20) } }).filters as any).name.$regex,
+      ).toBe("a".repeat(20));
     });
 
     it("should allow safe regex patterns unchanged", () => {
@@ -546,13 +588,13 @@ describe("ArcQueryParser", () => {
 
   describe("Security — Field Name Validation", () => {
     it("should reject fields starting with $", () => {
-      const result = parser.parse({ $where: "1" });
-      expect(result.filters).toEqual({});
+      expect(() => parser.parse({ $where: "1" })).toThrow(/not part of the query grammar/);
     });
 
     it("should reject fields starting with digits", () => {
-      const result = parser.parse({ "0field": "val" });
-      expect(result.filters).toEqual({});
+      expect(() => parser.parse({ "0field": "val" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
     it("should allow underscore-prefixed fields", () => {
@@ -566,13 +608,15 @@ describe("ArcQueryParser", () => {
     });
 
     it("should reject fields with spaces", () => {
-      const result = parser.parse({ "bad field": "val" });
-      expect(result.filters).toEqual({});
+      expect(() => parser.parse({ "bad field": "val" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
 
     it("should reject fields with semicolons", () => {
-      const result = parser.parse({ "field;rm": "val" });
-      expect(result.filters).toEqual({});
+      expect(() => parser.parse({ "field;rm": "val" })).toThrow(
+        expect.objectContaining({ statusCode: 400 }),
+      );
     });
   });
 
@@ -611,13 +655,8 @@ describe("ArcQueryParser", () => {
       expect(result.filters).toEqual({ name: "john" });
     });
 
-    it("should keep hex strings as strings (not numbers)", () => {
-      const result = parser.parse({ color: "0xff" });
-      // "0xff" is technically parseable by Number() → 255, but we use parseInt(..., 10)
-      // Actually Number("0xff") = 255, but this is hex. Let's test actual behavior.
-      // The coerceValue uses `Number(value)` which parses hex... this may be a quirk
-      const val = result.filters.color;
-      expect(typeof val).toBe("number"); // Known behavior — Number("0xff") = 255
+    it("keeps hex strings as strings (not numbers)", () => {
+      expect(parser.parse({ color: "0xff" }).filters.color).toBe("0xff");
     });
   });
 

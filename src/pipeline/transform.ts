@@ -31,7 +31,7 @@
 
 import type { OperationFilter, PipelineContext, Transform } from "./types.js";
 
-interface TransformOptions {
+export interface TransformOptions {
   operations?: OperationFilter;
   handler: (
     ctx: PipelineContext,

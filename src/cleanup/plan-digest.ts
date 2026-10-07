@@ -17,14 +17,12 @@
  * implementation (`Date`-explicit, strict-reject of `undefined`/`NaN`/`BigInt`/
  * `function`/`symbol`/`Map`/`Set`/cyclic). Two domains consume it — cleanup
  * manifests here + financial-close evidence manifests in arc-accounting — so it
- * lives in primitives, not duplicated per package. `canonicalJson` is re-exported
- * for existing importers; peer floor `@classytic/primitives >= 0.17.0`.
+ * lives in primitives, not duplicated per package — import `canonicalJson` from
+ * there; peer floor `@classytic/primitives >= 0.17.0`.
  */
 
 import { canonicalJson, sha256Hex } from "@classytic/primitives/canonical";
 import type { CleanupPlan } from "./types.js";
-
-export { canonicalJson };
 
 /**
  * The material content of a plan — everything an operator is consenting to.

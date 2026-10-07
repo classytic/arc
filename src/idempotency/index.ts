@@ -28,10 +28,7 @@
 
 export type { IdempotencyPluginOptions } from "./idempotencyPlugin.js";
 // Main plugin
-export {
-  default as idempotencyPlugin,
-  idempotencyPlugin as idempotencyPluginFn,
-} from "./idempotencyPlugin.js";
+export { default as idempotencyPlugin } from "./idempotencyPlugin.js";
 /**
  * Repository → IdempotencyStore adapter. Exposed so consumers can build
  * and decorate the repo-backed store (metrics, tracing, key namespacing)

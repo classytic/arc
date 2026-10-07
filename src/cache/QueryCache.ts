@@ -40,10 +40,12 @@ export interface QueryCacheConfig {
 
 export type CacheStatus = "fresh" | "stale" | "miss";
 
-export interface CacheResult<T> {
-  data: T;
-  status: CacheStatus;
-}
+/** A miss carries no data — narrow on `status` before reading `data`. */
+export type CacheResult<T> =
+  | { status: "miss"; data: undefined }
+  | { status: "fresh" | "stale"; data: T };
+
+const MISS: CacheResult<never> = Object.freeze({ status: "miss", data: undefined });
 
 export class QueryCache {
   private readonly store: CacheStore;
@@ -55,15 +57,13 @@ export class QueryCache {
   async get<T>(key: string): Promise<CacheResult<T>> {
     const envelope = (await this.store.get(key)) as CacheEnvelope<T> | undefined;
 
-    if (!envelope?.createdAt) {
-      return { data: undefined as T, status: "miss" };
-    }
+    if (!envelope?.createdAt) return MISS;
 
     const now = Date.now();
 
     if (now >= envelope.expiresAt) {
       await this.store.delete(key);
-      return { data: undefined as T, status: "miss" };
+      return MISS;
     }
 
     if (now < envelope.staleAfter) {

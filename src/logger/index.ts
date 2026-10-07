@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { arcLoggerScope as scope } from "./scope.js";
 
 /**
  * Arc Logger — Centralized debug & warning system
@@ -66,22 +66,8 @@ export interface ArcLogger {
 // Scoped + global state
 // ============================================================================
 
-/**
- * Per-app logger options, resolved from the async context.
- *
- * The process-global below is a FALLBACK, not the source of truth. It used to
- * be both, and `configureArcLogger` overwrote it on every boot — so the
- * last-created app owned the writer for every app in the process. One app's
- * framework warnings then surfaced through another app's transports, level,
- * and redaction config. Fine for one-app-per-process; wrong for multi-app test
- * files and for serverless containers that reuse a warm process across apps.
- *
- * Follows the same shape as `requestContext`: the scope is entered once and
- * wraps everything downstream, so the 23 `arcLog()` call sites keep their
- * zero-argument signature and resolve correctly without threading a logger.
- */
-const scope = new AsyncLocalStorage<ArcLoggerOptions>();
-
+// The per-app scope (`scope`, imported above) lives in `./scope.ts` — internal,
+// not a package entry. See its docblock for why this global is only a fallback.
 let globalOptions: ArcLoggerOptions = {};
 
 /** Active options: the app's if we're inside one, else the process fallback. */
@@ -99,16 +85,6 @@ function resolveOptions(): ArcLoggerOptions {
  */
 export function runWithArcLogger<T>(options: ArcLoggerOptions, fn: () => T): T {
   return scope.run(options, fn);
-}
-
-/**
- * Enter `options` for the remainder of the current async context.
- *
- * For Fastify's `onRequest` hook, where `run(store, done)` wraps the rest of
- * the request lifecycle. Outside a hook, prefer {@link runWithArcLogger}.
- */
-export function enterArcLoggerScope(options: ArcLoggerOptions, done: () => void): void {
-  scope.run(options, done);
 }
 
 // ============================================================================

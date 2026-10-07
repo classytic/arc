@@ -58,6 +58,10 @@ export interface RegistryEntry extends ResourceMetadata {
    * without re-reading the resource definition.
    */
   tenantField?: string | false;
+  /** The resource's primary key field (`_id` when unset). */
+  idField?: string;
+  /** Resolved optimistic-concurrency version field — set only under `concurrency`. */
+  versionField?: string;
   /**
    * Resolved tenant-purge strategy — what arc actually runs when
    * `cascadeDeleteForOrganization` fires for this resource. Computed

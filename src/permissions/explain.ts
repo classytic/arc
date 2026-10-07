@@ -34,12 +34,25 @@ import type { PermissionCheck } from "./types.js";
  *   aren't, so a consumer that holds the caller's scope (a FE that knows the
  *   active branch's role) can decide it client-side — the piece a flat `roles`
  *   requirement could not express.
+ * - `member` — any MEMBER of the caller's active organization passes
+ *   (`requireOrgMembership()`), or a holder of one of `roles` when it is an `anyOf`
+ *   with role branches. Membership is a fact the client holds, so it is decidable.
  * - `authenticated` — the check reads request-time facts (custom auth, service
  *   scope, ownership, grants) that no static analysis can decide; the definitive
  *   answer is computed per request. Treat as "server decides".
  */
 export type PermissionRequirement =
-  | { readonly kind: "public" }
+  | {
+      readonly kind: "public";
+      /**
+       * `true` for `allowPublic({ policy })`: anyone passes the gate, but a row
+       * policy narrows what they can read or write. Absent for a plain
+       * `allowPublic()`, which exposes every row the query asks for. The access
+       * DECISION is the same (allow); the exposure is not, and an audit of the
+       * public surface needs to tell them apart.
+       */
+      readonly rowFiltered?: true;
+    }
   | {
       readonly kind: "roles";
       readonly roles: readonly string[];
@@ -60,6 +73,11 @@ export type PermissionRequirement =
       /** See `roles.conditional` — the composite also has an opaque/contradictory branch. */
       readonly conditional?: boolean;
     }
+  | {
+      readonly kind: "member";
+      /** Roles that ALSO grant without membership (the role branches of an `anyOf`). */
+      readonly roles?: readonly string[];
+    }
   | { readonly kind: "authenticated" }
   /**
    * Nobody passes — an explicit `denyAll()`. Distinct from "no rule found",
@@ -78,7 +96,8 @@ export type PermissionRequirement =
 export function describePermission(check: PermissionCheck): PermissionRequirement {
   // FIRST — a closed door cannot be softened by anything below it.
   if (check._isDenied) return { kind: "denied" };
-  if (check._isPublic) return { kind: "public" };
+  if (check._isPublic)
+    return check._rowPolicy ? { kind: "public", rowFiltered: true } : { kind: "public" };
   const roles = [...(check._roles ?? []), ...(check._orgRoles ?? [])];
   const scope = check._scopeContext;
   const conditional = check._conditional ? true : undefined;
@@ -86,6 +105,9 @@ export function describePermission(check: PermissionCheck): PermissionRequiremen
     return roles.length > 0
       ? { kind: "scoped", scope, roles, conditional }
       : { kind: "scoped", scope, conditional };
+  }
+  if (check._orgPermission === "membership" && !conditional) {
+    return roles.length > 0 ? { kind: "member", roles } : { kind: "member" };
   }
   if (roles.length > 0) return { kind: "roles", roles, conditional };
   return { kind: "authenticated" };
@@ -122,6 +144,8 @@ export function explainAccess(
     orgRoles?: readonly string[];
     /** The caller's scope-context values (e.g. `{ branchRole: "head_office" }`) — supply to decide a `scoped` gate. */
     scope?: Readonly<Record<string, string | undefined>>;
+    /** Whether the caller is a member of the active organization — supply to decide a `member` gate. */
+    member?: boolean;
   },
 ): AccessExplanation {
   const requirement = describePermission(check);
@@ -136,7 +160,13 @@ export function explainAccess(
     return { decision: "deny", reason: "denied to everyone", requirement };
   }
   if (requirement.kind === "public") {
-    return { decision: "allow", reason: "public — no authentication required", requirement };
+    return {
+      decision: "allow",
+      reason: requirement.rowFiltered
+        ? "public — no authentication required; rows narrowed by a policy"
+        : "public — no authentication required",
+      requirement,
+    };
   }
   if (requirement.kind === "authenticated") {
     return {
@@ -147,6 +177,23 @@ export function explainAccess(
   }
 
   const held = new Set([...(principal?.roles ?? []), ...(principal?.orgRoles ?? [])]);
+
+  if (requirement.kind === "member") {
+    const via = requirement.roles?.length ? ` or one of: ${requirement.roles.join(", ")}` : "";
+    const reason = `requires membership of the active organization${via}`;
+    const byRole = requirement.roles?.filter((r) => held.has(r)) ?? [];
+    if (byRole.length > 0) {
+      return {
+        decision: "allow",
+        reason: `granted via role(s): ${byRole.join(", ")}`,
+        requirement,
+      };
+    }
+    if (principal?.member === undefined) return { decision: "conditional", reason, requirement };
+    return principal.member
+      ? { decision: "allow", reason: "granted as a member of the active organization", requirement }
+      : { decision: "deny", reason, requirement };
+  }
 
   if (requirement.kind === "scoped") {
     const scopeReason = describeScope(requirement.scope);

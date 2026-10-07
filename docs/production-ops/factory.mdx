@@ -185,7 +185,11 @@ const app = await createApp({
   preset: 'production',
   resourcePrefix: '/api/v1',
 
-  beforeBoot: async () => { await mongoose.connect(process.env.MONGO_URI); },
+  // The returned disposer runs on close AND on a failed boot.
+  beforeBoot: async () => {
+    await mongoose.connect(process.env.MONGO_URI);
+    return () => mongoose.disconnect();
+  },
   plugins: async (f) => {
     await f.register(docsPlugin);
   },
@@ -272,7 +276,7 @@ For these cases, use Vite's compile-time `import.meta.glob` to preload resources
 
 ```typescript
 // tests/setup/preload-resources.ts
-import { preloadResources } from '@classytic/arc/testing';
+import { preloadResources } from '@classytic/arc/factory';
 
 // Vite rewrites import.meta.glob at transform time into a static map.
 // Every match goes through vitest's transform pipeline like any other import.
@@ -307,7 +311,7 @@ const app = await buildApp({ resources: preloadedResources });
 If your resources call engine init at module top-level (e.g., `getAccountModel()` from an accounting engine), use the async variant:
 
 ```typescript
-import { preloadResourcesAsync } from '@classytic/arc/testing';
+import { preloadResourcesAsync } from '@classytic/arc/factory';
 import { initAccountingEngine } from '../../src/engines/accounting.js';
 
 beforeAll(async () => {

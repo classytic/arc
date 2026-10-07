@@ -33,6 +33,7 @@
  * ```
  */
 
+import { ARC_ERROR_CODES, type ErrorContract } from "@classytic/repo-core/errors";
 import type { RouteHandlerMethod } from "fastify";
 import sjson from "secure-json-parse";
 
@@ -216,7 +217,7 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
           // MIME type check — supports exact, `type/*`, and `*` patterns.
           if (mimeMatcher && !mimeMatcher.matches(part.mimetype)) {
             return reply.code(415).send({
-              code: "arc.unsupported_media_type",
+              code: ARC_ERROR_CODES.UNSUPPORTED_MEDIA_TYPE,
               message: `File type '${part.mimetype}' not allowed. Accepted: ${mimeMatcher.describe()}`,
               status: 415,
             });
@@ -227,7 +228,7 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
           // Size check
           if (buffer.length > maxFileSize) {
             return reply.code(413).send({
-              code: "arc.payload_too_large",
+              code: ARC_ERROR_CODES.PAYLOAD_TOO_LARGE,
               message: `File '${part.filename}' exceeds maximum size of ${Math.round(maxFileSize / 1024 / 1024)}MB`,
               status: 413,
             });
@@ -237,7 +238,7 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
           totalBytes += buffer.length;
           if (totalBytes > maxTotalBytes) {
             return reply.code(413).send({
-              code: "arc.payload_too_large",
+              code: ARC_ERROR_CODES.PAYLOAD_TOO_LARGE,
               message: `Combined upload size exceeds ${Math.round(maxTotalBytes / 1024 / 1024)}MB per request`,
               status: 413,
             });
@@ -259,7 +260,7 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
     } catch (err) {
       request.log.error({ err }, "multipartBody: failed to parse multipart form");
       return reply.code(400).send({
-        code: "arc.bad_request",
+        code: ARC_ERROR_CODES.BAD_REQUEST,
         message: "Failed to parse multipart form data",
         status: 400,
       });
@@ -271,14 +272,18 @@ export function multipartBody(options: MultipartBodyOptions = {}): RouteHandlerM
     if (requiredFields) {
       const missing = requiredFields.filter((name) => !(name in files));
       if (missing.length > 0) {
-        // No-envelope contract: emit canonical ErrorContract directly.
-        // HTTP status discriminates success vs error.
+        // A validation failure like any other: one `details[]` entry per field,
+        // so clients map it onto the form the way they map body validation.
         return reply.code(400).send({
-          code: "MISSING_FILE_FIELDS",
+          code: ARC_ERROR_CODES.VALIDATION_ERROR,
           message: `Missing required file field${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}`,
           status: 400,
-          details: { missing },
-        });
+          details: missing.map((name) => ({
+            path: name,
+            code: "required",
+            message: `File field "${name}" is required`,
+          })),
+        } satisfies ErrorContract);
       }
     }
 

@@ -1,30 +1,11 @@
 /**
- * Resource Fastify plugin builder — Phase 8 of `defineResource()`.
+ * Resource Fastify plugin builder — everything `defineResource()` does at
+ * Fastify-registration time (`ResourceDefinition.toPlugin()` delegates here):
+ * shared-state writes (registry, hooks, cache rules — once per host, so
+ * multi-prefix mounts don't double-register), CRUD schema synthesis, and
+ * CRUD / action / aggregation router registration.
  *
- * `ResourceDefinition.toPlugin()` delegates to `buildResourcePlugin(self)`
- * so the data class stays focused on holding the validated, normalised
- * resource contract. Everything that runs **at Fastify-registration time**
- * lives here:
- *
- *   - shared-state writes (registry, hooks, cache invalidation rules)
- *     guarded by the resource's per-host `_sharedStateRegisteredOn` set so
- *     multi-prefix mounts (`/v1`, `/v2`) don't double-register.
- *   - CRUD route schema synthesis (adapter `OpenApiSchemas` →
- *     `CrudSchemas` + custom-schema deep merge)
- *   - listQuery schema normalization (Fastify/AJV strict-mode-clean shape
- *     for `qs`-parsed bracket notation)
- *   - CRUD router registration via `createCrudRouter`
- *   - dynamic action router registration (`createActionRouter`)
- *   - dynamic aggregation router registration
- *   - lifecycle event emission (`arc.resource.registered`)
- *
- * The schema-synthesis helpers (`buildGeneratedCrudSchemas`,
- * `normalizeListQuerySchema`) are exported so unit tests can pin
- * non-obvious invariants — the most critical one being that `params`
- * schemas are CLONED PER CRUD SLOT. Earlier inline code shared the same
- * `params` object reference across `get`, `delete`, and `update` slots,
- * so any downstream mutation (vendor extensions, AJV `$ref` decoration,
- * description overrides) silently leaked across operations.
+ * Schema-synthesis helpers are exported so unit tests can pin their invariants.
  */
 
 import type { FastifyPluginAsync } from "fastify";
@@ -51,28 +32,12 @@ import type { ResourceDefinition } from "./ResourceDefinition.js";
 // ============================================================================
 
 /**
- * Build the CRUD schema map from the adapter's `OpenApiSchemas` plus
- * any `customSchemas` overrides on the resource.
+ * Build the CRUD schema map from the adapter's `OpenApiSchemas`, then layer
+ * `customSchemas` on top per slot (auto-gen always runs, so customising one
+ * slot never disables the others). Returns `null` when neither contributes.
  *
- * Returns `null` when neither input has anything to contribute, so
- * the caller can pass `undefined` straight to `createCrudRouter`.
- *
- * **Per-slot layering (post-2.12 DX fix).** Adapter auto-gen runs
- * unconditionally — declaring one custom slot (e.g. a richer
- * `create.body`) no longer wholesale-disables generated `get`,
- * `update`, `delete`, and `params` schemas. The pre-fix branch
- * skipped auto-gen entirely whenever `customSchemas` had any entry,
- * which silently flipped four slots from "auto-derived from the
- * adapter's schema generator" to "Fastify default" the moment a
- * host customised one. Now: auto-gen first, then deep-merge
- * customSchemas on top per slot.
- *
- * **`params` cloning is load-bearing.** Three CRUD slots (`get`,
- * `delete`, `update`) need a `params` schema. The previous inline
- * code shared the same reference across all three, so a downstream
- * mutation (e.g. attaching a vendor `description` for OpenAPI
- * tooling) leaked across operations. Each slot now owns its own
- * shallow clone.
+ * **`params` cloning is load-bearing:** `get` / `delete` / `update` each own a
+ * clone, so a downstream mutation on one slot cannot leak into the others.
  */
 export function buildGeneratedCrudSchemas(
   openApi: AnyRecord | undefined,
@@ -88,11 +53,8 @@ export function buildGeneratedCrudSchemas(
     }
     if (updateBody) {
       // PATCH: optional at EVERY depth. PUT keeps `required` intact.
-      //
-      // `structuredClone`, not a spread — the strip mutates in place and
-      // `updateBody` is shared (OpenAPI docgen, a second CRUD slot). A shallow
-      // copy leaves nested objects as the same references, so the deep strip
-      // would corrupt the shared schema rather than this PATCH copy.
+      // `structuredClone`, not a spread: the deep strip mutates in place and
+      // `updateBody` is shared (OpenAPI docgen), so a shallow copy would corrupt it.
       const patchBody = structuredClone(updateBody as AnyRecord);
       stripRequiredDeep(patchBody);
       generated.update = { body: safeBody(patchBody) };
@@ -111,27 +73,16 @@ export function buildGeneratedCrudSchemas(
   let schemas: CrudSchemas | null =
     Object.keys(generated).length > 0 ? (generated as CrudSchemas) : null;
 
-  // Layer customSchemas on top per-slot (Zod schemas auto-convert via
-  // `convertRouteSchema`). Deep merge so a custom `body` doesn't
-  // erase the auto-generated `params` on the same op, and vice
-  // versa. Slots customSchemas doesn't touch keep their auto-gen
-  // intact.
+  // Zod schemas auto-convert via `convertRouteSchema`.
   if (customSchemas && Object.keys(customSchemas).length > 0) {
     schemas = schemas ?? {};
     for (const [op, customSchema] of Object.entries(customSchemas)) {
       const key = op as keyof CrudSchemas;
       const converted = convertRouteSchema(customSchema as Record<string, unknown>);
-      // Part-level layering (2.21 fix): each schema PART the host customises
-      // (body / params / querystring / response) REPLACES the generated part
-      // wholesale — a body schema is a complete wire contract, not a patch.
-      // Generated parts the custom schema does NOT touch survive, which is
-      // the documented intent (custom `body` must not erase generated
-      // `params`). The previous `deepMergeSchemas` here UNIONED `required[]`
-      // arrays, so a custom body describing a DIFFERENT wire shape (legacy
-      // controllers mapping public bodies onto kernel models) still demanded
-      // the model's required fields — dormant while adapters had no schema
-      // generator, detonated when mongokit 3.21 turned generation on by
-      // default (28 production resources).
+      // Part-level, NOT deep: each customised part (body / params / querystring /
+      // response) REPLACES the generated one wholesale; untouched parts survive.
+      // Do not deep-merge — it unions `required[]`, so a custom body with a different
+      // wire shape would still demand the model's required fields.
       schemas[key] = schemas[key]
         ? { ...(schemas[key] as AnyRecord), ...(converted as AnyRecord) }
         : (converted as AnyRecord);
@@ -142,22 +93,12 @@ export function buildGeneratedCrudSchemas(
 }
 
 /**
- * Normalize the listQuery JSON Schema for Fastify/AJV strict-mode use.
+ * Normalize the listQuery JSON Schema for Fastify/AJV strict mode.
  *
- * The `qs` parser turns bracket notation into nested objects/arrays:
- *   `?name[contains]=foo` → `{ name: { contains: "foo" } }`
- *   `?tags[]=a&tags[]=b`  → `{ tags: ["a", "b"] }`
- *   `?populate[author][select]=name` → deeply nested object
- *
- * AJV rejects these against the OpenAPI-friendly `type: "string"`
- * declarations adapters generate. The QueryParser is the source of truth
- * for filter validation/coercion, so we replace each property with a
- * minimal AJV-strict-mode-clean shape: numeric pagination keys keep
- * `type: "integer"` (so `minimum`/`maximum` don't trigger AJV warnings),
- * everything else collapses to `{}`.
- *
- * The original `limit.maximum` is preserved so the parser's configured
- * max stays effective at the AJV layer.
+ * `qs` turns bracket notation (`?name[contains]=foo`, `?tags[]=a`) into nested
+ * objects/arrays that AJV rejects against adapters' `type: "string"` props. The
+ * QueryParser owns filter validation, so every property collapses to `{}` except
+ * integer `page` / `limit`; `limit.maximum` is preserved so the parser's cap holds.
  */
 export function normalizeListQuerySchema(listQuerySchema: AnyRecord): AnyRecord {
   const NORMALIZED_PROPS: Record<string, AnyRecord> = {
@@ -186,9 +127,7 @@ export function normalizeListQuerySchema(listQuerySchema: AnyRecord): AnyRecord 
     }
   }
   return {
-    // Ajv strict mode requires `type: 'object'` next to `additionalProperties`
-    // (otherwise `strictTypes` warns at compile time). Stamp it explicitly
-    // so list query schemas validate cleanly under strict Ajv.
+    // Ajv strict mode requires `type: 'object'` next to `additionalProperties`.
     type: "object",
     ...listQuerySchema,
     ...(normalizedProps ? { properties: normalizedProps } : {}),
@@ -197,12 +136,8 @@ export function normalizeListQuerySchema(listQuerySchema: AnyRecord): AnyRecord 
 }
 
 /**
- * Merge two JSON schema branches deeply. Arrays are unioned with
- * deduplication (so combined `required` lists don't duplicate field
- * names); plain-object keys recurse; primitives are overwritten.
- *
- * Exported for the action/CRUD router-config code paths that need to
- * compose user overrides on top of generated schemas.
+ * Deep-merge two JSON schema branches: arrays union (deduplicated), objects
+ * recurse, primitives are overwritten.
  */
 export function deepMergeSchemas(base: AnyRecord, override: AnyRecord): AnyRecord {
   if (!override) return base;
@@ -227,14 +162,7 @@ function cloneShallow(value: AnyRecord): AnyRecord {
 
 /**
  * Delete every `required` from a JSON-schema subtree — PATCH means optional at
- * every depth, not just the root.
- *
- * A generator may legitimately return an `updateBody` whose nested
- * subdocument-array `items` carries its own `required`. Stripping only the
- * root left that intact, so a PATCH adding one item to a subdocument array was
- * rejected by AJV for a field the caller had no way to know it must resend.
- * Recursing here enforces PATCH semantics on whatever a generator produces,
- * rather than trusting each to recurse correctly.
+ * every depth (e.g. subdocument-array `items`), whatever the generator produced.
  */
 function stripRequiredDeep(node: unknown): void {
   if (Array.isArray(node)) {
@@ -248,14 +176,8 @@ function stripRequiredDeep(node: unknown): void {
 }
 
 function safeBody(schema: AnyRecord): AnyRecord {
-  // Body schemas default to additionalProperties:true so the built-in
-  // fallback extractor doesn't reject unknown fields. Adapters that want
-  // strict rejection can opt in by setting `additionalProperties: false`
-  // explicitly — the spread order means an explicit value wins.
-  //
-  // Both `type: 'object'` and `additionalProperties: true` ship together
-  // — Ajv strict mode warns when `additionalProperties` lands on a
-  // schema that lacks a declared `type`.
+  // Default `additionalProperties: true`; an explicit `false` wins via spread order.
+  // Only on `type: 'object'` schemas — Ajv strict mode warns otherwise.
   if (schema && typeof schema === "object" && schema.type === "object") {
     return { additionalProperties: true, ...schema };
   }
@@ -267,23 +189,12 @@ function safeBody(schema: AnyRecord): AnyRecord {
 // ============================================================================
 
 /**
- * Normalize `ActionsMap` into the `ActionRouterConfig` shape that
- * `createActionRouter` expects.
+ * Normalize `ActionsMap` into the config `createActionRouter` expects.
  *
- * **Permission fallback chain (fail-closed, v2.10.5):** delegated to the
- * shared resolver in `actionPermissions.ts`. The resource-level gate
- * goes into the resolver's slot 2 (`resourceActionPermissions`) — its
- * semantic home — leaving slot 3 (`globalAuth`) reserved for direct
- * `createActionRouter` callers that genuinely have a router-wide gate.
- *
- * The returned `actionPermissions` map is FULLY RESOLVED per action.
- * Earlier versions returned a sparse map plus a `globalAuth` field that
- * `createActionRouter` flattened at request time via `?? globalAuth`.
- * That conflated two different layers in the resolver chain (slot 2 vs.
- * slot 3). Boot-time resolution closes the drift: every action that
- * survives this pass has its effective gate baked into the map, and
- * `createActionRouter`'s request-time `?? globalAuth` becomes a no-op
- * for the defineResource path.
+ * Permissions are resolved FAIL-CLOSED at boot via `actionPermissions.ts`: the
+ * returned map carries every action's effective gate, and an action with none
+ * throws. The resource-level gate uses slot `resourceActionPermissions`;
+ * `globalAuth` stays reserved for direct `createActionRouter` callers.
  */
 export function normalizeActionsToRouterConfig(
   actions: ActionsMap,
@@ -301,10 +212,8 @@ export function normalizeActionsToRouterConfig(
   actionPermissions: Record<string, PermissionCheck>;
   actionSchemas: Record<string, Record<string, unknown>>;
   /**
-   * 2.15.5: names of actions declared with `id: false` — mount at
-   * `POST /<prefix>/action` instead of `POST /<prefix>/:id/action`.
-   * Function-shorthand actions are always treated as id-bound (legacy
-   * default); only object-form definitions can opt out.
+   * Actions declared with `id: false` — mounted at `POST /<prefix>/action`
+   * instead of `/:id/action`. Function-shorthand actions are always id-bound.
    */
   idLessActionNames: readonly string[];
 } {
@@ -386,53 +295,32 @@ export function normalizeActionsToRouterConfig(
 // ============================================================================
 
 /**
- * Build the FastifyPluginAsync that materialises a `ResourceDefinition`
- * into routes, hooks, registry entries, and cache invalidation rules.
- *
- * Called once per `ResourceDefinition.toPlugin()`. The returned plugin
- * function captures `resource` in its closure and can be `app.register`-ed
- * any number of times — shared-state writes are idempotent per host
- * Fastify instance via `resource._sharedStateRegisteredOn`.
+ * Build the FastifyPluginAsync that materialises a `ResourceDefinition` into
+ * routes, hooks, registry entries, and cache invalidation rules. Can be
+ * registered any number of times; shared-state writes happen once per host.
  */
 export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): FastifyPluginAsync {
   return async function resourcePlugin(fastify, opts): Promise<void> {
-    // Zod converter readiness — the converter resolves zod via a lazy
-    // dynamic import; await it here (the single choke point in front of
-    // customSchemas layering, custom routes, AND action schemas) so a
-    // host's Zod schemas can never race the import and slip through
-    // unconverted at boot.
+    // Await the lazily-imported Zod converter before ANY schema use (custom schemas,
+    // routes, actions) so Zod schemas cannot slip through unconverted.
     await ensureSchemaConverter();
 
-    // Shared-state writes (registry, hooks, cache rules) target the ROOT
-    // Fastify instance — `arc.hooks` is decorated once and inherited by
-    // child encapsulation contexts. Key the idempotency guard by the
-    // underlying Node HTTP server (shared across every encapsulation
-    // context) so multi-prefix mounts collapse to a single shared-state
-    // registration. Routes register inside their own encapsulation pass
-    // below — Fastify owns that isolation.
+    // Shared state lives on the ROOT instance; key the once-per-host guard by the
+    // Node HTTP server, which every encapsulation context shares.
     const sharedRoot = fastify.server as object;
     const isFirstMount = !resource._sharedStateRegisteredOn.has(sharedRoot);
     if (isFirstMount) resource._sharedStateRegisteredOn.add(sharedRoot);
 
-    // Deferred boot assertions FIRST — before diagnostics, registry writes, or
-    // any route mounting. These read state that only exists once the app has
-    // booted (a live DB connection behind a capability descriptor), so they
-    // could not be settled at define time. Failing here still fails the boot,
-    // which is the point: the alternative was a resource that registered
-    // clean and threw on its first write.
+    // Deferred boot assertions FIRST: they need post-boot state (e.g. a live DB
+    // behind a capability descriptor) and must fail the boot, not the first write.
     if (isFirstMount && resource._deferredChecks?.length) {
       for (const check of resource._deferredChecks) check();
     }
 
-    // Flush boot-time diagnostics through the host's Fastify logger.
-    // Collected by `validateDefineResourceConfig` at define-time (when
-    // no logger exists) and held on the resource until first mount.
-    // First-mount-only — second mounts at additional prefixes don't
-    // re-emit the same warnings.
+    // Define-time diagnostics (collected before any logger existed), flushed once.
     if (isFirstMount && resource._diagnostics?.length) {
       for (const diagnostic of resource._diagnostics) {
-        // `error`-severity diagnostics are fatal and already threw at
-        // define-time (they never reach a booting resource); map defensively.
+        // `error` diagnostics already threw at define time; mapped defensively.
         const level =
           diagnostic.severity === "info"
             ? "info"
@@ -444,16 +332,11 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
     }
 
     const arc = (fastify as FastifyWithDecorators).arc;
+    // Fatal, not logged: a resource missing from the registry still serves traffic but vanishes
+    // from introspection, the permission matrix and MCP. Both causes (a duplicate name, a
+    // registration after startup) are configuration errors.
     if (isFirstMount && arc?.registry && resource._registryMeta) {
-      try {
-        arc.registry.register(resource as ResourceDefinition<AnyRecord>, resource._registryMeta);
-      } catch (err) {
-        fastify.log?.warn?.(
-          `Failed to register resource '${resource.name}' in registry: ${
-            err instanceof Error ? err.message : err
-          }`,
-        );
-      }
+      arc.registry.register(resource as ResourceDefinition<AnyRecord>, resource._registryMeta);
     }
 
     if (isFirstMount && resource._pendingHooks.length > 0 && arc?.hooks) {
@@ -473,11 +356,8 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       }
     }
 
-    // queryCachePlugin declares `registerCacheInvalidationRule` via module
-    // augmentation on `FastifyInstance` — typed access, no cast needed.
-    // The plugin is opt-in, so when it's not registered we WARN — silently
-    // dropping invalidation rules makes "why isn't my cache invalidating?"
-    // an hours-long debugging session for the host.
+    // Declared-but-inert config (cache rules, audit, events without their plugin)
+    // warns rather than being silently dropped.
     if (isFirstMount && resource.cache?.invalidateOn) {
       if (fastify.registerCacheInvalidationRule) {
         for (const [pattern, tags] of Object.entries(resource.cache.invalidateOn)) {
@@ -493,16 +373,10 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       }
     }
 
-    // `audit: true` on a resource is consulted by `auditPlugin` in
-    // `perResource` mode. If the plugin isn't registered, the flag is dead
-    // config — warn so the host doesn't ship "audited" code that's actually
-    // emitting no audit events.
     if (isFirstMount && resource.audit) {
       const hasAuditPlugin =
         fastify.hasDecorator("audit") &&
-        // `auditPlugin` installs a noop logger when the plugin is registered
-        // but the host disabled it. Treat that as "audit not actually running"
-        // so the warning fires for the same observable outcome.
+        // A disabled `auditPlugin` installs a noop logger — counts as not running.
         typeof (fastify as { audit?: { create?: unknown } }).audit?.create === "function" &&
         (fastify as { audit?: { _noop?: boolean } }).audit?._noop !== true;
       if (!hasAuditPlugin) {
@@ -516,12 +390,6 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       }
     }
 
-    // `events: {...}` declares CRUD-event schemas that auto-emit via
-    // `fastify.events.publish()` from `arcCorePlugin`'s post-hook. If
-    // `eventPlugin` isn't registered, `arcCorePlugin` silently skips emission
-    // (`if (!hasEvents(fastify)) return`) — the host's declared events never
-    // fire and downstream subscribers (analytics, audit, webhook fan-out) get
-    // nothing. Warn once at first mount.
     if (isFirstMount && resource.events && Object.keys(resource.events).length > 0) {
       const eventsDecor = (fastify as { events?: { publish?: unknown } }).events;
       const hasEventPlugin = eventsDecor != null && typeof eventsDecor.publish === "function";
@@ -537,12 +405,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       }
     }
 
-    // Worker-role seam (2.23, `mountRoutes: false`): everything ABOVE this
-    // line is shared runtime state (registry metadata + adapter, hooks,
-    // cache-invalidation rules, boot diagnostics) that headless processes
-    // need — tenant-purge cascade and per-resource audit read the registry
-    // at runtime. Everything BELOW is the HTTP surface. See
-    // wiki/factory.md § createWorker.
+    // Worker-role seam (`mountRoutes: false`): everything ABOVE is shared runtime
+    // state headless processes need; everything BELOW is the HTTP surface.
+    // See wiki/factory.md § createWorker.
     if ((opts as { arcMountRoutes?: boolean } | undefined)?.arcMountRoutes === false) {
       return;
     }
@@ -551,16 +416,13 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       async (instance) => {
         const typedInstance = instance as FastifyWithDecorators;
 
-        // CRUD schema synthesis — pure-function pipeline (testable in
-        // isolation; see tests/core/resource-plugin-schema-synthesis.test.ts)
         let schemas: CrudSchemas | null = buildGeneratedCrudSchemas(
           resource._registryMeta?.openApiSchemas as AnyRecord | undefined,
           resource.customSchemas as AnyRecord,
         );
 
-        // Apply queryParser's listQuery schema as the Fastify querystring
-        // validation schema for the list route. Without this, a hardcoded
-        // default (maximum: 100) overrides the parser's configured maxLimit.
+        // The parser's listQuery schema replaces the default querystring schema,
+        // whose hardcoded `maximum: 100` would override the parser's maxLimit.
         const listQuerySchema = resource._registryMeta?.openApiSchemas?.listQuery;
         if (listQuerySchema) {
           const normalizedSchema = normalizeListQuerySchema(listQuerySchema as AnyRecord);
@@ -573,9 +435,6 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             : ({ querystring: normalizedSchema } as AnyRecord);
         }
 
-        // Pass routes as-is to createCrudRouter. String handler resolution
-        // and `wrapHandler` derivation (from the presence of `rawHandler`) happen inside
-        // createCrudRouter.
         createCrudRouter(typedInstance, resource.controller as CrudController<TDoc>, {
           tag: resource.tag,
           schemas: schemas ?? undefined,
@@ -584,11 +443,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           routeGuards: resource.routeGuards,
           routes: resource.routes,
           disableDefaultRoutes: resource.disableDefaultRoutes,
-          // Spread to a mutable copy — `disabledRoutes` is frozen on the
-          // resource (see `tests/core/resource-definition-immutability.test.ts`)
-          // but `createCrudRouter` types its option as a mutable array.
-          // The router only reads (via `.includes`), so the clone is purely
-          // a type-system bridge.
+          // Mutable copy of a frozen array — a type-system bridge only.
           disabledRoutes: [...resource.disabledRoutes],
           resourceName: resource.name,
           schemaOptions: resource.schemaOptions,
@@ -596,24 +451,13 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           updateMethod: resource.updateMethod,
           pipe: resource.pipe,
           fields: resource.fields,
-          // Honored by `buildFieldWritePreHandler` for custom routes —
-          // matches the auto-CRUD behaviour `BodySanitizer` already gives.
           onFieldWriteDenied: resource.onFieldWriteDenied,
-          // Surfaces on `req.arc.idField` via `buildArcDecorator` — see
-          // `core/entityHelpers.ts` for the read-side helpers.
           idField: resource.idField,
-          // Stamp resource extensions onto every route's `config.arcExtensions`
-          // so request-time plugins (encryption, …) read their typed slice.
           extensions: resource.extensions,
         });
 
-        // Register first-class actions (v2.8) — after CRUD routes, inside
-        // prefix scope. Actions share every cross-cutting primitive with
-        // CRUD via `routerShared`: arc decorator, auth/permission middleware,
-        // pipeline execution, idempotency, rate-limit. Resource-level
-        // `fields`, `permissions`, `routeGuards`, `pipe`, `rateLimit`, and
-        // `schemaOptions` thread through here so an action endpoint that
-        // mutates documents applies the same wiring a PATCH would apply.
+        // Actions get the same resource-level wiring as CRUD so a mutating action
+        // applies what a PATCH would.
         if (resource.actions && Object.keys(resource.actions).length > 0) {
           const { createActionRouter } = await import("../createActionRouter.js");
           const actionConfig = normalizeActionsToRouterConfig(
@@ -629,29 +473,17 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             resourceName: resource.name,
             fields: resource.fields,
             schemaOptions: resource.schemaOptions,
-            // Surfaces on `req.arc.idField` inside every action handler —
-            // pair with `getEntityQuery(req)` to compose the right
-            // `findOne` filter when `idField !== "_id"`.
             idField: resource.idField,
             permissions: resource.permissions as Record<string, PermissionCheck> | undefined,
             routeGuards: resource.routeGuards,
             pipeline: resource.pipe,
             rateLimit: resource.rateLimit,
-            // Stamp resource extensions onto the action route's
-            // `config.arcExtensions` — parity with CRUD + custom routes.
             extensions: resource.extensions,
           });
         }
 
-        // Register aggregation routes (v2.13) — `GET /aggregations/<name>`
-        // per declared aggregation. Same prefix scope as CRUD + actions
-        // so URL prefix flows through. Boot validation throws on misconfig
-        // with the offending aggregation name in the message.
+        // `GET /aggregations/<name>` per declared aggregation.
         if (resource.aggregations && Object.keys(resource.aggregations).length > 0) {
-          // Two dynamic imports run in parallel so a resource with
-          // aggregations doesn't serialise two cold module loads. Both
-          // modules stay out of the hot path for resources without
-          // aggregations (most resources) — matches the actions slot.
           const [
             { createAggregationRouter },
             { adapterSupportsAggregate, ArcAggregationConfigError },
@@ -659,21 +491,11 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             import("../aggregation/createAggregationRouter.js"),
             import("../aggregation/validate.js"),
           ]);
-          // Aggregation-only resources (`disableDefaultRoutes: true` + no
-          // user controller) used to silently 501 here — the controller
-          // wasn't built (controller.ts:50 returns undefined when there
-          // are no CRUD routes), so `controller.repository` was undefined
-          // and `adapterSupportsAggregate(undefined)` returned false. Fall
-          // back to `resource.repository` (which reads from the adapter
-          // directly) so the dispatch surface stays available even when
-          // there's no controller. Any aggregation that ships a
-          // `materialized` hook owns its own dispatch and doesn't need
-          // either — handled inside `executeAggregation`.
+          // Falls back to the adapter's repository: aggregation-only resources
+          // (no CRUD routes) have no controller.
           const repoForAgg =
             (resource.controller as { repository?: unknown })?.repository ?? resource.repository;
-          // Boot-time guard: any aggregation without `materialized` MUST
-          // reach a repo that ships `aggregate()`. Loud failure at register
-          // beats a 501 at first dashboard request in production.
+          // Boot-time: a non-`materialized` aggregation needs a repo with `aggregate()`.
           if (!adapterSupportsAggregate(repoForAgg)) {
             const undispatchable = Object.entries(resource.aggregations)
               .filter(([, cfg]) => !cfg.materialized)
@@ -690,16 +512,8 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
               );
             }
           }
-          // Aggregation handlers receive raw FastifyRequest. `tenantRepoOptions`
-          // reads `req.metadata?._scope` and `req._tenantFields`, both of which
-          // are projected by `createRequestContext()` from `req.scope` /
-          // `req._tenantFields` set by auth + presets. CRUD path runs that
-          // conversion via `routerShared.createRequestContext`; the aggregation
-          // path used to skip it, so resources declaring `tenantField` without
-          // `multiTenantPreset` (which independently stashes `_tenantFields` on
-          // the raw request) saw `organizationId` drop and the kit fail with
-          // "Missing organizationId in context". Convert here so both surfaces
-          // see the same IRequestContext shape. (arc 2.14.3 fix)
+          // Aggregation handlers get the raw FastifyRequest; `tenantRepoOptions` needs
+          // the IRequestContext projection (scope → tenant filter), same as CRUD.
           const buildOptions = (req: unknown): AnyRecord => {
             type CtrlWithOptions = {
               tenantRepoOptions?: (req: unknown) => AnyRecord;
@@ -719,12 +533,8 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             routeGuards: resource.routeGuards,
             repository: repoForAgg,
             buildOptions,
-            // 2.15.3 — wire the preset-emitted `aggregations` middleware
-            // slot through to the aggregation router. multiTenantPreset
-            // emits `aggregations: [strictTenantFilter]` here so each
-            // /aggregations/:name route gets the same tenant filter as
-            // CRUD list. Pre-2.15.3 these middlewares were silently
-            // dropped, leaking aggregated rows across orgs.
+            // SECURITY: carries multiTenantPreset's tenant filter; dropping it leaks
+            // aggregated rows across orgs.
             middlewares: resource.middlewares?.aggregations,
           });
         }
@@ -738,7 +548,6 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
       { prefix: resource.prefix },
     );
 
-    // Emit resource lifecycle event (best-effort)
     if (hasEvents(fastify)) {
       try {
         await fastify.events.publish("arc.resource.registered", {

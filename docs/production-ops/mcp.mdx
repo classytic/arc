@@ -116,15 +116,14 @@ Auto-registers OAuth discovery endpoints (`/.well-known/oauth-authorization-serv
 Resource permissions work identically in REST and MCP — define once, enforced everywhere:
 
 ```typescript
+import { allow } from '@classytic/arc/permissions';
+
 defineResource({
   name: 'job',
   permissions: {
     list: (ctx) => {
       if (!ctx.user) return false;
-      return {
-        granted: true,
-        filters: { orgId: ctx.user.orgId, branchId: ctx.user.branchId },
-      };
+      return allow({ policy: { orgId: ctx.user.orgId, branchId: ctx.user.branchId } });
     },
     create: (ctx) => ctx.user?.roles?.includes('admin'),
     delete: (ctx) => ctx.user?.roles?.includes('admin'),
@@ -132,7 +131,7 @@ defineResource({
 });
 ```
 
-`PermissionResult.filters` flow into `_policyFilters` → `BaseController.AccessControl` applies them to DB queries. No MCP-specific code needed.
+A decision's `policy` flows into `_policyFilters` → `BaseController.AccessControl` applies it to DB queries. No MCP-specific code needed.
 
 ## Multi-Tenancy
 

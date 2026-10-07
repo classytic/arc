@@ -174,8 +174,7 @@ function resolveSpec(scope: RequestScope, spec: TenantFieldSpec): string | undef
  */
 function stashTenantFields(request: RequestWithExtras, resolved: Record<string, string>): void {
   if (Object.keys(resolved).length === 0) return;
-  const target = request as RequestWithExtras & { _tenantFields?: AnyRecord };
-  target._tenantFields = { ...(target._tenantFields ?? {}), ...resolved };
+  request._tenantFields = { ...(request._tenantFields ?? {}), ...resolved };
 }
 
 /** Resolve every spec — returns the partial map of fields that have a value. */
@@ -339,10 +338,7 @@ function createTenantInjection(specs: readonly TenantFieldSpec[]): RouteHandler 
 
     // Forward to BaseController so reads/updates/deletes get tenant at the
     // top of the repo context, not just on the create payload.
-    (request as RequestWithExtras & { _tenantFields?: AnyRecord })._tenantFields = {
-      ...((request as RequestWithExtras & { _tenantFields?: AnyRecord })._tenantFields ?? {}),
-      ...resolved,
-    };
+    request._tenantFields = { ...(request._tenantFields ?? {}), ...resolved };
   };
 }
 
@@ -390,7 +386,7 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
    * same door elevated cross-tenant reads have always used.
    */
   const markCrossTenantRead: RouteHandler = async (request: RequestWithExtras): Promise<void> => {
-    (request as RequestWithExtras & { _crossTenantRead?: boolean })._crossTenantRead = true;
+    request._crossTenantRead = true;
   };
   const readMiddleware = (route: Extract<CrudRouteKey, "list" | "get">): RouteHandler[] =>
     crossTenant.includes(route) ? [markCrossTenantRead] : [getFilter(route)];

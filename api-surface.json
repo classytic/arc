@@ -78,6 +78,7 @@
       "AggregationMaterializedResult",
       "AggregationRateLimit",
       "AggregationsMap",
+      "AllowPublicOptions",
       "AnyRecord",
       "ArcCreateResult",
       "ArcDeleteResult",
@@ -95,7 +96,6 @@
       "BulkExt",
       "BulkMixin",
       "CRUD_OPERATIONS",
-      "ConfigError",
       "ControllerConfigurableOptions",
       "ControllerConstructionOptions",
       "ControllerLike",
@@ -153,6 +153,7 @@
       "PermissionContext",
       "PresetFunction",
       "PresetResult",
+      "PublicPolicy",
       "QueryParserInterface",
       "RESERVED_QUERY_PARAMS",
       "RateLimitConfig",
@@ -168,7 +169,6 @@
       "ResourceSeams",
       "ResourceWrites",
       "RouteHandler",
-      "RouteHandlerMethod",
       "RouteSchemaOptions",
       "SYSTEM_FIELDS",
       "SeamedResourceConfig",
@@ -179,15 +179,10 @@
       "SoftDeleteMixin",
       "TreeExt",
       "TreeMixin",
-      "TypedController",
-      "TypedRepository",
-      "TypedResourceConfig",
       "UnauthorizedError",
       "UserBase",
       "UserOrganization",
-      "ValidateOptions",
       "ValidationError",
-      "ValidationResult",
       "WriteContext",
       "WriteVerbKey",
       "adminOnly",
@@ -227,7 +222,7 @@
       "version",
       "when"
     ],
-    "typesHash": "a7aaebc73733e095"
+    "typesHash": "8343c988b2487345"
   },
   "./permissions": {
     "stability": "stable",
@@ -291,6 +286,7 @@
     ],
     "types": [
       "AccessExplanation",
+      "AllowPublicOptions",
       "AuthorizationDecision",
       "ConnectEventsOptions",
       "DataPolicy",
@@ -299,6 +295,7 @@
       "FieldPermission",
       "FieldPermissionMap",
       "FieldPermissionType",
+      "FieldWritePermissionResult",
       "GRANT_MODES",
       "GrantMode",
       "GrantResolution",
@@ -311,7 +308,9 @@
       "PermissionMatrix",
       "PermissionMatrixOptions",
       "PermissionMatrixRegistry",
+      "PermissionOverrides",
       "PermissionRequirement",
+      "PublicPolicy",
       "RequireAgentScopeOptions",
       "RequireGrantOptions",
       "RequireMandateOptions",
@@ -373,7 +372,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "896e70d2c803a2e3"
+    "typesHash": "13b02faf0debbc86"
   },
   "./cache": {
     "stability": "stable",
@@ -417,13 +416,106 @@
       "upstashAsCacheClient",
       "versionKey"
     ],
-    "typesHash": "b580c377046babad"
+    "typesHash": "ca72fea9dd0a0598"
   },
   "./types": {
     "stability": "stable",
     "runtime": [],
-    "types": [],
-    "typesHash": "f354e531e18fb911"
+    "types": [
+      "ActionDefinition",
+      "ActionEntry",
+      "ActionHandlerFn",
+      "ActionsMap",
+      "AnyRecord",
+      "ArcDecorator",
+      "ArcFieldRule",
+      "ArcInternalMetadata",
+      "ArcRequest",
+      "AuthHelpers",
+      "AuthPluginOptions",
+      "Authenticator",
+      "AuthenticatorContext",
+      "AuthorizationDecision",
+      "BaseControllerOptions",
+      "ControllerHandler",
+      "ControllerLike",
+      "ControllerQueryOptions",
+      "CrudController",
+      "CrudRouteKey",
+      "CrudRouterOptions",
+      "CrudSchemas",
+      "DataPolicy",
+      "ElevationEvent",
+      "ElevationOptions",
+      "EventDefinition",
+      "EventsDecorator",
+      "FastifyHandler",
+      "FastifyRequestExtras",
+      "FastifyWithAuth",
+      "FastifyWithDecorators",
+      "FieldRule",
+      "GracefulShutdownOptions",
+      "HealthCheck",
+      "HealthOptions",
+      "IController",
+      "IControllerResponse",
+      "IRequestContext",
+      "InferAdapterDoc",
+      "InferDocType",
+      "InferResourceDoc",
+      "IntrospectionData",
+      "IntrospectionPluginOptions",
+      "JWTPayload",
+      "JwtContext",
+      "LookupOption",
+      "LookupPolicy",
+      "MiddlewareConfig",
+      "MiddlewareHandler",
+      "MutationWriteContext",
+      "ObjectId",
+      "OnTenantDeleteConfig",
+      "OpenApiSchemas",
+      "OwnershipCheck",
+      "PaginationResult",
+      "ParsedQuery",
+      "PermissionCheck",
+      "PermissionContext",
+      "PopulateOption",
+      "PresetFunction",
+      "PresetHook",
+      "PresetResult",
+      "QueryParserInterface",
+      "RateLimitConfig",
+      "RawRouteHandler",
+      "RegistryEntry",
+      "RegistryStats",
+      "RequestContext",
+      "RequestIdOptions",
+      "RequestScope",
+      "RequestWithExtras",
+      "ResolvedTenantPurge",
+      "ResourceCacheConfig",
+      "ResourceConfig",
+      "ResourceExtensions",
+      "ResourceHookContext",
+      "ResourceHooks",
+      "ResourceMetadata",
+      "ResourcePermissions",
+      "ResourceWrites",
+      "RouteDefinition",
+      "RouteHandler",
+      "RouteMcpConfig",
+      "RouteMethod",
+      "RouteSchemaOptions",
+      "ServiceContext",
+      "TokenPair",
+      "UserBase",
+      "UserLike",
+      "UserOrganization",
+      "WriteContext",
+      "WriteVerbKey"
+    ],
+    "typesHash": "7085e40803e0a8b1"
   },
   "./types/storage": {
     "stability": "stable",
@@ -453,6 +545,7 @@
       "DEFAULT_SORT",
       "DEFAULT_TENANT_FIELD",
       "DEFAULT_UPDATE_METHOD",
+      "DEFAULT_VERSION_FIELD",
       "HOOK_OPERATIONS",
       "HOOK_PHASES",
       "MAX_FILTER_DEPTH",
@@ -468,7 +561,6 @@
       "TreeMixin",
       "assertValidConfig",
       "collectReadBlockedFields",
-      "createCrudHandlers",
       "createCrudRouter",
       "createFastifyHandler",
       "createPermissionMiddleware",
@@ -492,6 +584,7 @@
     "types": [
       "AccessControl",
       "AccessControlConfig",
+      "AccessControlRepository",
       "AdapterLike",
       "AggMeasureInput",
       "AggMeasureShorthand",
@@ -521,7 +614,10 @@
       "DEFAULT_SORT",
       "DEFAULT_TENANT_FIELD",
       "DEFAULT_UPDATE_METHOD",
+      "DEFAULT_VERSION_FIELD",
       "DefineActionConfig",
+      "FetchDenialReason",
+      "FetchResult",
       "HOOK_OPERATIONS",
       "HOOK_PHASES",
       "HookOperation",
@@ -531,6 +627,7 @@
       "MAX_REGEX_LENGTH",
       "MAX_SEARCH_LENGTH",
       "MUTATION_OPERATIONS",
+      "MixinConstructor",
       "MutationOperation",
       "NativePolicyFilter",
       "QueryResolver",
@@ -548,9 +645,11 @@
       "TreeMixin",
       "ValidateOptions",
       "ValidationResult",
+      "VariantOverride",
+      "VariantsMap",
+      "VariantsResult",
       "assertValidConfig",
       "collectReadBlockedFields",
-      "createCrudHandlers",
       "createCrudRouter",
       "createFastifyHandler",
       "createPermissionMiddleware",
@@ -571,7 +670,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "30fa8168467eebf5"
+    "typesHash": "1b17af3f9ed0660c"
   },
   "./presets": {
     "stability": "stable",
@@ -580,7 +679,6 @@
       "auditedPreset",
       "bulkPreset",
       "filesUploadPreset",
-      "flexibleMultiTenantPreset",
       "getAvailablePresets",
       "getPreset",
       "multiTenantPreset",
@@ -607,6 +705,7 @@
       "ITreeController",
       "MultiTenantOptions",
       "OwnedByUserOptions",
+      "PresetInput",
       "SearchHandler",
       "SearchPresetOptions",
       "SearchRouteConfig",
@@ -617,7 +716,6 @@
       "auditedPreset",
       "bulkPreset",
       "filesUploadPreset",
-      "flexibleMultiTenantPreset",
       "getAvailablePresets",
       "getPreset",
       "multiTenantPreset",
@@ -628,7 +726,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "246abdd2c3a0c979"
+    "typesHash": "92a76365ec2ab4c5"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -640,7 +738,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "8308146c417d360d"
+    "typesHash": "8ba9f22da45e0743"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -660,7 +758,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "1ddbc2ea1825a697"
+    "typesHash": "9c14bf58402e4569"
   },
   "./presets/search": {
     "stability": "stable",
@@ -675,14 +773,13 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "569bd3adfe1566a8"
+    "typesHash": "523ade85eebcacd8"
   },
   "./auth": {
     "stability": "stable",
     "runtime": [
       "MemorySessionStore",
       "authPlugin",
-      "authPluginFn",
       "createBetterAuthAdapter",
       "createSessionManager",
       "extractBetterAuthOpenApi",
@@ -704,13 +801,12 @@
       "SessionManagerResult",
       "SessionStore",
       "authPlugin",
-      "authPluginFn",
       "createBetterAuthAdapter",
       "createSessionManager",
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "7c121ed74c54795a"
+    "typesHash": "de534ab49f4c892c"
   },
   "./hooks": {
     "stability": "stable",
@@ -726,6 +822,7 @@
       "defineHook"
     ],
     "types": [
+      "AroundHookHandler",
       "DefineHookOptions",
       "HookContext",
       "HookHandler",
@@ -743,7 +840,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "cf81d7213c28a3a1"
+    "typesHash": "f4670e1a7ccba753"
   },
   "./middleware": {
     "stability": "stable",
@@ -753,6 +850,7 @@
       "sortMiddlewares"
     ],
     "types": [
+      "MiddlewareOptions",
       "MultipartBodyOptions",
       "NamedMiddleware",
       "ParsedFile",
@@ -760,7 +858,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "ee946b0d3dd3dd2d"
+    "typesHash": "b0e16967a6ff1c6c"
   },
   "./pipeline": {
     "stability": "stable",
@@ -773,6 +871,8 @@
     ],
     "types": [
       "Guard",
+      "GuardOptions",
+      "InterceptOptions",
       "Interceptor",
       "NextFunction",
       "OperationFilter",
@@ -780,13 +880,14 @@
       "PipelineContext",
       "PipelineStep",
       "Transform",
+      "TransformOptions",
       "executePipeline",
       "guard",
       "intercept",
       "pipe",
       "transform"
     ],
-    "typesHash": "2a18947047d9cb8f"
+    "typesHash": "17ab17052f60e8b1"
   },
   "./context": {
     "stability": "stable",
@@ -814,7 +915,7 @@
       "transactionContext",
       "workSeedFromEvent"
     ],
-    "typesHash": "8aa192cde9c476e3"
+    "typesHash": "12415a83c6d0e456"
   },
   "./logger": {
     "stability": "stable",
@@ -822,7 +923,6 @@
       "arcLog",
       "configureArcLogger",
       "createPinoWriter",
-      "enterArcLoggerScope",
       "runWithArcLogger"
     ],
     "types": [
@@ -833,10 +933,9 @@
       "arcLog",
       "configureArcLogger",
       "createPinoWriter",
-      "enterArcLoggerScope",
       "runWithArcLogger"
     ],
-    "typesHash": "56694862e7c3720a"
+    "typesHash": "df6aede3f1c5c5f6"
   },
   "./registry": {
     "stability": "stable",
@@ -848,8 +947,7 @@
       "cascadeDeleteForOrganization",
       "getCascadingResources",
       "getCascadingResourcesWithMetadata",
-      "introspectionPlugin",
-      "introspectionPluginFn"
+      "introspectionPlugin"
     ],
     "types": [
       "ActionManifestEntry",
@@ -867,6 +965,7 @@
       "RegisterOptions",
       "ResourceManifest",
       "ResourceRegistry",
+      "RouteRow",
       "TenantDataLeak",
       "assertNoTenantData",
       "buildResourceManifest",
@@ -874,10 +973,9 @@
       "cascadeDeleteForOrganization",
       "getCascadingResources",
       "getCascadingResourcesWithMetadata",
-      "introspectionPlugin",
-      "introspectionPluginFn"
+      "introspectionPlugin"
     ],
-    "typesHash": "77ae8c68b06ac5b2"
+    "typesHash": "07a8baf176dde90e"
   },
   "./utils": {
     "stability": "stable",
@@ -917,7 +1015,6 @@
       "defineGuard",
       "deleteResponse",
       "errorContractSchema",
-      "errorDetailSchema",
       "forwardedStreamHeaders",
       "getDefaultCrudSchemas",
       "getHeader",
@@ -941,12 +1038,12 @@
       "queryParams",
       "requireSingleHeaderValue",
       "responses",
-      "scheduleBackground",
       "simpleEqualityMatcher",
       "toJsonSchema",
       "withCompensation"
     ],
     "types": [
+      "AnyAsyncFn",
       "ArcError",
       "ArcHeaders",
       "ArcQueryParser",
@@ -991,6 +1088,7 @@
       "TransitionConfig",
       "UI_MESSAGE_STREAM_HEADERS",
       "UnauthorizedError",
+      "UnconvertibleMode",
       "ValidationError",
       "aggregateListResponse",
       "bareListResponse",
@@ -1008,7 +1106,6 @@
       "defineGuard",
       "deleteResponse",
       "errorContractSchema",
-      "errorDetailSchema",
       "forwardedStreamHeaders",
       "getDefaultCrudSchemas",
       "getHeader",
@@ -1032,12 +1129,11 @@
       "queryParams",
       "requireSingleHeaderValue",
       "responses",
-      "scheduleBackground",
       "simpleEqualityMatcher",
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "c26295e10f2c9b75"
+    "typesHash": "cbf91330d21652f1"
   },
   "./cli": {
     "stability": "stable",
@@ -1063,34 +1159,22 @@
     "stability": "stable",
     "runtime": [
       "arcCorePlugin",
-      "arcCorePluginFn",
       "cachingPlugin",
-      "cachingPluginFn",
       "createPlugin",
       "createRequestIdGenerator",
       "defaultIsDuplicateKeyError",
       "errorHandlerPlugin",
-      "errorHandlerPluginFn",
       "gracefulShutdownPlugin",
-      "gracefulShutdownPluginFn",
       "healthPlugin",
-      "healthPluginFn",
       "metricsPlugin",
-      "metricsPluginFn",
       "pressurePlugin",
-      "pressurePluginFn",
       "realtimePlugin",
-      "realtimePluginFn",
       "replyHelpersPlugin",
       "requestIdPlugin",
-      "requestIdPluginFn",
       "sanitizeRequestId",
       "schedulesPlugin",
-      "schedulesPluginFn",
       "ssePlugin",
-      "ssePluginFn",
-      "versioningPlugin",
-      "versioningPluginFn"
+      "versioningPlugin"
     ],
     "types": [
       "ArcCore",
@@ -1126,36 +1210,24 @@
       "TracingOptions",
       "VersioningOptions",
       "arcCorePlugin",
-      "arcCorePluginFn",
       "cachingPlugin",
-      "cachingPluginFn",
       "createPlugin",
       "createRequestIdGenerator",
       "defaultIsDuplicateKeyError",
       "errorHandlerPlugin",
-      "errorHandlerPluginFn",
       "gracefulShutdownPlugin",
-      "gracefulShutdownPluginFn",
       "healthPlugin",
-      "healthPluginFn",
       "metricsPlugin",
-      "metricsPluginFn",
       "pressurePlugin",
-      "pressurePluginFn",
       "realtimePlugin",
-      "realtimePluginFn",
       "replyHelpersPlugin",
       "requestIdPlugin",
-      "requestIdPluginFn",
       "sanitizeRequestId",
       "schedulesPlugin",
-      "schedulesPluginFn",
       "ssePlugin",
-      "ssePluginFn",
-      "versioningPlugin",
-      "versioningPluginFn"
+      "versioningPlugin"
     ],
-    "typesHash": "92239c410cf607fc"
+    "typesHash": "8b4dc25b75313530"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1179,7 +1251,6 @@
     "runtime": [
       "MemoryAuditStore",
       "auditPlugin",
-      "auditPluginFn",
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
@@ -1194,21 +1265,19 @@
       "AuditStoreOptions",
       "MemoryAuditStore",
       "MemoryAuditStoreOptions",
+      "RepositoryAuditStoreOptions",
       "auditPlugin",
-      "auditPluginFn",
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "ab2649539b7a5426"
+    "typesHash": "d08b96febfa2ead4"
   },
   "./docs": {
     "stability": "stable",
     "runtime": [
       "buildOpenApiSpec",
       "openApiPlugin",
-      "openApiPluginFn",
-      "scalarPlugin",
-      "scalarPluginFn"
+      "scalarPlugin"
     ],
     "types": [
       "ExternalOpenApiPaths",
@@ -1218,11 +1287,9 @@
       "ScalarOptions",
       "buildOpenApiSpec",
       "openApiPlugin",
-      "openApiPluginFn",
-      "scalarPlugin",
-      "scalarPluginFn"
+      "scalarPlugin"
     ],
-    "typesHash": "299ff546a1508ed5"
+    "typesHash": "97eb2969e54bd315"
   },
   "./encryption": {
     "stability": "stable",
@@ -1260,7 +1327,6 @@
       "MemoryIdempotencyStore",
       "createIdempotencyResult",
       "idempotencyPlugin",
-      "idempotencyPluginFn",
       "repositoryAsIdempotencyStore"
     ],
     "types": [
@@ -1275,10 +1341,9 @@
       "RedisIdempotencyStoreOptions",
       "createIdempotencyResult",
       "idempotencyPlugin",
-      "idempotencyPluginFn",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "470156de926d9c66"
+    "typesHash": "acc4da80ae7a1908"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1296,7 +1361,7 @@
       "ioredisAsIdempotencyClient",
       "upstashAsIdempotencyClient"
     ],
-    "typesHash": "4f0a3ef943a55afb"
+    "typesHash": "6c1559c50dce6174"
   },
   "./events": {
     "stability": "stable",
@@ -1304,6 +1369,7 @@
       "ARC_LIFECYCLE_EVENTS",
       "CACHE_EVENTS",
       "CRUD_EVENT_SUFFIXES",
+      "DEFAULT_RELAY_LAG_UNHEALTHY_MS",
       "EventOutbox",
       "MemoryEventTransport",
       "MemoryOutboxStore",
@@ -1314,6 +1380,7 @@
       "defineEvent",
       "eventPlugin",
       "exponentialBackoff",
+      "readOutboxHealth",
       "repositoryAsOutboxStore",
       "subscribeWithBoundary",
       "subscribeWithSchema",
@@ -1329,6 +1396,7 @@
       "CacheEvent",
       "CrudEventSuffix",
       "CustomValidator",
+      "DEFAULT_RELAY_LAG_UNHEALTHY_MS",
       "EventDefinitionInput",
       "EventDefinitionOutput",
       "EventOutbox",
@@ -1338,9 +1406,13 @@
       "EventRegistryOptions",
       "EventSchema",
       "ExponentialBackoffOptions",
+      "FastifyEventBus",
       "MemoryEventTransport",
       "MemoryEventTransportOptions",
       "MemoryOutboxStore",
+      "OutboxDrainResult",
+      "OutboxHealth",
+      "OutboxHealthStore",
       "OutboxModuleExports",
       "OutboxModuleOptions",
       "OutboxRelayErrorHandler",
@@ -1364,6 +1436,7 @@
       "defineEvent",
       "eventPlugin",
       "exponentialBackoff",
+      "readOutboxHealth",
       "repositoryAsOutboxStore",
       "subscribeWithBoundary",
       "subscribeWithSchema",
@@ -1371,7 +1444,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "9262d0fefbc1f282"
+    "typesHash": "6e057b427ccafb84"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1383,7 +1456,7 @@
       "RedisEventTransportOptions",
       "RedisLike"
     ],
-    "typesHash": "280bb3f2e541489f"
+    "typesHash": "842c3c5f1bb36c3a"
   },
   "./events/redis-stream": {
     "stability": "stable",
@@ -1395,7 +1468,7 @@
       "RedisStreamTransport",
       "RedisStreamTransportOptions"
     ],
-    "typesHash": "6ad08c94e2453a4f"
+    "typesHash": "4b35231f54ced5f7"
   },
   "./testing": {
     "stability": "stable",
@@ -1422,8 +1495,6 @@
       "createTestTimer",
       "expectArc",
       "mongoMemoryDatabase",
-      "preloadResources",
-      "preloadResourcesAsync",
       "runAuthorizationConformance",
       "runStorageContract",
       "safeParseBody",
@@ -1494,8 +1565,6 @@
       "createTestTimer",
       "expectArc",
       "mongoMemoryDatabase",
-      "preloadResources",
-      "preloadResourcesAsync",
       "runAuthorizationConformance",
       "runStorageContract",
       "safeParseBody",
@@ -1506,7 +1575,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "089ecb9a818f5769"
+    "typesHash": "3f87e46fdedee72a"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1537,15 +1606,19 @@
     "runtime": [
       "ArcFactory",
       "DEFAULT_LOGGER_REDACT_PATHS",
-      "collectModuleHealthChecks",
-      "collectModuleScheduledJobs",
+      "activateBridges",
+      "analyzeModuleGraph",
+      "buildModuleGraph",
       "collectModuleWorkflows",
       "createApp",
+      "createRelayNudge",
       "createWorker",
+      "crudEventsOf",
       "defineModule",
-      "describeResolvedModule",
+      "dependentsOf",
       "developmentPreset",
       "edgePreset",
+      "eventTopology",
       "extendModule",
       "getModuleExports",
       "getModuleState",
@@ -1560,11 +1633,15 @@
       "preloadResources",
       "preloadResourcesAsync",
       "productionPreset",
+      "renderModuleGraph",
       "resolveContribution",
       "resolveModule",
       "subscribeModuleEventHandlers",
       "testingPreset",
-      "toFetchHandler"
+      "toAsyncApi",
+      "toFetchHandler",
+      "verifyModuleGraph",
+      "withRelayNudge"
     ],
     "types": [
       "ArcFactory",
@@ -1572,40 +1649,62 @@
       "ArcModuleInput",
       "ArcModuleRegistry",
       "ArcWorker",
+      "AsyncApiCatalogEntry",
+      "AsyncApiInfo",
       "AuthOption",
       "BetterAuthOption",
+      "BootDisposer",
       "CreateAppOptions",
       "CreateWorkerOptions",
+      "CrudSurface",
       "CustomAuthenticatorOption",
       "CustomPluginAuthOption",
       "DEFAULT_LOGGER_REDACT_PATHS",
+      "DerivedPublishes",
+      "EagerGlobResult",
       "EventHandlerDefinition",
       "FetchHandlerOptions",
       "JwtAuthOption",
+      "LazyBridge",
+      "LazyGlobResult",
       "LoadResourcesOptions",
       "ModuleContribution",
       "ModuleDisposer",
       "ModuleExtension",
+      "ModuleGraph",
+      "ModuleGraphAnalysis",
+      "ModuleGraphIssue",
+      "ModuleGraphMode",
+      "ModuleGraphNode",
+      "ModuleGraphOptions",
+      "ModuleKind",
       "ModuleSetupContext",
       "ModuleState",
       "MultipartOptions",
       "RawBodyOptions",
+      "RelayNudge",
+      "RelayOption",
       "ResolvedModuleDescriptor",
       "ResolvedModuleLifecycle",
       "ResolvedResourceDescriptor",
       "ResourceLike",
       "ResourceModule",
+      "SkippedBridge",
       "UnderPressureOptions",
       "WorkerHealthOptions",
-      "collectModuleHealthChecks",
-      "collectModuleScheduledJobs",
+      "activateBridges",
+      "analyzeModuleGraph",
+      "buildModuleGraph",
       "collectModuleWorkflows",
       "createApp",
+      "createRelayNudge",
       "createWorker",
+      "crudEventsOf",
       "defineModule",
-      "describeResolvedModule",
+      "dependentsOf",
       "developmentPreset",
       "edgePreset",
+      "eventTopology",
       "extendModule",
       "getModuleExports",
       "getModuleState",
@@ -1620,13 +1719,17 @@
       "preloadResources",
       "preloadResourcesAsync",
       "productionPreset",
+      "renderModuleGraph",
       "resolveContribution",
       "resolveModule",
       "subscribeModuleEventHandlers",
       "testingPreset",
-      "toFetchHandler"
+      "toAsyncApi",
+      "toFetchHandler",
+      "verifyModuleGraph",
+      "withRelayNudge"
     ],
-    "typesHash": "dddcf6ca5bb1b205"
+    "typesHash": "169c75a50e7c3d4f"
   },
   "./schemas": {
     "stability": "stable",
@@ -1706,8 +1809,38 @@
   "./integrations": {
     "stability": "stable",
     "runtime": [],
-    "types": [],
-    "typesHash": "3885459f8ec054ff"
+    "types": [
+      "BetterAuthHandler",
+      "CallToolResult",
+      "CreateMcpServerConfig",
+      "CrudOperation",
+      "EventGatewayOptions",
+      "JobDefinition",
+      "JobDispatchOptions",
+      "JobDispatcher",
+      "JobMeta",
+      "JobsPluginOptions",
+      "McpAuthResult",
+      "McpPluginOptions",
+      "McpResourceConfig",
+      "PromptDefinition",
+      "QueueStats",
+      "StreamlinePluginOptions",
+      "ToolAnnotations",
+      "ToolContext",
+      "ToolDefinition",
+      "WebSocketClient",
+      "WebSocketMessage",
+      "WebSocketPluginOptions",
+      "WebhookDeliveryRecord",
+      "WebhookManager",
+      "WebhookPluginOptions",
+      "WebhookStore",
+      "WebhookSubscription",
+      "WorkflowLike",
+      "WorkflowRunLike"
+    ],
+    "typesHash": "af60ceee3e2d3fc9"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1717,6 +1850,7 @@
       "STREAMLINE_STREAM_EVENTS",
       "STREAMLINE_TERMINAL_EVENTS",
       "TERMINAL_RUN_STATUSES",
+      "isStreamTerminal",
       "streamlinePlugin"
     ],
     "types": [
@@ -1729,9 +1863,10 @@
       "WorkflowLike",
       "WorkflowRunLike",
       "WorkflowStartOptions",
+      "isStreamTerminal",
       "streamlinePlugin"
     ],
-    "typesHash": "71742402c56cf2eb"
+    "typesHash": "95c7cf44c4ef1c5f"
   },
   "./integrations/websocket": {
     "stability": "stable",
@@ -1745,6 +1880,7 @@
     ],
     "types": [
       "AuthResult",
+      "DeadQueueEntry",
       "GeoPoint",
       "GeoPublishOpts",
       "GeoRoom",
@@ -1763,7 +1899,7 @@
       "WebSocketPluginOptions",
       "websocketPlugin"
     ],
-    "typesHash": "3de314d9e914eb2f"
+    "typesHash": "e00f2cc18075a9da"
   },
   "./integrations/websocket-redis": {
     "stability": "stable",
@@ -1775,7 +1911,7 @@
       "RedisWebSocketAdapter",
       "RedisWebSocketAdapterOptions"
     ],
-    "typesHash": "aca566e43f79c901"
+    "typesHash": "8a180959e99fe7ee"
   },
   "./integrations/websocket-pushref-redis": {
     "stability": "stable",
@@ -1787,7 +1923,7 @@
       "RedisPushRefStore",
       "RedisPushRefStoreOptions"
     ],
-    "typesHash": "9c39265b639095b9"
+    "typesHash": "b2d04a0588c82586"
   },
   "./integrations/jobs": {
     "stability": "stable",
@@ -1811,7 +1947,7 @@
       "executeTimedHandler",
       "jobsPlugin"
     ],
-    "typesHash": "b85694018faae476"
+    "typesHash": "9a30fb246bc9662c"
   },
   "./integrations/event-gateway": {
     "stability": "experimental",
@@ -1822,7 +1958,7 @@
       "EventGatewayOptions",
       "eventGatewayPlugin"
     ],
-    "typesHash": "e8f7f8be42033afd"
+    "typesHash": "020d122c470e7af0"
   },
   "./integrations/webhooks": {
     "stability": "stable",
@@ -1863,7 +1999,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "f6d7e95168ab1cfe"
+    "typesHash": "5b9c1100ed8a0c90"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -1897,7 +2033,6 @@
       "PUBLIC_SCOPE",
       "createTenantKeyGenerator",
       "elevationPlugin",
-      "elevationPluginFn",
       "getAncestorOrgIds",
       "getClientId",
       "getDPoPJkt",
@@ -1941,7 +2076,6 @@
       "TenantKeyGeneratorOptions",
       "createTenantKeyGenerator",
       "elevationPlugin",
-      "elevationPluginFn",
       "getAncestorOrgIds",
       "getClientId",
       "getDPoPJkt",
@@ -1970,7 +2104,7 @@
       "resolveOrgFromHeader",
       "scopeFirstCtx"
     ],
-    "typesHash": "7303f95c1885be65"
+    "typesHash": "d9352d2ab4bc0cfd"
   },
   "./mcp": {
     "stability": "stable",
@@ -2028,6 +2162,7 @@
       "McpAuthResolver",
       "McpAuthResult",
       "McpBridge",
+      "McpContextExtras",
       "McpGuard",
       "McpOperation",
       "McpPluginOptions",
@@ -2075,7 +2210,7 @@
       "toCallToolResult",
       "toCallToolSuccess"
     ],
-    "typesHash": "8ac3017b460636d3"
+    "typesHash": "0e957042eb89294e"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2090,7 +2225,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "49390d63045c73bf"
+    "typesHash": "c8a14ebc01022605"
   },
   "./scim": {
     "stability": "stable",
@@ -2150,27 +2285,6 @@
     ],
     "typesHash": "6fcdd2fc08397632"
   },
-  "./sync": {
-    "stability": "experimental",
-    "runtime": [
-      "CursorExpiredError",
-      "MemoryChangeLogStore"
-    ],
-    "types": [
-      "ChangeEntry",
-      "ChangeLogAppendOptions",
-      "ChangeLogStore",
-      "ChangeOp",
-      "ChangesPage",
-      "ChangesSinceOptions",
-      "CursorExpiredError",
-      "MemoryChangeLogStore",
-      "PushMutation",
-      "PushVerdict",
-      "PushVerdictStatus"
-    ],
-    "typesHash": "de61916180a6ff52"
-  },
   "./usage": {
     "stability": "experimental",
     "runtime": [
@@ -2195,7 +2309,7 @@
       "usagePeriod",
       "usagePlugin"
     ],
-    "typesHash": "fc038ae7b5b48e33"
+    "typesHash": "2c45185709eeca28"
   },
   "./cleanup": {
     "stability": "stable",
@@ -2205,11 +2319,9 @@
       "CleanupError",
       "CleanupErrors",
       "DEFAULT_CLEANUP_LIMITS",
-      "GLOBAL_DESTRUCTIVE_KEY",
       "MemoryCleanupEvidenceStore",
       "MemoryCleanupJobQueue",
       "MemoryCleanupRunStore",
-      "canonicalJson",
       "computeManifestDigest",
       "computePlanDigest",
       "createCleanupRegistry",
@@ -2262,7 +2374,6 @@
       "DEFAULT_CLEANUP_LIMITS",
       "DataCleanupModuleDeps",
       "ExecuteInput",
-      "GLOBAL_DESTRUCTIVE_KEY",
       "MemoryCleanupEvidenceStore",
       "MemoryCleanupJobQueue",
       "MemoryCleanupRunStore",
@@ -2275,7 +2386,6 @@
       "RecipeFromStepsInput",
       "VerificationCheck",
       "VerificationResult",
-      "canonicalJson",
       "computeManifestDigest",
       "computePlanDigest",
       "createCleanupRegistry",
@@ -2283,7 +2393,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "bbbda1b996ad7036"
+    "typesHash": "63352fbe116352ff"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2296,7 +2406,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "8e3d299dfcadb1a9"
+    "typesHash": "59f131bf60207877"
   },
   "./testing/outbox": {
     "stability": "stable",
@@ -2309,5 +2419,17 @@
       "runOutboxStoreContract"
     ],
     "typesHash": "52549432739f5ca6"
+  },
+  "./testing/ports": {
+    "stability": "stable",
+    "runtime": [
+      "assertRequiresPorts"
+    ],
+    "types": [
+      "RequiredPortsOptions",
+      "RequiredPortsResult",
+      "assertRequiresPorts"
+    ],
+    "typesHash": "66340d96261c6f72"
   }
 }

@@ -1,29 +1,19 @@
 /**
  * Arc modules — a whole domain composed into an app as one entry.
  *
- * A resource is one route group; an `ArcModule` is a domain package's entire
- * contribution (engine init + resources + post-wiring) as a single value, so
- * the host stops hand-threading pieces across `bootstrap` / `resources` /
- * `afterResources`:
+ * An `ArcModule` is a domain package's entire contribution (engine init +
+ * resources + post-wiring) as one value:
  *
  * ```ts
  * createApp({ modules: [accountingModule({ permissions })], resources: [health] })
  * ```
  *
- * Pure sugar over the existing lifecycle: each module expands into the SAME
- * phases, in `dependsOn` order (list order absent edges), running BEFORE the
- * app-level entry for that phase — so a module's engine is live before
- * app-level `bootstrap`, and app-level `afterResources` can wire across
- * modules. `onClose` runs in REVERSE.
+ * Sugar over the existing lifecycle: each module expands into the SAME phases,
+ * in `dependsOn` order, running BEFORE the app-level entry for that phase.
+ * `onClose` runs in REVERSE.
  *
- * RESOURCES are the one phase with two orderings, both intentional: app
- * resources RESOLVE first, module resources REGISTER first (prepended, so
- * their routes mount ahead). Module resources otherwise flow arc's normal
- * registration — prefix, dedup, OpenAPI, audit — with no special-casing.
- *
- * Siblings: `resolve.ts` (input forms), `order.ts` (topological sort),
- * `contributions.ts` (health/workflow/schedule), `lifecycle.ts` (subscribe +
- * teardown), `index.ts` (`defineModule`, `getModuleExports`).
+ * RESOURCES have two intentional orderings: app resources RESOLVE first,
+ * module resources REGISTER first (prepended, so their routes mount ahead).
  */
 
 import type { FastifyInstance } from "fastify";
@@ -37,8 +27,7 @@ import type { ModuleDisposer, ModuleSetupContext } from "./disposers.js";
 /**
  * A module's contribution of some arm (event handlers, scheduled jobs, …).
  * Either a static array or a factory resolved AFTER all module bootstraps, so a
- * contribution can close over booted engines / the Fastify instance instead of
- * reaching for a global getter (the coupling the module contract removes).
+ * contribution can close over booted engines instead of a global getter.
  */
 export type ModuleContribution<T> =
   | readonly T[]
@@ -61,22 +50,13 @@ export interface EventHandlerDefinition {
    */
   name?: string;
   /**
-   * Contain handler failures inside an error boundary — arc wraps `handler`
-   * with `wrapWithBoundary`, so a throw is logged (through `fastify.log`, with
-   * `{ err, event, eventId, handler }`) and swallowed instead of reaching the
-   * transport.
+   * Contain handler failures: a throw is logged via `fastify.log` and swallowed
+   * instead of reaching the transport.
    *
-   * **Off by default, deliberately.** Reaching the transport is what makes the
-   * durable path work: `RedisStreamTransport` leaves the message unacked, so it
-   * is redelivered and eventually DLQ'd. Silently swallowing by default would
-   * turn every module handler into best-effort delivery.
-   *
-   * Turn it ON for fire-and-forget work — projections, cache invalidation,
-   * notification fan-out — where a failure must not block the ack and a retry
-   * would only delay the next event's resync. That is precisely the case where
-   * a module author would otherwise abandon this arm for an imperative
-   * `subscribeWithBoundary` call in `afterResources` and lose arc's
-   * teardown-before-`onClose` guarantee.
+   * **Off by default, deliberately** — reaching the transport is what makes the
+   * durable path work (unacked → redelivered → DLQ). Turn it ON for
+   * fire-and-forget work (projections, cache invalidation, fan-out) where a
+   * failure must not block the ack.
    *
    * ```ts
    * defineModule({ name: "search", eventHandlers: [
@@ -84,57 +64,74 @@ export interface EventHandlerDefinition {
    * ] })
    * ```
    *
-   * The object form adds an `onError` sink (metrics / alerting) in place of the
-   * default log; it runs INSIDE the boundary, so a throwing `onError` is itself
-   * caught and logged rather than escaping.
+   * The object form's `onError` replaces the default log; it runs INSIDE the
+   * boundary, so a throwing `onError` is caught and logged too.
    */
   boundary?: boolean | { onError?: (error: Error, event: DomainEvent) => void | Promise<void> };
 }
 
-export interface ArcModule<TExports = unknown> {
+export interface ArcModule<
+  TExports = unknown,
+  TPorts extends PortName = PortName,
+  TOptionalPorts extends PortName = PortName,
+> {
   /** Stable identifier — appears in boot logs and duplicate-module detection. */
   readonly name: string;
 
   /**
-   * Names of modules this one must be composed AFTER. arc topologically orders
-   * the `modules` array from these edges before ANY phase runs, so a
-   * dependency's `bootstrap` (and thus its `fastify.arc.modules[dep]` export)
-   * is always live before this module's bootstrap, resources, or
-   * afterResources. Teardown (`onClose`) runs in the reverse of that order.
-   *
-   * Use this instead of relying on list position when a module reads another's
-   * public export — e.g. `@classytic/arc-reservation` wiring off
-   * `arc.modules.order`:
+   * Names of modules this one must be composed AFTER. A dependency's
+   * `bootstrap` (and its `fastify.arc.modules[dep]` export) is always live
+   * before this module's phases run; teardown runs in reverse.
    *
    * ```ts
    * defineModule({ name: "reservation", dependsOn: ["order"], bootstrap: (f) => {
    *   const order = getModuleExports<OrderEngine>(f, "order"); // guaranteed live
-   *   …
    * }});
    * ```
    *
-   * The order is a STABLE topological sort: modules with no `dependsOn` (and
-   * any two modules with no edge between them) keep their original list order,
-   * so adding `dependsOn` never silently reorders an unrelated module. All
-   * failure modes are fail-fast at boot: a name not in the composed set, a
-   * self-reference, and dependency CYCLES each throw with the offending path.
+   * STABLE topological sort: modules with no edge between them keep list
+   * order. Unknown names, self-references and cycles fail at boot.
    *
-   * **`dependsOn` is COMPOSITION order, not lazy loading.** Every module input
-   * (including dynamic-import thunks) is resolved — imported — up front via
-   * `Promise.all` BEFORE the sort; `dependsOn` then orders the *composition*
-   * (which module's `plugins`/`bootstrap` runs first), it does NOT delay
-   * *importing* a dependent until its dependency is ready. Use a thunk to gate
-   * whether a module is imported at all (region/tier packs); use `dependsOn`
-   * to order modules that are already selected.
-   *
-   * **Convention: every HARD sibling dependency belongs here** — including
-   * ones read lazily. `lazyRequiredModuleExports` defers the export READ to
-   * first use (and eagerly validates the module is composed), but only
-   * `dependsOn` orders composition so the sibling's engine exists before
-   * yours initializes. Omit the edge only for genuinely optional
+   * Orders COMPOSITION, not importing — every input (thunks included) is
+   * imported up front. Every HARD sibling dependency belongs here, even one
+   * read via `lazyRequiredModuleExports`; omit it only for optional
    * integrations (`lazyModuleExports` / `getOptionalModuleExports`).
    */
-  readonly dependsOn?: readonly string[];
+  readonly dependsOn?: readonly ModuleName[];
+  /**
+   * - `'domain'` (default).
+   * - `'bridge'` joins two or more domains (order ↔ accounting): ACTIVE only when every
+   *   `dependsOn` module is composed, dropped otherwise — no gate code.
+   * - `'platform'` — infrastructure (auth, outbox, notifications): orders ahead of every other
+   *   ready module, and `resolveModuleClosure` includes it in every closure.
+   * - `'aggregator'` reads across the whole composed fleet (data cleanup, period close): it
+   *   orders AFTER every non-aggregator module, as if it `dependsOn` all of them. A module that
+   *   `dependsOn` an aggregator is therefore a cycle.
+   */
+  readonly kind?: "domain" | "bridge" | "platform" | "aggregator";
+  /**
+   * The events this module OWNS — the facts it publishes, one owner per event, each named inside
+   * `eventNamespace`. What it consumes is derived from `eventHandlers`. Checked at boot by
+   * `createApp({ moduleGraph: { events } })`; rendered by `renderModuleGraph`.
+   */
+  readonly publishes?: readonly (string | { readonly name: string })[];
+  /**
+   * Owner prefix(es) of every event in `publishes` — `order` owns `order:placed` and
+   * `order.placed`. A list when one module owns several aggregates (`['order', 'rma']`).
+   * Default: the module name.
+   */
+  readonly eventNamespace?: string | readonly string[];
+
+  /**
+   * What must be SUPPLIED or COMPOSED for this module to boot — checked before any module boots,
+   * every gap in one error. Ordering stays `dependsOn`'s job; nothing here adds an edge.
+   *
+   * ```ts
+   * defineModule({ name: "order", requires: { ports: ["outbox"], optionalPorts: ["calendar"], modules: ["invoice"] },
+   *   bootstrap: (f, { ports }) => createOrderEngine(ports.outbox, ports.calendar) })
+   * ```
+   */
+  readonly requires?: ModuleRequirements<TPorts, TOptionalPorts>;
 
   /**
    * Infra SETUP — the module analog of the app's `plugins()`. Runs after the
@@ -147,7 +144,6 @@ export interface ArcModule<TExports = unknown> {
    * plugin throws; a bare multi-arg function warns.
    *
    * Receives `{ defer }` for teardown, or return one disposer as shorthand.
-   * v3 renames this slot to `setup` with no alias (v3.md).
    *
    * ```ts
    * plugins: async (fastify) => {
@@ -159,51 +155,25 @@ export interface ArcModule<TExports = unknown> {
    */
   plugins?: (
     fastify: FastifyInstance,
-    context: ModuleSetupContext,
+    context: ModuleSetupContext<TPorts, TOptionalPorts>,
   ) => ModuleDisposer | undefined | Promise<ModuleDisposer | undefined>;
 
   /**
    * Domain error mappers this module ships (see `defineErrorMapper`). Merged
    * into the app's error handler at boot, AFTER any host-declared mappers —
    * host config keeps priority; module mappers follow in composition order.
-   *
-   * Closes the "composition root must know every domain's error classes"
-   * coupling: before this slot, adding `@classytic/arc-shipping` meant
-   * remembering to also register its `ShippingError` mapper in the host's
-   * `errorHandler.errorMappers` — forget it and the domain error crossed the
-   * wire as an opaque 500. Now the module carries its own mapper:
-   *
-   * ```ts
-   * defineModule({
-   *   name: 'shipping',
-   *   errorMappers: [shippingErrorMapper],
-   *   ...
-   * })
-   * ```
+   * The host no longer has to know every domain's error classes.
    */
   readonly errorMappers?: readonly ErrorMapper[];
 
   /**
-   * Domain init — runs in the `bootstrap` phase (after all `plugins`, before
-   * resources). Initialize engines / singletons / event subscriptions here so
-   * they are live when this module's `resources` factory runs.
+   * Domain init — runs after all `plugins`, before resources, so engines are
+   * live when this module's `resources` factory runs.
    *
-   * A returned value becomes the module's PUBLIC EXPORT, recorded at
-   * `fastify.arc.modules[name]` (wiki/modules.md — "no container", layer 2).
-   * Later modules' bootstraps can read it (list order = init order), which is
-   * how cross-module ports are wired without a DI container. Declare the
-   * export shape via `defineModule<TExports>` and read it back with the typed
-   * accessor — no cast at the consuming end:
-   *
-   * ```ts
-   * // arc-invoice bootstrap, composed AFTER arc-accounting:
-   * const acct = getModuleExports<AccountingEngine>(fastify, "accounting");
-   * ```
-   *
-   * The return value is the module's export, so teardown here goes through
-   * `defer` (the second argument) rather than a returned disposer — register
-   * each resource the moment it exists and partial-init cleanup becomes exact
-   * instead of a chain of `?.` guards:
+   * The returned value is the module's PUBLIC EXPORT at
+   * `fastify.arc.modules[name]`; later modules read it with
+   * `getModuleExports<T>(fastify, name)`. Because the return slot is taken,
+   * teardown goes through `defer`, registered the moment each resource exists:
    *
    * ```ts
    * bootstrap: async (fastify, { defer }) => {
@@ -217,29 +187,20 @@ export interface ArcModule<TExports = unknown> {
    */
   bootstrap?: (
     fastify: FastifyInstance,
-    context: ModuleSetupContext,
+    context: ModuleSetupContext<TPorts, TOptionalPorts>,
   ) => TExports | Promise<TExports>;
 
   /**
-   * App-level resource NAMES this module SUPERSEDES. When the host lists (or
-   * discovers) a resource of the same name, arc drops the app copy and
-   * registers this module's — so the host maintains no "which resources did
-   * modules take over" filter set.
+   * App-level resource NAMES this module SUPERSEDES: an app resource of the
+   * same name is dropped and this module's registered instead.
    *
-   * PREFER `owns: "provided"`: arc derives the list from the resources the
-   * module actually returned, so the claim cannot disagree with reality.
-   * Resources resolve once, names are validated, `owns` is derived, and
-   * supersession runs after — one phase arc owns.
+   * PREFER `owns: "provided"` — derived from the resources the module actually
+   * returned, so the claim cannot disagree with reality. An explicit array is
+   * ENFORCED at boot: each name must appear in THIS module's own `resources`
+   * (a sibling's does not count), else a typo would silently remove the app's
+   * route with nothing serving it.
    *
-   * The explicit array is ENFORCED at boot: a claimed name must appear in THIS
-   * module's own `resources`, or boot fails naming the unmet names. Without
-   * that, a typo or a deleted resource booted "successfully" with the app's
-   * route removed and nothing serving it. A sibling module providing the name
-   * does NOT satisfy the claim — ownership is local to its declarer.
-   *
-   * It only filters the APP list, never the module's own resources; an entry
-   * matching no app resource is a silent no-op (a module may pre-declare a
-   * name before any fork exists). Collected across modules as a union.
+   * Filters only the APP list; a name matching no app resource is a no-op.
    */
   readonly owns?: readonly string[] | "provided";
 
@@ -256,31 +217,21 @@ export interface ArcModule<TExports = unknown> {
       ) => ReadonlyArray<ResourceLike> | Promise<ReadonlyArray<ResourceLike>>);
 
   /**
-   * Post-registration wiring — runs in the `afterResources` phase, once this
-   * module's routes are mounted. Use for cross-resource event subscriptions the
-   * module owns.
-   *
-   * Receives `{ defer }`, and may return a disposer, on the same terms as
-   * `plugins` — handy for wiring that must be unwound (a subscription, a
-   * listener) without hoisting a handle into module scope.
+   * Post-registration wiring — runs once this module's routes are mounted.
+   * Receives `{ defer }` and may return a disposer, same as `plugins`.
    */
   afterResources?: (
     fastify: FastifyInstance,
-    context: ModuleSetupContext,
+    context: ModuleSetupContext<TPorts, TOptionalPorts>,
   ) => ModuleDisposer | undefined | Promise<ModuleDisposer | undefined>;
 
   /**
-   * Readiness checks this module contributes to the app's
-   * `healthPlugin` (`/_health/ready`). Collected across ALL modules in
-   * dependency order and merged BEFORE the host's app-level `arcPlugins.health`
-   * checks (modules-first, host-last) — the same additive convention arc uses
-   * for resources and error mappers. Check `name`s must be unique across the
-   * module graph (arc fails at boot on a collision, attributing both owners).
+   * Readiness checks for `/_health/ready`, merged BEFORE the host's
+   * `arcPlugins.health` checks. Names must be unique across the module graph
+   * (boot fails on a collision).
    *
-   * STATIC by design (not a factory): declare the check up front and let its
-   * `check()` closure resolve dependencies LAZILY at probe time, so collection
-   * can happen before the health plugin registers and the worker probe
-   * (`createWorker`) receives the identical union without a second registration.
+   * STATIC by design (not a factory): collection happens before the health
+   * plugin registers, so `check()` should resolve dependencies LAZILY.
    *
    * ```ts
    * defineModule({ name: "inventory", healthChecks: [
@@ -291,15 +242,10 @@ export interface ArcModule<TExports = unknown> {
   readonly healthChecks?: readonly HealthCheck[];
 
   /**
-   * Domain-event subscriptions this module owns — the declarative replacement
-   * for imperative `fastify.events.subscribe(...)` calls inside
-   * `afterResources`. Subscribed in dependency order during the
-   * `afterResources` phase (routes mounted, engines booted), and arc RETAINS
-   * every unsubscribe and invokes it at shutdown BEFORE module `onClose` (while
-   * module deps are still alive). Named handlers must be unique across the
-   * module graph; a module that declares handlers while the event subsystem is
-   * disabled (`arcPlugins.events: false`) fails at boot. Array or factory (the
-   * factory runs after bootstraps, so it can close over booted engines).
+   * Domain-event subscriptions this module owns. Subscribed in dependency order
+   * during `afterResources`; unsubscribed at shutdown BEFORE module `onClose`
+   * (deps still alive). Named handlers must be unique across the graph;
+   * declaring handlers with `arcPlugins.events: false` fails at boot.
    *
    * ```ts
    * defineModule({ name: "party", eventHandlers: [
@@ -310,13 +256,9 @@ export interface ArcModule<TExports = unknown> {
   readonly eventHandlers?: ModuleContribution<EventHandlerDefinition>;
 
   /**
-   * Durable workflows this module owns. OPAQUE to arc core — arc never imports
-   * `@classytic/streamline`; the value flows through untouched and the
-   * streamline integration (`@classytic/arc/integrations/streamline`, a peer)
-   * gives it meaning (name/shape validation, registration). Collected via
-   * `collectModuleWorkflows` at integration-init time (after module bootstraps),
-   * so a factory can close over the shared workflow container the integration
-   * decorates on the instance.
+   * Durable workflows this module owns. OPAQUE to arc core — the streamline
+   * integration (`@classytic/arc/integrations/streamline`) validates and
+   * registers them after module bootstraps.
    *
    * ```ts
    * defineModule({ name: "invoice",
@@ -326,12 +268,10 @@ export interface ArcModule<TExports = unknown> {
   readonly workflows?: ModuleContribution<unknown>;
 
   /**
-   * Recurring interval schedules this module owns. Arc composes them into its
-   * existing `schedulesPlugin` after bootstraps, in dependency order. Names
-   * must be unique across the module graph. Configure multi-replica locking via
-   * `arcPlugins.schedules`; explicitly disabling that runner while a module
-   * declares schedules fails boot instead of silently dropping work. Array or
-   * factory (the factory runs once after bootstraps and may close over engines).
+   * Recurring interval schedules, composed into `schedulesPlugin` after
+   * bootstraps. Names must be unique across the graph; locking is configured
+   * via `arcPlugins.schedules`, and disabling that runner fails boot rather
+   * than silently dropping work.
    *
    * ```ts
    * defineModule({ name: "loyalty", scheduledJobs: [
@@ -342,42 +282,18 @@ export interface ArcModule<TExports = unknown> {
   readonly scheduledJobs?: ModuleContribution<ScheduleDefinition>;
 
   /**
-   * Teardown — destroy engines, stop timers, flush the module's outbox.
-   * Modules close in REVERSE composition order (last composed, first closed),
-   * mirroring init, BEFORE the app-level `onClose` and before infra plugins'
-   * own close hooks (so teardown still sees a live DB/Redis).
+   * Teardown — destroy engines, stop timers, flush the outbox. Modules close in
+   * REVERSE composition order, BEFORE the app-level `onClose` and infra
+   * plugins' close hooks (so teardown still sees a live DB/Redis).
    *
-   * Boot is transactional: if any phase fails mid-boot — including THIS
-   * module's own `plugins`/`bootstrap` — arc immediately closes every module
-   * that entered an init phase, this closer included, in reverse order, then
-   * rethrows the original boot error. A closer runs AT MOST ONCE across the
-   * rollback and shutdown paths, and one throwing closer never blocks the
-   * rest (best-effort; failures are logged).
+   * Boot is transactional: if any phase fails, every module that entered an
+   * init phase (this one included) is closed in reverse, then the original
+   * error is rethrown. A closer runs AT MOST ONCE; a throwing one never blocks
+   * the rest.
    *
-   * Because rollback fires after a PARTIAL init — your `bootstrap` opened a
-   * client and threw on the next line, or your `plugins` ran but `bootstrap`
-   * never did — write closers defensively. Guard everything init may not have
-   * reached: `client?.close()`, not `client.close()`.
-   *
-   * ```ts
-   * let client: Client | undefined;
-   * defineModule({
-   *   name: "billing",
-   *   bootstrap: async () => {
-   *     client = await openClient();   // allocated…
-   *     await migrate(client);         // …and this may throw
-   *   },
-   *   onClose: async () => { await client?.close(); },  // still runs
-   * });
-   * ```
-   *
-   * Prefer `defer` (the setup phases' second argument) for anything acquired
-   * step-by-step: it registers each teardown at the point of acquisition, so
-   * the runtime knows exactly what was reached and the `?.` guards above
-   * disappear. `onClose` remains the right slot for tearing down what
-   * `bootstrap` RETURNED — the module's engine — and runs FIRST, ahead of the
-   * module's deferred disposers (see `disposers.ts` for the ordering rule).
-   * The two compose; either alone is complete.
+   * Rollback can follow a PARTIAL init, so guard what init may not have
+   * reached (`client?.close()`), or prefer `defer` for step-by-step
+   * acquisition. `onClose` runs FIRST, ahead of deferred disposers.
    */
   onClose?: (fastify: FastifyInstance) => void | Promise<void>;
 }
@@ -389,11 +305,8 @@ export interface ArcModule<TExports = unknown> {
  *   - `Promise<ArcModule>`             — an in-flight import
  *   - `() => ArcModule | Promise<…>`   — a thunk, resolved at boot
  *
- * The **thunk of a dynamic import** is the point of this union — it lets a host
- * compose modules *logically* and load them *lazily / conditionally*, the
- * `next/dynamic` idea applied to backend domains. The module's code (and its
- * heavy deps) is only pulled in when the thunk runs, so region- or tier-gated
- * packs never enter the bundle path they aren't selected for:
+ * A thunk of a dynamic import loads a module only when selected (region- or
+ * tier-gated packs):
  *
  * ```ts
  * const taxPack =
@@ -408,12 +321,73 @@ export interface ArcModule<TExports = unknown> {
 export type ArcModuleInput<TExports = unknown> =
   | ArcModule<TExports>
   | Promise<ArcModule<TExports>>
-  | (() => ArcModule<TExports> | Promise<ArcModule<TExports>>);
+  | (() => ArcModule<TExports> | Promise<ArcModule<TExports>>)
+  | LazyBridge<TExports>;
 
 /**
- * Typed module registry — hosts augment this via declaration merging so
- * `getModuleExports(f, "order")` infers the export type without a manual type
- * argument (the fastify / awilix pattern):
+ * A bridge whose graph identity is declared up front, so arc decides activation
+ * BEFORE importing it — a bridge to a domain that is not composed is never
+ * loaded, not merely never activated. (A plain thunk must run before its
+ * `dependsOn` is known.) The loaded module must match the declaration.
+ *
+ * ```ts
+ * modules: [order, {
+ *   kind: "bridge", name: "order-accounting", dependsOn: ["order", "accounting"],
+ *   load: () => import("./bridges/order-accounting.js").then((m) => m.create(deps)),
+ * }]
+ * ```
+ */
+export interface LazyBridge<TExports = unknown> {
+  readonly kind: "bridge";
+  readonly name: string;
+  readonly dependsOn: readonly ModuleName[];
+  /** Must equal the loaded module's `requires` — `planModules` checks ports without loading it. */
+  readonly requires?: ModuleRequirements;
+  readonly load: () => ArcModule<TExports> | Promise<ArcModule<TExports>>;
+}
+
+/**
+ * Host collaborators by name — augment it so ports are typed and a misspelt name is a compile error:
+ *
+ * ```ts
+ * declare module "@classytic/arc/factory" {
+ *   interface ArcPortRegistry { outbox: OutboxStore; calendar: BusinessCalendar }
+ * }
+ * ```
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: augmentation target (declaration merging)
+export interface ArcPortRegistry {}
+
+/** A registered port name. */
+export type PortName = keyof ArcPortRegistry & string;
+
+/** What `createApp({ ports })` accepts — any registered port, typed by the registry. */
+export type ArcPorts = { readonly [K in PortName]?: ArcPortRegistry[K] };
+
+/** The ports one module's setup phases see: required ones typed present, optional ones `| undefined`. */
+export type ModulePorts<TPorts extends PortName, TOptionalPorts extends PortName> = {
+  readonly [K in TPorts]: ArcPortRegistry[K];
+} & { readonly [K in TOptionalPorts]?: ArcPortRegistry[K] };
+
+/** What a module needs from its host. See `ArcModule.requires`. */
+export interface ModuleRequirements<
+  TPorts extends PortName = PortName,
+  TOptionalPorts extends PortName = PortName,
+> {
+  /** Ports that must be supplied to `createApp({ ports })`. */
+  readonly ports?: readonly TPorts[];
+  /** Ports handed over when supplied, `undefined` otherwise. */
+  readonly optionalPorts?: readonly TOptionalPorts[];
+  /**
+   * Modules that must be COMPOSED, with no ordering edge — a mutual request-time need
+   * (accounting ⇄ invoice) a two-way `dependsOn` would make a cycle. Read the peer lazily.
+   */
+  readonly modules?: readonly ModuleName[];
+}
+
+/**
+ * Typed module registry — augment via declaration merging so
+ * `getModuleExports(f, "order")` infers the export type:
  *
  * ```ts
  * declare module "@classytic/arc/factory" {
@@ -423,9 +397,23 @@ export type ArcModuleInput<TExports = unknown> =
  *   }
  * }
  * ```
- *
- * Left empty here so the fallback `getModuleExports<T>(f, name: string)` stays
- * available for apps that don't augment it.
  */
 // biome-ignore lint/suspicious/noEmptyInterface: augmentation target (declaration merging)
 export interface ArcModuleRegistry {}
+
+/**
+ * Host-level composition switches. A HOST (never a package) sets `strictModuleNames: true` once
+ * every module it composes is in `ArcModuleRegistry`; then a misspelt `dependsOn` /
+ * `requires.modules` name is a compile error.
+ *
+ * ```ts
+ * declare module "@classytic/arc/factory" { interface ArcCompositionConfig { strictModuleNames: true } }
+ * ```
+ */
+// biome-ignore lint/suspicious/noEmptyInterface: augmentation target (declaration merging)
+export interface ArcCompositionConfig {}
+
+/** A module name as a reference: a registry key under `strictModuleNames`, else any string. */
+export type ModuleName = ArcCompositionConfig extends { readonly strictModuleNames: true }
+  ? keyof ArcModuleRegistry & string
+  : string;

@@ -73,10 +73,10 @@ describe("eventPlugin fault tolerance", () => {
     await expect(app.events.publish("x.created", { id: "1" })).resolves.toBeUndefined();
   });
 
-  it("fail-open: a publish-only transport yields a no-op unsubscribe", async () => {
+  it("fail-open does NOT excuse it — a handler that could never run is a topology error", async () => {
     app = Fastify({ logger: false });
     await app.register(eventPlugin, { transport: publishOnlyTransport, failOpen: true });
 
-    await expect(app.events.subscribe("x.*", async () => {})).resolves.toBeTypeOf("function");
+    await expect(app.events.subscribe("x.*", async () => {})).rejects.toThrow(/publish-only/);
   });
 });

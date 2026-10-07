@@ -28,11 +28,16 @@
  * ```
  */
 
-import type { ModuleDisposer, ModuleSetupContext } from "../factory/module/disposers.js";
+import {
+  asModulePorts,
+  type ModuleDisposer,
+  type ModuleSetupContext,
+} from "../factory/module/disposers.js";
+import type { ArcPorts, PortName } from "../factory/module/types.js";
 
 export interface TestModuleSetup {
   /** Pass this as the second argument to `bootstrap` / `plugins` / `afterResources`. */
-  readonly context: ModuleSetupContext;
+  readonly context: ModuleSetupContext<PortName, PortName>;
   /**
    * Disposers the module registered, in REGISTRATION order (`dispose()` runs
    * them backwards). Assert on `.length` to prove a phase registered teardown
@@ -50,11 +55,17 @@ export interface TestModuleSetup {
   dispose(): Promise<void>;
 }
 
-export function createTestModuleSetup(): TestModuleSetup {
+export function createTestModuleSetup(
+  options: {
+    /** The `context.ports` the phases see — supply what the module declares. */
+    readonly ports?: ArcPorts;
+  } = {},
+): TestModuleSetup {
   const deferred: ModuleDisposer[] = [];
 
   return {
     context: {
+      ports: asModulePorts(Object.freeze({ ...options.ports })),
       defer(disposer) {
         if (typeof disposer !== "function") {
           throw new TypeError(

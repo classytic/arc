@@ -8,20 +8,21 @@
  * with every other consumer in the org.
  */
 
-import { errorContractSchema, errorDetailSchema } from "@classytic/repo-core/errors";
+import { errorContractSchema } from "@classytic/repo-core/errors";
 import type { AnyRecord } from "../types/index.js";
 
 // ============================================================================
-// Canonical error schemas — re-exported from repo-core
+// Canonical error schema — re-exported from repo-core
 // ============================================================================
 //
-// Both constants are owned by `@classytic/repo-core/errors` (the canonical
-// home for the `ErrorContract` + `ErrorDetail` interfaces and their
-// runtime JSON-Schema spec). Arc re-exports for DX so hosts can import
-// from `@classytic/arc/utils` alongside the rest of the response-schema
-// helpers without learning the second import path.
+// Owned by `@classytic/repo-core/errors` (the canonical home for the
+// `ErrorContract` + `ErrorDetail` interfaces and their runtime JSON-Schema
+// spec). Arc re-exports `errorContractSchema` so hosts can import it from
+// `@classytic/arc/utils` alongside the rest of the response-schema helpers.
+// `errorDetailSchema` is NOT re-exported (removed 2.43) — import it from
+// `@classytic/repo-core/errors`.
 
-export { errorContractSchema, errorDetailSchema };
+export { errorContractSchema };
 
 // ============================================================================
 // Schema Types
@@ -317,14 +318,17 @@ export function getListQueryParams(): AnyRecord {
 // ============================================================================
 
 /**
- * Generic item schema that allows any properties.
- * Used as default when no user schema is provided.
- * Enables fast-json-stringify while still passing through all fields.
+ * Default row/document schema when the resource declares none: `{}`, which
+ * fast-json-stringify hands to `JSON.stringify`.
+ *
+ * NOT `{ type: 'object', additionalProperties: true }`: with no declared
+ * properties that form walks every key of every row through fjs's generic
+ * path — ~3.5x slower than `JSON.stringify` for the same bytes (pinned in
+ * `tests/utils/default-crud-serialization.test.ts`). It never filtered a field
+ * either, so it bought nothing. This is serializer-only: published OpenAPI
+ * builds CRUD responses from the resource's own component schema.
  */
-const genericItemSchema: JsonSchema = {
-  type: "object",
-  additionalProperties: true,
-};
+const genericItemSchema: JsonSchema = {};
 
 /**
  * Recursively strip `example` keys from a schema object.
@@ -347,12 +351,10 @@ function stripExamples<T>(schema: T): T {
 /**
  * Get default response schemas for all CRUD operations.
  *
- * When routes have response schemas, Fastify compiles them with
- * fast-json-stringify for 2-3x faster serialization and prevents
- * accidental field disclosure.
- *
- * These defaults use `additionalProperties: true` so all fields pass through.
- * Override with specific schemas for full serialization performance + safety.
+ * The envelope is typed (its fields are known); rows and single documents
+ * pass through as `{}` — see `genericItemSchema`. A resource that declares a
+ * response schema with real `properties` gets typed row serialization, which
+ * also drops undeclared fields.
  *
  * Note: `example` properties are stripped from defaults so they work with
  * any Fastify instance (not just createApp which adds `keywords: ['example']`).
@@ -363,9 +365,6 @@ export function getDefaultCrudSchemas(): Record<string, Record<string, unknown>>
       querystring: getListQueryParams(),
       response: { 200: listResponse(genericItemSchema) },
     },
-    // `genericItemSchema` already carries `additionalProperties: true`,
-    // so single-doc routes get the same permissive shape the deleted
-    // `itemResponse` / `mutationResponse` aliases used to stamp.
     get: { response: { 200: genericItemSchema } },
     create: { response: { 201: genericItemSchema } },
     update: { response: { 200: genericItemSchema } },

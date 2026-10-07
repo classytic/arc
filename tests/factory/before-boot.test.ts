@@ -65,6 +65,49 @@ describe("createApp — beforeBoot lifecycle slot", () => {
     ).rejects.toThrow("db down");
   });
 
+  it("a returned disposer runs once on close, AFTER every plugin's onClose", async () => {
+    const order: string[] = [];
+    const app = await createApp({
+      auth: false,
+      logger: false,
+      beforeBoot: () => () => void order.push("dispose"),
+      plugins: async (f) => {
+        f.addHook("onClose", async () => void order.push("plugin-close"));
+      },
+    });
+    await app.close();
+    await app.close();
+    expect(order).toEqual(["plugin-close", "dispose"]);
+  });
+
+  it("a boot that fails BEFORE Fastify exists still runs the disposer", async () => {
+    let disposed = 0;
+    await expect(
+      createApp({
+        auth: false,
+        logger: false,
+        beforeBoot: () => () => void disposed++,
+        modules: [defineModule({ name: "a", dependsOn: ["missing"] })],
+      }),
+    ).rejects.toThrow(/missing/);
+    expect(disposed).toBe(1);
+  });
+
+  it("a boot that fails AFTER Fastify exists runs the disposer exactly once", async () => {
+    let disposed = 0;
+    await expect(
+      createApp({
+        auth: false,
+        logger: false,
+        beforeBoot: () => () => void disposed++,
+        plugins: async () => {
+          throw new Error("plugin boom");
+        },
+      }),
+    ).rejects.toThrow("plugin boom");
+    expect(disposed).toBe(1);
+  });
+
   it("boots normally when beforeBoot is omitted", async () => {
     const app = await createApp({ auth: false, logger: false });
     expect(app).toBeDefined();

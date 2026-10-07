@@ -28,6 +28,8 @@
  * }
  */
 
+import { ArcError } from "./errors.js";
+
 export const CircuitState = {
   CLOSED: "CLOSED",
   OPEN: "OPEN",
@@ -46,7 +48,7 @@ export type CircuitState = (typeof CircuitState)[keyof typeof CircuitState];
  * position is the no-info-leak escape from `any`. `(...args: any[]) =>
  * Promise<any>` would silently disable type checking everywhere `T` flows.
  */
-type AnyAsyncFn = (...args: never[]) => Promise<unknown>;
+export type AnyAsyncFn = (...args: never[]) => Promise<unknown>;
 
 /**
  * Cluster-wide failure counting for a circuit.
@@ -194,14 +196,42 @@ export interface CircuitBreakerStats {
   lastCallAt: number | null;
 }
 
-export class CircuitBreakerError extends Error {
-  state: CircuitState;
+/**
+ * Thrown when a call is refused because the circuit is OPEN (or HALF_OPEN with
+ * every probe slot taken).
+ *
+ * An `ArcError` with status **503**, code `arc.circuit_open`. It extended plain
+ * `Error` and carried no status, so an open circuit reaching arc's error
+ * handler was classified `arc.internal_error`: a 500, logged at error level
+ * with a stack trace, once per fast-failed call. That is the opposite of what
+ * a breaker is for — it turned deliberate, cheap load shedding into the
+ * loudest failure in the logs, during exactly the outage where it fires
+ * thousands of times a minute.
+ *
+ * `retryAfter` (seconds, rounded up) is when the circuit next probes; the
+ * error handler sends it as `Retry-After`, so well-behaved clients back off
+ * for as long as the breaker is actually going to refuse them.
+ */
+export class CircuitBreakerError extends ArcError {
+  readonly state: CircuitState;
+  /** Seconds until the circuit next probes, when known. */
+  readonly retryAfter?: number;
 
-  constructor(message: string, state: CircuitState) {
-    super(message);
+  constructor(message: string, state: CircuitState, retryAfter?: number) {
+    super(message, {
+      code: "arc.circuit_open",
+      statusCode: 503,
+      details: { state, ...(retryAfter !== undefined ? { retryAfter } : {}) },
+    });
     this.name = "CircuitBreakerError";
     this.state = state;
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
+}
+
+/** Whole seconds until `until` (epoch ms), never below 1 — `Retry-After: 0` invites a stampede. */
+function secondsUntil(until: number): number {
+  return Math.max(1, Math.ceil((until - Date.now()) / 1000));
 }
 
 export class CircuitBreaker<T extends AnyAsyncFn> {
@@ -267,6 +297,7 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
         const error = new CircuitBreakerError(
           `Circuit breaker is OPEN for ${this.name}`,
           CircuitState.OPEN,
+          secondsUntil(this.nextAttempt),
         );
 
         // Use fallback if available
@@ -292,9 +323,12 @@ export class CircuitBreaker<T extends AnyAsyncFn> {
         if (this.fallback) {
           return this.fallback(...args) as ReturnType<T>;
         }
+        // The probe in flight decides within one call's `timeout`; that is the
+        // honest upper bound on how long this caller should wait.
         throw new CircuitBreakerError(
           `Circuit breaker is HALF_OPEN for ${this.name} — probe slots full`,
           CircuitState.HALF_OPEN,
+          Math.max(1, Math.ceil(this.timeout / 1000)),
         );
       }
       this.halfOpenInFlight++;

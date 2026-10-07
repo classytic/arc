@@ -6,6 +6,8 @@
  * to ensure multi-tenant isolation and O(1) version-based invalidation.
  */
 
+import { contentHash } from "@classytic/repo-core/hash";
+
 /** Build a deterministic cache key for a query */
 export function buildQueryKey(
   resource: string,
@@ -32,39 +34,11 @@ export function tagVersionKey(tag: string): string {
 }
 
 /**
- * Stable hash for query params.
- * Sorts keys recursively, serializes to JSON, then applies djb2 hash.
- * Returns hex string.
+ * Digest of the query params for a cache key — repo-core's canonical serialiser (escaped,
+ * type-preserving, key-order-free) under SHA-256. Two different queries never share a key: a
+ * delimiter inside a value, `1` vs `"1"`, two dates or two regexes all stay distinct, and a
+ * cryptographic digest leaves no crafted collision onto another caller's cached result.
  */
 export function hashParams(params: Record<string, unknown>): string {
-  const stable = stableStringify(params);
-  return djb2(stable).toString(36);
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value !== "object") return String(value);
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  // RegExp has no enumerable own keys, so Object.keys(/foo/i) is []. Without
-  // special-casing, every regex stringifies to "{}" and two unrelated regex
-  // filters collide on the same cache key. Dormant under ArcQueryParser
-  // (plain strings) but hit the moment a host swaps in a parser that
-  // emits real RegExp (e.g. mongokit's QueryParser).
-  if (value instanceof RegExp) return `/${value.source}/${value.flags}`;
-  if (value instanceof Date) return `d${value.getTime()}`;
-
-  const sorted = Object.keys(value as Record<string, unknown>).sort();
-  return (
-    "{" +
-    sorted.map((k) => `${k}:${stableStringify((value as Record<string, unknown>)[k])}`).join(",") +
-    "}"
-  );
-}
-
-function djb2(str: string): number {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
-  }
-  return hash;
+  return contentHash(params, { encoding: "base64url" });
 }

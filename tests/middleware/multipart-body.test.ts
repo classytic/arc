@@ -329,7 +329,7 @@ describe("multipartBody middleware", () => {
     expect(result.body._files.file.filename).toBe("scan.pdf");
   });
 
-  it("requiredFields: returns 400 with MISSING_FILE_FIELDS when the field is absent", async () => {
+  it("requiredFields: a missing file is a validation_error with one detail per field", async () => {
     // Multipart request with NO files — just a text field.
     const form = buildMultipart([{ type: "field", name: "note", value: "oops" }]);
 
@@ -342,9 +342,12 @@ describe("multipartBody middleware", () => {
 
     expect(response.statusCode).toBe(400);
     const body = response.json();
-    expect(body.code).toBe("MISSING_FILE_FIELDS");
+    expect(body.code).toBe("arc.validation_error");
     expect(body.message).toMatch(/Missing required file field/);
-    expect(body.details.missing).toEqual(["file"]);
+    // `details[]` — the shape clients already map onto form fields.
+    expect(body.details).toEqual([
+      { path: "file", code: "required", message: 'File field "file" is required' },
+    ]);
   });
 
   it("requiredFields: lists every missing field and uses plural wording", async () => {
@@ -368,8 +371,8 @@ describe("multipartBody middleware", () => {
 
     expect(response.statusCode).toBe(400);
     const body = response.json();
-    expect(body.code).toBe("MISSING_FILE_FIELDS");
-    expect(body.details.missing).toEqual(["cover"]);
+    expect(body.code).toBe("arc.validation_error");
+    expect(body.details.map((d: { path: string }) => d.path)).toEqual(["cover"]);
     // Single missing field → singular wording.
     expect(body.message).toBe("Missing required file field: cover");
   });
@@ -387,7 +390,7 @@ describe("multipartBody middleware", () => {
 
     expect(response.statusCode).toBe(400);
     const body = response.json();
-    expect(body.details.missing).toEqual(["avatar", "cover"]);
+    expect(body.details.map((d: { path: string }) => d.path)).toEqual(["avatar", "cover"]);
     expect(body.message).toBe("Missing required file fields: avatar, cover");
   });
 

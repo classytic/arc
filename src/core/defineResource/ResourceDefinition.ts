@@ -17,8 +17,8 @@
  */
 
 import type { DataAdapter } from "@classytic/repo-core/adapter";
-import type { FastifyPluginAsync } from "fastify";
-import { CRUD_OPERATIONS } from "../../constants.js";
+import type { FastifyPluginAsync, RouteHandlerMethod } from "fastify";
+import { CRUD_OPERATIONS, DEFAULT_VERSION_FIELD } from "../../constants.js";
 import type { RegisterOptions } from "../../registry/ResourceRegistry.js";
 import { resolveTenantPurge } from "../../registry/resolveTenantPurge.js";
 import type {
@@ -41,7 +41,6 @@ import type {
   ResourceMetadata,
   ResourcePermissions,
   RouteDefinition,
-  RouteHandlerMethod,
   RouteSchemaOptions,
 } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
@@ -153,6 +152,12 @@ export class ResourceDefinition<TDoc = AnyRecord> {
    */
   readonly resolvedTenantPurge: ResolvedTenantPurge;
   readonly idField?: string;
+  /**
+   * The optimistic-concurrency version field, resolved (`concurrency: {}` → `'__v'`);
+   * `undefined` when the resource did not opt in. Published in the resource manifest
+   * so a client sends `If-Match` without repeating the field name.
+   */
+  readonly versionField?: string;
 
   // ── Query parser (stored for MCP auto-derivation of filterableFields) ──
   readonly queryParser?: QueryParserInterface;
@@ -330,6 +335,9 @@ export class ResourceDefinition<TDoc = AnyRecord> {
       onTenantDelete: this.onTenantDelete,
     });
     this.idField = config.idField;
+    if (config.concurrency) {
+      this.versionField = config.concurrency.versionField ?? DEFAULT_VERSION_FIELD;
+    }
     this.queryParser = config.queryParser as QueryParserInterface | undefined;
 
     this._appliedPresets = config._appliedPresets ?? [];

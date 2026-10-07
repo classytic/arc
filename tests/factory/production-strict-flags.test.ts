@@ -1,15 +1,12 @@
 /**
- * `preset: 'production'` reports the fail-loud switches that are OFF.
- *
- * It REPORTS rather than SETS on purpose, and that is the property under test:
- * all three flags are read where the object is constructed (`defineResource` at
- * define time, `QueryParser` / `BodySanitizer` in their constructors), and a
- * host imports its resources before it calls `createApp`. Setting
- * `process.env` here would be wired-to-read and do nothing — the exact silent
- * failure this warning exists to surface.
+ * The fail-loud switches default ON. Unset, each refuses what it guards; an explicit `false` opts
+ * out, and `preset: 'production'` names every opt-out and what it costs.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { BodySanitizer } from "../../src/core/BodySanitizer.js";
+import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
+import { ArcQueryParser } from "../../src/utils/queryParser.js";
 
 const FLAGS = [
   "ARC_STRICT_PERMISSIONS",
@@ -21,6 +18,7 @@ let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
   saved = Object.fromEntries(FLAGS.map((f) => [f, process.env[f]]));
+  // The suite opts out globally (tests/_helpers/load-env.ts); these tests need the real default.
   for (const f of FLAGS) delete process.env[f];
 });
 
@@ -35,6 +33,7 @@ async function bootAndCollect(preset: "production" | "testing"): Promise<string[
   const lines: string[] = [];
   const app = await createApp({
     preset,
+    runtime: "memory",
     auth: false,
     helmet: false,
     cors: false,
@@ -46,56 +45,70 @@ async function bootAndCollect(preset: "production" | "testing"): Promise<string[
   return lines;
 }
 
-/** The one warning this file is about, if it was emitted. */
 function strictWarning(lines: string[]): string | undefined {
-  return lines.find((l) => l.includes("fail-loud OFF"));
+  return lines.find((l) => l.includes("fail-loud turned OFF"));
 }
 
-describe("preset: 'production' — fail-loud reporting", () => {
-  it("names every flag that is off", async () => {
-    const warning = strictWarning(await bootAndCollect("production"));
-    expect(warning).toBeDefined();
-    for (const flag of FLAGS) expect(warning).toContain(flag);
+const crud = {
+  name: "widget",
+  prefix: "/widgets",
+  adapter: {
+    repository: {
+      find: async () => [],
+      findById: async () => null,
+      create: async () => ({}),
+      update: async () => ({}),
+      delete: async () => ({}),
+      count: async () => 0,
+    },
+  },
+};
+
+describe("the fail-loud defaults, with nothing set", () => {
+  it("an ungated write refuses to boot", () => {
+    expect(() => defineResource(crud as never)).toThrow(/no permission gate/i);
   });
 
-  it("says what each one COSTS while off, not just its name", async () => {
-    const warning = strictWarning(await bootAndCollect("production"));
-    // A list of env var names tells an operator nothing about the risk.
-    expect(warning).toContain("WIDENS the read");
-    expect(warning).toContain("warns instead of failing boot");
-    expect(warning).toContain("returns 200, unchanged");
+  it("an unknown filter key is refused, not dropped", () => {
+    const parser = new ArcQueryParser({ allowedFilterFields: ["status"] });
+    expect(() => parser.parse({ priority: "high" })).toThrow(/priority/);
   });
 
-  it("says the flags must be set BEFORE resource imports", async () => {
-    // Without this, an operator sets them next to createApp and they no-op.
-    const warning = strictWarning(await bootAndCollect("production"));
-    expect(warning).toMatch(/BEFORE any resource import/);
+  it("an immutable-field write is rejected, not stripped", () => {
+    const sanitizer = new BodySanitizer({
+      schemaOptions: { fieldRules: { sku: { immutable: true } } },
+    } as never);
+    expect((sanitizer as unknown as { onImmutableWrite: string }).onImmutableWrite).toBe("reject");
   });
+});
 
-  it("names ONLY the flags that are off", async () => {
-    process.env.ARC_STRICT_QUERY_PARAMS = "true";
-    const warning = strictWarning(await bootAndCollect("production"));
-    expect(warning).toBeDefined();
-    expect(warning).toContain("ARC_STRICT_PERMISSIONS");
-    expect(warning).not.toContain("ARC_STRICT_QUERY_PARAMS");
-  });
-
-  it("stays SILENT when all three are on", async () => {
-    for (const f of FLAGS) process.env[f] = "true";
+describe("preset: 'production' — opt-out reporting", () => {
+  it("stays SILENT with nothing set — strict is the default", async () => {
     expect(strictWarning(await bootAndCollect("production"))).toBeUndefined();
   });
 
-  it("does not fire outside the production preset", async () => {
-    // A dev/test app is deliberately permissive; warning there is noise that
-    // trains people to ignore the warning that matters.
-    expect(strictWarning(await bootAndCollect("testing"))).toBeUndefined();
+  it("names each flag turned off, and what it costs", async () => {
+    process.env.ARC_STRICT_QUERY_PARAMS = "false";
+    const warning = strictWarning(await bootAndCollect("production"));
+    expect(warning).toContain("ARC_STRICT_QUERY_PARAMS");
+    expect(warning).toContain("WIDENS the read");
+    expect(warning).not.toContain("ARC_STRICT_PERMISSIONS");
   });
 
-  it("treats any value other than the exact string 'true' as off", async () => {
-    for (const f of FLAGS) process.env[f] = "1";
-    const warning = strictWarning(await bootAndCollect("production"));
-    expect(warning).toBeDefined();
-    for (const flag of FLAGS) expect(warning).toContain(flag);
+  it("reads 1 / yes as on — the spelling does not decide enforcement", async () => {
+    process.env.ARC_STRICT_PERMISSIONS = "1";
+    process.env.ARC_STRICT_QUERY_PARAMS = "yes";
+    expect(strictWarning(await bootAndCollect("production"))).toBeUndefined();
+  });
+
+  it("a value it cannot read fails boot, naming the variable", async () => {
+    process.env.ARC_STRICT_PERMISSIONS = "ture";
+    await expect(bootAndCollect("production")).rejects.toThrow(/ARC_STRICT_PERMISSIONS/);
+  });
+
+  it("does not fire outside the production preset", async () => {
+    process.env.ARC_STRICT_QUERY_PARAMS = "false";
+    expect(strictWarning(await bootAndCollect("testing"))).toBeUndefined();
   });
 });
 
@@ -141,5 +154,27 @@ describe("skipValidation does not disable the permission invariant", () => {
         routes: [],
       } as never),
     ).not.toThrow();
+  });
+});
+
+describe("preset: 'production' requires a declared topology", () => {
+  it("refuses to boot without `runtime` — the instance count is declared, never guessed", async () => {
+    await expect(
+      createApp({ preset: "production", auth: false, logger: false } as never),
+    ).rejects.toThrow(/requires an explicit `runtime`.*'memory' for a single instance/s);
+  });
+
+  it("boots with an explicit single-instance runtime", async () => {
+    const app = await createApp({
+      preset: "production",
+      runtime: "memory",
+      auth: false,
+      helmet: false,
+      cors: false,
+      rateLimit: false,
+      underPressure: false,
+      logger: false,
+    });
+    await app.close();
   });
 });

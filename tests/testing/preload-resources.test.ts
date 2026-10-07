@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { ResourceLike } from "../../src/factory/loadResources.js";
-import { preloadResources, preloadResourcesAsync } from "../../src/testing/preloadResources.js";
+import { preloadResources, preloadResourcesAsync } from "../../src/factory/preloadResources.js";
 
 const make = (name: string): ResourceLike => ({
   name,

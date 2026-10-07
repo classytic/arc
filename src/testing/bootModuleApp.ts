@@ -29,7 +29,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { createApp } from "../factory/createApp.js";
-import type { ArcModuleInput } from "../factory/module/index.js";
+import type { ArcModuleInput, ArcPorts } from "../factory/module/index.js";
 import { getModuleExports } from "../factory/module/index.js";
 import type { CreateAppOptions } from "../factory/types/index.js";
 import { type TestActor, testActorAuth } from "./testActor.js";
@@ -102,6 +102,8 @@ export interface BootModuleAppOptions<TConn = unknown> {
    * testing entrypoint and can never be reached from production.
    */
   actor?: TestActor;
+  /** Host ports for the booted modules — typed and checked exactly as `createApp({ ports })`. */
+  ports?: ArcPorts;
 }
 
 export interface ModuleTestApp<TConn = unknown> {
@@ -207,6 +209,7 @@ export async function bootModuleApp<TConn = unknown>(
       auth: testActorAuth(options.actor),
       sensible: false,
       ...options.app,
+      ...(options.ports ? { ports: options.ports } : {}),
       modules: list,
     });
     await app.ready();

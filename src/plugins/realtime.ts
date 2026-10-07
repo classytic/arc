@@ -55,6 +55,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { eventAudienceOf, isEventVisible } from "../core/tenancy.js";
 import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
 import { evaluateAndApplyPermission } from "../permissions/authorizationDecision.js";
@@ -62,7 +63,6 @@ import { applyFieldReadPermissions } from "../permissions/fields.js";
 import type { UserBase } from "../permissions/types.js";
 import { getUserRoles } from "../permissions/types.js";
 import type { RequestScope } from "../scope/types.js";
-import { getOrgId } from "../scope/types.js";
 import type { RegistryEntry } from "../types/index.js";
 import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
 import { openSseStream } from "../utils/sseStream.js";
@@ -228,6 +228,12 @@ export function resolveRowMatcher(
 export interface DeliveryPolicy {
   tenantScoped: boolean;
   subscriberOrgId: string | undefined;
+  /**
+   * The subscriber is an elevated admin with no active org — the platform
+   * view, which sees every tenant exactly as their `list` read does. Optional
+   * so a policy built before 2.41.1 keeps its old (fail-closed) meaning.
+   */
+  subscriberPlatformView?: boolean;
   filters: Record<string, unknown> | undefined;
   matcher: ((item: unknown, filters: Record<string, unknown>) => boolean) | undefined;
 }
@@ -271,9 +277,14 @@ export function resolveDelivery(
   policy: DeliveryPolicy,
   operation: ChangeOperation,
 ): DeliveryDecision {
-  if (policy.tenantScoped) {
-    const eventOrgId = event.meta?.organizationId;
-    if (eventOrgId && eventOrgId !== policy.subscriberOrgId) return { kind: "drop" };
+  if (
+    policy.tenantScoped &&
+    !isEventVisible(event.meta?.organizationId, {
+      ...(policy.subscriberOrgId !== undefined ? { orgId: policy.subscriberOrgId } : {}),
+      platformView: policy.subscriberPlatformView === true,
+    })
+  ) {
+    return { kind: "drop" };
   }
 
   const doc = (event.payload as { data?: unknown } | undefined)?.data;
@@ -398,9 +409,8 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<ResourceSubscription | null> => {
-    const holder = request as { _policyFilters?: Record<string, unknown> };
-    const saved = holder._policyFilters;
-    holder._policyFilters = undefined;
+    const saved = request._policyFilters;
+    request._policyFilters = undefined;
     try {
       const listCheck = entry.permissions?.list;
       if (typeof listCheck === "function") {
@@ -418,7 +428,7 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
         if (!authorized) return null;
       }
 
-      const filters = holder._policyFilters;
+      const filters = request._policyFilters;
       const resolution = resolveRowMatcher(
         filters,
         fastify.arc?.registry?.getAdapter<MatchingAdapter>(resourceName),
@@ -439,18 +449,20 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
       }
 
       const scope: RequestScope | undefined = request.scope;
+      const audience = eventAudienceOf(scope);
       return {
         name: resourceName,
         policy: {
           tenantScoped: entry.tenantField !== false,
-          subscriberOrgId: scope ? getOrgId(scope) : undefined,
+          subscriberOrgId: audience.orgId,
+          subscriberPlatformView: audience.platformView,
           filters,
           matcher: resolution.matcher,
         },
         fields: entry.fields,
       };
     } finally {
-      holder._policyFilters = saved;
+      request._policyFilters = saved;
     }
   };
 

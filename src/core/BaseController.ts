@@ -1,22 +1,11 @@
 /**
- * BaseController — the fully-composed controller (v2.11.0 mixin stack).
- *
- * Prior to 2.11, `BaseController` was a 1,589-line god class bundling
- * CRUD, soft-delete, tree, slug, and bulk ops. 2.11 split those concerns
- * into dedicated files and reassembles them here via the standard TS
- * mixin pattern:
+ * BaseController — the fully-composed controller:
  *
  *   BaseController = SoftDelete ∘ Tree ∘ Slug ∘ Bulk ∘ BaseCrudController
  *
- * This file is the canonical "everything included" entry point — hosts
- * with existing `class MyController extends BaseController` keep the
- * exact same method surface with no changes.
+ * Hosts that only need CRUD can extend `BaseCrudController` directly.
  *
- * Hosts that only need CRUD (no soft-delete, no bulk, no tree, no slug)
- * can extend the smaller `BaseCrudController` directly for a ~870-LOC
- * surface instead of the ~1,650-LOC composed one.
- *
- * @example Full surface (equivalent to pre-2.11 BaseController):
+ * @example Full surface:
  * ```ts
  * import { BaseController } from '@classytic/arc';
  * class ProductController extends BaseController<Product> { … }
@@ -67,67 +56,32 @@ export type {
   BaseControllerOptions,
   ListResult,
 } from "./BaseCrudController.js";
-/**
- * The `Arc*Result` types above stay: `src/index.ts` re-exports them from THIS
- * path. `BaseCrudController` and the four mixins (+ their `*Ext` types) were
- * also re-exported here and are not, as of 2.37.1 — `core/index.ts` takes them
- * straight from `./BaseCrudController.js` and `./mixins/*.js`, so this file's
- * copies had no importer. Two public paths to one symbol is a drift seam, not
- * convenience: composition belongs to `core/index.ts`, and this module is the
- * composed `BaseController` itself.
- */
+// `src/index.ts` re-exports the `Arc*Result` types from THIS path. Do not re-export
+// `BaseCrudController` or the mixins here — `core/index.ts` owns those (one public path per symbol).
 
 /**
  * Fully-composed controller shape: all CRUD methods + every preset method
  * (SoftDelete / Tree / Slug / Bulk) typed over the caller-supplied `TDoc`.
  *
- * Composes `BaseCrudController` (list/get/create/update/delete) → `BulkMixin`
- * (bulk*) → `SlugMixin` (getBySlug) → `TreeMixin` (getTree/getChildren) →
- * `SoftDeleteMixin` (getDeleted/restore). CRUD-only hosts extend
- * `BaseCrudController` for a smaller surface; others compose mixins by hand.
- *
- * DECLARATION MERGING, not a generic mixin chain: TypeScript cannot thread one
- * `TDoc` through four chained mixin factories without losing the
- * `extends Constructor<Base>` constraint. So the runtime pins the chain base to
- * `AnyRecord` while the TYPE surface threads `TDoc`, and merging bridges them.
- *
- * `TDoc extends AnyRecord` is LOAD-BEARING: inherited methods return
- * `ListResult<AnyRecord>` and the merged interface returns `ListResult<TDoc>`,
- * so TS's derived-assignable-to-base check needs the bound. Without it the
- * class declaration fails with `Type 'TDoc[]' is not assignable to type
- * 'AnyRecord[]'`. Hosts pick one of:
- *   (a) drop the generic — lose return narrowing;
- *   (b) `interface IUser extends AnyRecord` — preferred when you own the type;
- *   (c) `ArcListResult<typeof this>` etc. when overriding — reads the return
- *       type off the class, so the bound never applies.
- *
- * COST: every `TDoc`-narrowed method is redeclared on the interface, so a new
- * mixin method must be added here too.
+ * DECLARATION MERGING, not a generic mixin chain: chained mixin factories cannot thread one
+ * `TDoc`, so the runtime chain is instantiated over `object` and the TYPE surface threads `TDoc`.
+ * Any `TDoc extends object` works — an interface-typed document needs no index signature.
+ * A new mixin method must be redeclared here too.
  */
-// Class + interface MUST have identical parameters (same names, bounds,
-// and defaults) for declaration merging to succeed. `TDoc extends AnyRecord`
-// is required because the class inherits a mixin-composed base pinned to
-// `AnyRecord`, and TS's base-class-compatibility check requires
-// `ListResult<TDoc>` be assignable to `ListResult<AnyRecord>`.
+// Class + interface MUST have identical parameters (names, bounds, defaults) for merging to succeed.
 export interface BaseController<
-  TDoc extends AnyRecord = AnyRecord,
+  TDoc extends object = AnyRecord,
   _TRepository extends RepositoryLike = RepositoryLike<TDoc>,
 > {
-  // Composable surface — mutable since 2.15.0 to align with `configure()`
-  // rebuild semantics; consumers should still treat them as stable refs
-  // between requests.
+  // Mutable because `configure()` rebuilds them; treat as stable between requests.
   accessControl: AccessControl;
   bodySanitizer: BodySanitizer;
   queryResolver: QueryResolver;
 
-  // Post-construction parser swap
   setQueryParser(queryParser: QueryParserInterface): void;
 
-  // Post-construction option configure (v2.15.0) — arc auto-calls this
-  // after `resolveOrAutoCreateController` so user-supplied controllers
-  // receive resource-level options without a `super(repo, ...)` dance.
-  // Narrowed to ControllerConfigurableOptions — resourceName and other
-  // construction-only fields are intentionally excluded.
+  // Arc calls this after controller resolution so user-supplied controllers receive
+  // resource-level options. Construction-only fields (resourceName, …) are excluded.
   configure(options: ControllerConfigurableOptions): void;
 
   // CRUD core (inherited from BaseCrudController) — redeclared to thread TDoc
@@ -158,29 +112,19 @@ export interface BaseController<
   bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>>;
 }
 
-// The runtime class: natural mixin composition. Cast-through the composed
-// base so that the TDoc/TRepository parameters on the outer class are not
-// fought by the concrete `BaseCrudController<AnyRecord, any>` the composition
-// produces. The interface above carries the authoritative typed shape.
-//
-// Note: `ParsedQuery` isn't referenced below — it's imported for type-surface
-// alignment with BaseCrudController.
+// Keeps the otherwise-unused `ParsedQuery` import referenced.
 const _ParsedQueryProbe: ParsedQuery | undefined = undefined;
 void _ParsedQueryProbe;
 
 /**
  * Fully-composed controller: `BaseCrudController` + SoftDelete + Tree +
- * Slug + Bulk. Drop-in replacement for the pre-2.11 god class. The
- * companion interface above gives every method full generic precision
- * on `TDoc` via declaration merging.
+ * Slug + Bulk. The companion interface above types every method over `TDoc`.
  */
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: deliberate class+interface merge threads TDoc generics across mixin-composed methods (see interface above). The class has no runtime members of its own, so there's no overload-resolution risk.
 export class BaseController<
-  TDoc extends AnyRecord = AnyRecord,
+  TDoc extends object = AnyRecord,
   _TRepository extends RepositoryLike = RepositoryLike<TDoc>,
-> extends SoftDeleteMixin(TreeMixin(SlugMixin(BulkMixin(BaseCrudController)))) {
-  // The type parameters are consumed by the companion interface via
-  // declaration merging. This phantom field silences TS 'declared but unused'
-  // without leaking runtime state.
+> extends SoftDeleteMixin(TreeMixin(SlugMixin(BulkMixin(BaseCrudController<object>)))) {
+  // Phantom: silences 'declared but unused' for the merged type params; no runtime state.
   declare readonly _phantom?: [TDoc, _TRepository];
 }

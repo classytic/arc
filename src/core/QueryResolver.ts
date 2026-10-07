@@ -12,7 +12,7 @@ import { isProductionEnv } from "@classytic/primitives/environment";
 import { DEFAULT_LIMIT, DEFAULT_SORT, DEFAULT_TENANT_FIELD } from "../constants.js";
 import { arcLog } from "../logger/index.js";
 import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
-import { getOrgId as getOrgIdFromScope } from "../scope/types.js";
+import type { RequestScope } from "../scope/types.js";
 import type {
   AnyRecord,
   ArcInternalMetadata,
@@ -25,8 +25,9 @@ import type {
 } from "../types/index.js";
 import { ValidationError } from "../utils/errors.js";
 import { ArcQueryParser } from "../utils/queryParser.js";
-import { collectReadBlockedFields } from "./fieldRulePredicates.js";
+import { collectReadBlockedFields, pathTouchesBlocked } from "./fieldRulePredicates.js";
 import { toRepositoryFilter } from "./repositoryFilter.js";
+import { resolveTenancy } from "./tenancy.js";
 
 // ============================================================================
 // Configuration
@@ -82,36 +83,6 @@ function noteDeniedJoins(kind: "populate" | "lookups"): void {
     `client requested ${kind} but no allowlist is configured — DENIED (2.24 default flip; ` +
       "it was allow-all). Set schemaOptions.query.allowedPopulate / allowedLookups to enable " +
       "client-driven joins. (dev-only note, shown once)",
-  );
-}
-
-/**
- * A `$lookup` reaches ANOTHER collection, and the tenant filter arc conjoins applies to the
- * BASE one only. The joined side carries whatever predicate the lookup itself names and
- * nothing more — no tenant scope, no soft-delete filter — so a resource that opens
- * `allowedLookups` can return rows from a collection the caller could not query directly.
- *
- * Unreachable by default (2.24 denies `lookup=` with no allowlist) and no resource in this
- * fleet configures one, so this is a WARNING at the moment a deployment first opts in
- * rather than machinery for a door nobody has opened. Warned once per collection set: the
- * decision is made when the allowlist is written, not per request.
- *
- * Scope the join with the lookup's own `where`, which mongokit compiles into a `$match`
- * inside the lookup pipeline.
- */
-const notedUnscopedJoins = new Set<string>();
-function noteUnscopedJoin(lookups: ReadonlyArray<{ from?: string }>): void {
-  const collections = lookups
-    .map((l) => l.from)
-    .filter((f): f is string => typeof f === "string")
-    .sort();
-  const key = collections.join(",");
-  if (key.length === 0 || notedUnscopedJoins.has(key)) return;
-  notedUnscopedJoins.add(key);
-  log.warn(
-    `client-driven $lookup on [${key}] — the JOINED side carries no tenant or soft-delete ` +
-      "filter (arc scopes the base collection only). Narrow each lookup with its own " +
-      "`where`, or the join can surface rows the caller cannot query directly. (shown once)",
   );
 }
 
@@ -299,23 +270,14 @@ export class QueryResolver {
       policyFilters,
     );
 
-    // Org/tenant scope -- derived from request.scope via metadata.
-    // Skip for platform-universal resources (tenantField: false).
-    const scope = arcContext?._scope;
-    const orgId = scope ? getOrgIdFromScope(scope) : undefined;
-    // `_crossTenantRead` is `multiTenantPreset({ crossTenant: [...] })` saying this listing is a
-    // marketplace, not one tenant's shelf. Without this branch the preset's decision was undone
-    // here, one layer down and out of sight: the route stopped filtering and the resolver put the
-    // filter straight back, so a signed-in seller still saw only their own rows.
-    if (
-      this.tenantField &&
-      orgId &&
-      !arcContext?._crossTenantRead &&
-      !policyFilters?.[this.tenantField]
-    ) {
+    // Org/tenant scope — the decision is `resolveTenancy`'s, shared with every
+    // other layer that scopes a read (see `core/tenancy.ts` for why it is not
+    // re-derived here).
+    const tenancy = resolveTenancy(arcContext, this.tenantField);
+    if (tenancy.mode === "scoped" && !policyFilters?.[tenancy.field]) {
       // Only set if not already set by multiTenant preset — conjoined, so it
       // can't clobber (or be clobbered by) an existing constraint on the key.
-      filters = conjoinPolicyFilters(filters, { [this.tenantField]: orgId });
+      filters = conjoinPolicyFilters(filters, { [tenancy.field]: tenancy.orgId });
     }
 
     // Normalize `$`-operator policy/query filters (`$or` from requireGrant,
@@ -334,7 +296,7 @@ export class QueryResolver {
       // Advanced populate options — sanitized against allowedPopulate
       populateOptions: this.sanitizePopulateOptions(parsed.populateOptions, this.schemaOptions),
       // Lookup/join options from MongoKit 3.4+ QueryParser (maps to $lookup / SQL JOIN)
-      lookups: this.sanitizeLookups(parsed.lookups, this.schemaOptions),
+      lookups: this.sanitizeLookups(parsed.lookups, this.schemaOptions, arcContext?._scope),
       filters: portableFilters,
       // MongoKit features
       search: parsed.search,
@@ -428,13 +390,14 @@ export class QueryResolver {
   }
 
   /**
-   * Sanitize lookup/join options. Deny-by-default: `allowedLookups` must be
-   * configured for any client-driven lookup to pass; listed collections are
-   * then structurally validated to prevent injection.
+   * Client lookups, deny-by-default. An allowed one is structurally validated, and its joined side
+   * is filtered by the resource's server-owned `LookupPolicy.scope` — the base collection's tenant
+   * filter never reaches a join, and a client-supplied `where` is replaced, never merged.
    */
   private sanitizeLookups(
     lookups: LookupOption[] | undefined,
     schemaOptions: RouteSchemaOptions,
+    scope: RequestScope | undefined,
   ): LookupOption[] | undefined {
     if (!lookups || lookups.length === 0) return undefined;
 
@@ -448,19 +411,17 @@ export class QueryResolver {
 
     const validFieldName = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 
-    const sanitized = lookups.filter((lookup) => {
+    const sanitized = lookups.flatMap((lookup) => {
       // Validate required fields exist and are safe strings
-      if (!lookup.from || !lookup.localField || !lookup.foreignField) return false;
-      if (!validFieldName.test(lookup.from)) return false;
-      if (!validFieldName.test(lookup.localField)) return false;
-      if (!validFieldName.test(lookup.foreignField)) return false;
-
-      if (!allowedLookups.includes(lookup.from)) return false;
-
-      return true;
+      if (!lookup.from || !lookup.localField || !lookup.foreignField) return [];
+      if (!validFieldName.test(lookup.from)) return [];
+      if (!validFieldName.test(lookup.localField)) return [];
+      if (!validFieldName.test(lookup.foreignField)) return [];
+      const policy = Object.hasOwn(allowedLookups, lookup.from)
+        ? allowedLookups[lookup.from]
+        : undefined;
+      return policy ? [{ ...lookup, where: policy.scope({ scope }) }] : [];
     });
-
-    if (sanitized.length > 0) noteUnscopedJoin(sanitized);
 
     return sanitized.length > 0 ? sanitized : undefined;
   }
@@ -485,8 +446,7 @@ export class QueryResolver {
    * whoever wrote it.
    */
   private isBlockedProjection(path: string, blockedFields: string[]): boolean {
-    const field = path.replace(/^-/, "");
-    return blockedFields.some((blocked) => field === blocked || field.startsWith(`${blocked}.`));
+    return pathTouchesBlocked(path.replace(/^-/, ""), new Set(blockedFields));
   }
 
   /**
@@ -514,11 +474,8 @@ export class QueryResolver {
     if (!blocked) return;
 
     const offenders = new Set<string>();
-    const isBlocked = (key: string): boolean => {
-      if (blocked.has(key)) return true;
-      const dot = key.indexOf(".");
-      return dot > 0 && blocked.has(key.slice(0, dot));
-    };
+    // Every ancestor, not just the first segment: a hidden `a.b` also covers `a.b.c`.
+    const isBlocked = (key: string): boolean => pathTouchesBlocked(key, blocked);
 
     // Depth is already bounded by the parser; the cap only stops a pathological structure.
     const walk = (node: unknown, depth: number): void => {

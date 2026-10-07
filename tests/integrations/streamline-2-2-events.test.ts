@@ -125,11 +125,16 @@ describe("v2.11.0 — STREAMLINE_BUS_EVENTS constant covers streamline 2.2's ful
     expect(STREAMLINE_TERMINAL_EVENTS).not.toContain("workflow:paused" as never);
   });
 
-  it("terminal-events list is a proper subset of bus-events, limited to the 3 streams should auto-close on", () => {
+  it("terminal-events list is a proper subset of bus-events, including the saga outcomes", () => {
+    // The two saga outcomes were missing, so a stream on a rolled-back run
+    // never closed. (`workflow:failed` is terminal only without compensation —
+    // see `isStreamTerminal`.)
     expect(STREAMLINE_TERMINAL_EVENTS).toEqual([
       "workflow:completed",
       "workflow:failed",
       "workflow:cancelled",
+      "workflow:compensated",
+      "workflow:compensation_failed",
     ]);
     for (const terminal of STREAMLINE_TERMINAL_EVENTS) {
       expect(STREAMLINE_BUS_EVENTS).toContain(terminal);

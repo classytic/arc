@@ -1,76 +1,136 @@
 /**
- * Filter dialects — decouple `ArcQueryParser` from any single datastore's
- * operator vocabulary.
- *
- * The parser owns everything store-INDEPENDENT: URL parsing, field/operator
- * whitelisting, depth limits, value coercion, ReDoS-safe regex sanitisation.
- * A `FilterDialect` owns the ONLY store-specific part of the output — which
- * token each neutral operator (`gte`, `like`, `in`, …) is emitted as, and how a
- * case-insensitive text match is expressed. Swap the dialect (or the whole
- * parser via `QueryParserInterface`) to target a non-Mongo store; the default
- * stays Mongo, so existing hosts are unaffected.
+ * Filter dialects — what `ArcQueryParser` EMITS. Reading a URL (keys, operators, coercion,
+ * refusals) is repo-core's shared grammar; a dialect turns its canonical clauses into one store's
+ * filter shape. The default is the Mongo record dialect arc's pipeline already speaks
+ * (`toRepositoryFilter` → Filter IR), so its meaning matches `parseUrl` and mongokit exactly —
+ * `runQueryGrammarConformance` holds all three to the same rows.
  */
+
+import { escapeRegex, type FilterClause } from "@classytic/repo-core/query-parser";
 
 export interface FilterDialect {
-  /**
-   * Neutral operator name → emitted token. An operator absent from this map is
-   * treated as unsupported (dropped), so a dialect also defines its operator set.
-   */
-  readonly operators: Readonly<Record<string, string>>;
-  /**
-   * Extra keys merged into a field-filter when a documented case-insensitive
-   * text operator (`like` / `contains`) is used. Mongo expresses this as a
-   * sibling `{ $options: 'i' }`; a dialect that encodes case-insensitivity in
-   * the operator itself returns `{}`.
-   */
-  caseInsensitiveModifier(): Record<string, unknown>;
+  /** Emit the parsed clauses as one filter. Several clauses on a field are ANDed. */
+  emit(clauses: readonly FilterClause[]): Record<string, unknown>;
+  /** The operator tokens this dialect can emit — for audits and docs. */
+  readonly tokens: readonly string[];
 }
 
-/**
- * Default dialect — MongoDB / MongoKit operator shape. Emits `$`-prefixed
- * tokens and the `$options: 'i'` case-insensitive sibling. This is what
- * `ArcQueryParser` uses when no dialect is supplied, so behaviour is identical
- * to every prior arc version.
- */
+/** One clause → one field condition, in Mongo record syntax with the Filter IR's meaning. */
+function mongoCondition(clause: FilterClause): unknown {
+  switch (clause.op) {
+    case "eq":
+      return clause.value;
+    // `ne` / `nin`: null and missing never match (SQL three-valued logic, the IR's rule).
+    case "ne":
+      return clause.value === null ? { $ne: null } : { $nin: [clause.value, null] };
+    case "nin":
+      return { $nin: clause.values.includes(null) ? [...clause.values] : [...clause.values, null] };
+    case "in":
+      return { $in: [...clause.values] };
+    case "gt":
+    case "gte":
+    case "lt":
+    case "lte":
+      return { [`$${clause.op}`]: clause.value };
+    case "exists":
+      return clause.value ? { $ne: null } : null;
+    case "contains":
+      return { $regex: escapeRegex(clause.text), $options: "i" };
+    case "startsWith":
+      return { $regex: `^${escapeRegex(clause.text)}`, $options: "i" };
+    case "endsWith":
+      return { $regex: `${escapeRegex(clause.text)}$`, $options: "i" };
+    case "ieq":
+      return { $regex: `^${escapeRegex(clause.text)}$`, $options: "i" };
+    case "regex":
+      return clause.flags
+        ? { $regex: clause.pattern, $options: clause.flags }
+        : { $regex: clause.pattern };
+  }
+}
+
+/** Merge conditions on one field into one operator object; `$and` when an operator repeats. */
+function mergeByField(
+  clauses: readonly FilterClause[],
+  condition: (clause: FilterClause) => unknown,
+  eqToken: string,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  const overflow: Record<string, unknown>[] = [];
+  for (const clause of clauses) {
+    const next = condition(clause);
+    if (!(clause.field in merged)) {
+      merged[clause.field] = next;
+      continue;
+    }
+    const left = asOperators(merged[clause.field], eqToken);
+    const right = asOperators(next, eqToken);
+    if (left && right && !Object.keys(right).some((op) => op in left)) {
+      merged[clause.field] = { ...left, ...right };
+    } else {
+      overflow.push({ [clause.field]: next });
+    }
+  }
+  return overflow.length > 0 ? { ...merged, $and: overflow } : merged;
+}
+
+function asOperators(condition: unknown, eqToken: string): Record<string, unknown> | undefined {
+  if (condition === null || Array.isArray(condition) || condition instanceof Date) {
+    return condition === null ? undefined : { [eqToken]: condition };
+  }
+  if (typeof condition === "object") return condition as Record<string, unknown>;
+  return { [eqToken]: condition };
+}
+
 export const MONGO_DIALECT: FilterDialect = {
-  operators: {
-    eq: "$eq",
-    ne: "$ne",
-    gt: "$gt",
-    gte: "$gte",
-    lt: "$lt",
-    lte: "$lte",
-    in: "$in",
-    nin: "$nin",
-    like: "$regex",
-    contains: "$regex",
-    regex: "$regex",
-    exists: "$exists",
-  },
-  caseInsensitiveModifier: () => ({ $options: "i" }),
+  emit: (clauses) => mergeByField(clauses, mongoCondition, "$eq"),
+  tokens: ["$eq", "$ne", "$gt", "$gte", "$lt", "$lte", "$in", "$nin", "$regex", "$options", "$and"],
 };
 
 /**
- * Store-neutral reference dialect — emits UN-prefixed operator tokens as a
- * translation AST (`?price[gte]=40` → `{ price: { gte: 40 } }`, with
- * `{ caseInsensitive: true }` for `like`/`contains`). A non-Mongo adapter can
- * consume this directly instead of writing a full `QueryParserInterface`. Use
- * as a starting point; adjust the token names to your store's vocabulary.
+ * Store-neutral: `{ field: { <op>: value } }` with the grammar's own operator names, for a host
+ * that compiles the canonical clauses itself.
  */
 export const NEUTRAL_DIALECT: FilterDialect = {
-  operators: {
-    eq: "eq",
-    ne: "ne",
-    gt: "gt",
-    gte: "gte",
-    lt: "lt",
-    lte: "lte",
-    in: "in",
-    nin: "nin",
-    like: "like",
-    contains: "contains",
-    regex: "regex",
-    exists: "exists",
-  },
-  caseInsensitiveModifier: () => ({ caseInsensitive: true }),
+  emit: (clauses) =>
+    mergeByField(
+      clauses,
+      (clause) => {
+        switch (clause.op) {
+          case "in":
+          case "nin":
+            return { [clause.op]: clause.values };
+          case "contains":
+          case "startsWith":
+          case "endsWith":
+          case "ieq":
+            return { [clause.op]: clause.text };
+          case "regex":
+            return clause.flags
+              ? { regex: clause.pattern, flags: clause.flags }
+              : { regex: clause.pattern };
+          default:
+            return { [clause.op]: clause.value };
+        }
+      },
+      "eq",
+    ),
+  tokens: [
+    "eq",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "in",
+    "nin",
+    "exists",
+    "contains",
+    "startsWith",
+    "endsWith",
+    "ieq",
+    "regex",
+    "flags",
+    "$and",
+  ],
 };

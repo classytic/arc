@@ -83,6 +83,7 @@ interface IdempotencyDoc extends Record<string, unknown> {
     statusCode: number;
     headers: Record<string, string>;
     body: unknown;
+    requestFingerprint?: string;
   };
   lock?: { requestId: string; expiresAt: Date };
   createdAt: Date;
@@ -139,6 +140,9 @@ export function repositoryAsIdempotencyStore(
       if (new Date(doc.expiresAt) < new Date()) return undefined;
       return {
         key,
+        ...(doc.result.requestFingerprint
+          ? { requestFingerprint: doc.result.requestFingerprint }
+          : {}),
         statusCode: doc.result.statusCode,
         headers: doc.result.headers,
         body: doc.result.body,
@@ -156,6 +160,9 @@ export function repositoryAsIdempotencyStore(
               statusCode: result.statusCode,
               headers: result.headers,
               body: result.body,
+              ...(result.requestFingerprint
+                ? { requestFingerprint: result.requestFingerprint }
+                : {}),
             },
             createdAt: result.createdAt,
             expiresAt: result.expiresAt,
@@ -251,6 +258,9 @@ export function repositoryAsIdempotencyStore(
         // Extract the matched doc's key via the configured `idField` —
         // returning `doc._id` would break on SQL kits where the column is `id`.
         key: String(doc[idField] ?? prefix),
+        ...(doc.result.requestFingerprint
+          ? { requestFingerprint: doc.result.requestFingerprint }
+          : {}),
         statusCode: doc.result.statusCode,
         headers: doc.result.headers,
         body: doc.result.body,

@@ -71,7 +71,7 @@ beforeAll(async () => {
     schemaOptions: {
       query: {
         allowedPopulate: ["tag"],
-        allowedLookups: ["qftags"],
+        allowedLookups: { qftags: { scope: () => ({}) } },
       },
     },
   });

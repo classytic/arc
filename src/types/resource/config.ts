@@ -98,6 +98,14 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * that silently degrades is the defect, not a mode.
    */
   transactional?: boolean;
+  /**
+   * Optimistic concurrency over HTTP (RFC 9110). Reads send `ETag: "<version>"`; an update
+   * with `If-Match` applies only at that version (else 412), and EVERY update is a CAS write on
+   * the version it loaded (else 409) — so the version, and the ETag, change on every write.
+   * `versionField` defaults to `'__v'`. Boot-fatal on a repository without the
+   * `optimisticConcurrency` capability.
+   */
+  concurrency?: { versionField?: string };
   queryParser?: unknown;
   permissions?: ResourcePermissions;
   schemaOptions?: RouteSchemaOptions;

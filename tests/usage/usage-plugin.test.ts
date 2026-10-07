@@ -9,7 +9,11 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UsageStore } from "../../src/usage/index.js";
-import usagePlugin, { MemoryUsageStore, usagePeriod } from "../../src/usage/index.js";
+import usagePlugin, {
+  MemoryUsageStore,
+  usagePlugin as namedUsagePlugin,
+  usagePeriod,
+} from "../../src/usage/index.js";
 
 const apps: Array<{ close(): Promise<void> }> = [];
 
@@ -28,6 +32,17 @@ afterEach(async () => {
 });
 
 describe("usagePlugin", () => {
+  it("the NAMED export is the same non-encapsulated plugin as the default", async () => {
+    // `import { usagePlugin }` — what every doc example uses — was the raw
+    // function, so the decorator stayed inside the plugin's own context.
+    expect(namedUsagePlugin).toBe(usagePlugin);
+    const app = Fastify({ logger: false });
+    await app.register(namedUsagePlugin, { track: { requests: false } });
+    await app.ready();
+    apps.push(app);
+    expect(app.usage).toBeDefined();
+  });
+
   it("records manual usage for a raw actor and a scope", async () => {
     const store = new MemoryUsageStore();
     const app = await build({ store, track: { requests: false } });

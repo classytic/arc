@@ -1,23 +1,11 @@
 /**
- * Fastify ↔ arc-controller seam.
+ * Fastify ↔ arc-controller seam: the one place Fastify's `req` / `reply` are
+ * translated into `IRequestContext` / `IControllerResponse`.
  *
- * Arc is Fastify-only on the HTTP edge — this file is the one place where
- * Fastify's `req` / `reply` get translated into arc's `IRequestContext` /
- * `IControllerResponse`. The translation earns its keep on two grounds:
- *
- *   1. **MCP shares the controllers.** `src/integrations/mcp/` invokes
- *      the same `IController.list/get/create/update/delete` methods as
- *      HTTP routes — controllers that spoke `FastifyRequest` directly
- *      would force MCP to fake a request shape. One controller, two
- *      surfaces, no shadow code.
- *   2. **Arc-specific projections** — `req.scope` (RBAC), `req.server`
- *      (events / audit / queryCache decorators), `req.metadata` (hooks +
- *      policy filters). These are arc concepts not native to Fastify;
- *      this is where they get stamped onto the per-request context.
- *
- * Not a "future framework adapter" — arc has no plan to support
- * Express / Hono / etc. The naming sticks for back-compat, but the role
- * is the seam between Fastify and arc's controller call, not portability.
+ * Why the translation exists: MCP invokes the same controller methods as HTTP
+ * routes without a `FastifyRequest`, and arc-specific projections (`scope`,
+ * `server` decorators, `metadata` hooks + policy filters) are stamped here.
+ * Not a portability layer — arc is Fastify-only.
  */
 
 import type { AnyPaginationResult } from "@classytic/repo-core/pagination";
@@ -50,22 +38,17 @@ function isMongooseDoc(obj: unknown): obj is { toObject(): Record<string, unknow
   );
 }
 
-/**
- * Apply field mask to a single object
- * Filters fields based on include/exclude rules
- */
+/** Apply an include/exclude field mask to a single object. */
 function applyFieldMaskToObject(
   obj: AnyRecord | null | undefined,
   fieldMask: { include?: string[]; exclude?: string[] },
 ): AnyRecord | null | undefined {
   if (!obj || typeof obj !== "object") return obj;
 
-  // Normalize Mongoose documents to plain objects
   const plain = isMongooseDoc(obj) ? (obj.toObject() as AnyRecord) : obj;
 
   const { include, exclude } = fieldMask;
 
-  // If include is specified, only include those fields
   if (include && include.length > 0) {
     const filtered: AnyRecord = {};
     for (const field of include) {
@@ -76,7 +59,6 @@ function applyFieldMaskToObject(
     return filtered;
   }
 
-  // If exclude is specified, remove those fields
   if (exclude && exclude.length > 0) {
     const filtered: AnyRecord = { ...plain };
     for (const field of exclude) {
@@ -88,21 +70,17 @@ function applyFieldMaskToObject(
   return plain;
 }
 
-/**
- * Apply field mask to response data (handles both objects and arrays)
- */
+/** Apply a field mask to an object or array of objects. */
 function applyFieldMask<T>(
   data: T,
   fieldMask: { include?: string[]; exclude?: string[] } | undefined,
 ): T {
   if (!fieldMask) return data;
 
-  // Handle arrays
   if (Array.isArray(data)) {
     return data.map((item) => applyFieldMaskToObject(item as AnyRecord, fieldMask)) as T;
   }
 
-  // Handle single objects
   if (data && typeof data === "object") {
     return applyFieldMaskToObject(data as AnyRecord, fieldMask) as T;
   }
@@ -111,20 +89,14 @@ function applyFieldMask<T>(
 }
 
 /**
- * Project `FastifyRequest` into the curated `IRequestContext` shape that
- * arc's controllers receive. This is a developer-facing facade, not a
- * portability boundary — arc is Fastify-only. The projection lifts the
- * fields tenant-scoped controllers reach for (`organizationId`,
- * `teamId`, `scope`, `context`, server accessor) onto a flat, typed
- * surface so handler code doesn't have to dig through Fastify's
- * decorator surface or `req.metadata._scope` internals.
+ * Project `FastifyRequest` into the `IRequestContext` controllers receive,
+ * lifting scope, context, and a server accessor onto a flat, typed surface.
  */
 export function createRequestContext(req: FastifyRequest): IRequestContext {
   const reqWithExtras = req as RequestWithExtras;
   const requestContext = (reqWithExtras.context ?? {}) as RequestContext;
 
-  // Build server accessor — exposes events, audit, and log without wrapHandler switching
-  // Use 'in' checks because these decorators are only present when their plugins are registered
+  // `in` checks: these decorators exist only when their plugins are registered.
   const srv = req.server as unknown as Record<string, unknown> | undefined;
   const serverAccessor: ServerAccessor = {
     events: srv && "events" in srv ? (srv.events as ServerAccessor["events"]) : undefined,
@@ -134,12 +106,7 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
     log: req.log,
   };
 
-  // Lift the two fields every tenant-scoped controller reaches for into a
-  // first-class projection so overrides don't have to dig through
-  // `metadata._scope`. Full scope shape still lives on metadata._scope for
-  // code that branches on `scope.kind`. See `buildRequestScopeProjection`.
-  // (v2.10.8: same projection is shared with `ResourceHookContext.scope`
-  // so controllers and hooks read tenant/user the same way.)
+  // Same projection as `ResourceHookContext.scope`; the full scope stays on `metadata._scope`.
   const rawScope = reqWithExtras.scope as RequestScope | undefined;
   const scopeProjection = buildRequestScopeProjection(rawScope);
 
@@ -155,63 +122,46 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
           const normalizedId = rawId ? String(rawId) : undefined;
           return {
             ...user,
-            // Normalize ID for MongoDB compatibility
+            // `id` and `_id` both set, as strings; role fields pass through untouched.
             id: normalizedId,
             _id: normalizedId,
-            // Preserve original role/roles/permissions as-is
-            // Devs can define their own authorization structure
           } as import("../permissions/types.js").UserBase;
         })()
       : null,
-    // Typed org/auth context — use this in controller overrides
     context: requestContext,
-    // First-class scope projection (v2.10.6) — see RequestScopeProjection
     scope: scopeProjection,
-    // Internal metadata — includes context + Arc internals
     metadata: {
       ...reqWithExtras.context,
-      // Include Arc metadata for hook execution
       arc: reqWithExtras.arc,
-      // Include scope for org ID and elevation checks
       _scope: rawScope,
-      // Include ownership check for access control
       _ownershipCheck: reqWithExtras._ownershipCheck,
       // A cross-tenant read decided by the preset; the layers below re-derive
       // tenancy from the scope and would otherwise each undo that decision.
       _crossTenantRead: reqWithExtras._crossTenantRead,
-      // Policy filters — ONLY from trusted middleware (req._policyFilters)
-      // SECURITY: Never merge user-supplied query._policyFilters — they are untrusted
+      // SECURITY: only from trusted middleware — never merge user-supplied query._policyFilters.
       _policyFilters: reqWithExtras._policyFilters ?? {},
-      // Include logger for logging
       log: reqWithExtras.log,
     },
-    // Server accessor — publish events, log, and audit from any handler
     server: serverAccessor,
   };
 }
 
 /**
- * Get typed auth context from an IRequestContext.
- * Use this in controller overrides to access request context.
- *
- * For org scope, use `getControllerScope(req)` instead.
+ * Typed auth context from an IRequestContext, for controller overrides.
+ * For org scope, use `getControllerScope(req)`.
  */
 export function getControllerContext(req: IRequestContext): RequestContext {
   return (req.context ?? req.metadata ?? {}) as RequestContext;
 }
 
-/**
- * Get request scope from an IRequestContext.
- * Returns the RequestScope set by auth adapters.
- */
+/** The RequestScope set by auth adapters (`PUBLIC_SCOPE` when absent). */
 export function getControllerScope(req: IRequestContext): RequestScope {
   return (req.metadata as ArcInternalMetadata | undefined)?._scope ?? PUBLIC_SCOPE;
 }
 
 /**
- * Compute per-field capability metadata for the current user.
- * Only includes fields that have restrictions — unrestricted fields
- * are omitted (frontend defaults to { readable: true, writable: true }).
+ * Per-field capability metadata for the current user. Only restricted fields
+ * appear; clients default the rest to `{ readable: true, writable: true }`.
  */
 function computeFieldCapabilities(
   fieldPerms: FieldPermissionMap,
@@ -240,38 +190,19 @@ function computeFieldCapabilities(
 }
 
 /**
- * Send a controller's `IControllerResponse` through Fastify's reply.
+ * Send a controller's `IControllerResponse` envelope (status, meta, headers)
+ * through Fastify's reply, applying field masks and field read permissions.
  *
- * The `IControllerResponse<T>` envelope is arc's internal pipeline
- * contract — it's how custom `status`, `meta`, `headers`, and field
- * permissions thread from a handler through interceptors to the wire
- * without each step having to touch `reply` directly. Not a portability
- * abstraction (arc is Fastify-only); a pipeline-internal one.
- *
- * **Auto-envelope of bare returns.** Custom route handlers are
- * expected to return the envelope shape so this function can apply
- * field permissions, attach `fieldCaps`, and flatten paginated lists.
- * A handler that returns raw `T` (array, plain object, primitive) used
- * to silently produce a broken response — `response.data` was
- * `undefined`, the body sent was `undefined`, and any declared
- * `fields:` permission map was bypassed (the leak shape mentora
- * flagged). 2.17 detects bare returns and wraps them into
- * `{ data: response, status: 200 }` before the field-permission
- * pipeline runs, so `fields:` applies to ALL custom routes whether the
- * handler envelopes its return value or not. The envelope shape is
- * still the canonical contract — auto-wrapping is a safety net, not
- * an invitation to drop the envelope.
+ * A bare return (no `data` key) is wrapped as `{ data, status: 200 }` so
+ * `fields:` permissions still apply — otherwise restricted fields would leak.
+ * The envelope remains the canonical contract.
  */
 export function sendControllerResponse<T>(
   reply: FastifyReply,
   response: IControllerResponse<T>,
   request?: FastifyRequest,
 ): void {
-  // Auto-envelope: a bare return (no `.data` slot) gets wrapped so the
-  // field-permission + pagination flatten paths below see the canonical
-  // shape. Distinguishes an envelope with `data: undefined`/`null` (kept
-  // as-is — handler may want to send empty body) from a non-envelope
-  // value by checking for the presence of the `data` key.
+  // Key presence, not value: `{ data: undefined }` is a real envelope (empty body).
   if (
     response === null ||
     typeof response !== "object" ||
@@ -280,21 +211,17 @@ export function sendControllerResponse<T>(
     response = { data: response as T, status: 200 } as IControllerResponse<T>;
   }
 
-  // Extract field mask from request if available
   const reqWithExtras = request as RequestWithExtras | undefined;
   const fieldMaskConfig = reqWithExtras?.fieldMask;
 
-  // Extract field-level permissions from arc metadata (set by arcDecorator)
   const arcMeta = (reqWithExtras as AnyRecord | undefined)?.arc as AnyRecord | undefined;
   const scope = (reqWithExtras?.scope as RequestScope) ?? PUBLIC_SCOPE;
 
-  // Elevated scope (platform admin) skips field restrictions —
-  // consistent with requireOrgRole() and _sanitizeBody() bypass logic.
+  // Elevated scope (platform admin) skips field restrictions, like the write-side sanitizer.
   const fieldPerms = isElevated(scope)
     ? undefined
     : (arcMeta?.fields as FieldPermissionMap | undefined);
 
-  // Only compute roles when field permissions require them
   const effectiveRoles = fieldPerms
     ? resolveEffectiveRoles(
         getUserRoles(reqWithExtras?.user as Record<string, unknown> | undefined),
@@ -302,11 +229,8 @@ export function sendControllerResponse<T>(
       )
     : [];
 
-  // Compute field capabilities metadata for frontend consumption (opt-in per resource)
-  // Named `fieldCaps` to avoid variable shadowing with createCrudRouter's `fieldPermissions`
   const fieldCaps = fieldPerms ? computeFieldCapabilities(fieldPerms, effectiveRoles) : undefined;
 
-  // Only create permission applicator when needed
   const hasFieldRestrictions = !!(fieldMaskConfig || fieldPerms);
 
   /** Apply both field mask and field-level permissions to a data item */
@@ -324,24 +248,15 @@ export function sendControllerResponse<T>(
     return result;
   };
 
-  // Set custom response headers from controller
   if (response.headers) {
     for (const [key, value] of Object.entries(response.headers)) {
       reply.header(key, value);
     }
   }
 
-  // List-shaped responses — flatten via repo-core's `toCanonicalList` so
-  // the wire shape always matches the typed-client (`@classytic/arc-next`)
-  // contract regardless of which kit produced the result.
-  //
-  // Detection signal: presence of an array `data` field on the response
-  // payload. That covers the three shapes kits emit:
-  //   1. Modern paginated result — has `method` discriminant + `data: T[]`.
-  //   2. Legacy paginated result — has `page`+`limit`+`total` but no
-  //      `method` (pre-repo-core-0.2.0 callers / mocks). Back-fill
-  //      `method: 'offset'` so clients still see the discriminant.
-  //   3. Bare list — `{ data: T[] }` only (no pagination metadata).
+  // List-shaped (array `data`) → `toCanonicalList`, so the wire shape is kit-independent.
+  // Shapes: paginated with `method`; offset-style `page`/`limit`/`total` without `method`
+  // (back-filled as 'offset'); bare `{ data: T[] }`.
   if (
     response.data &&
     typeof response.data === "object" &&
@@ -351,8 +266,7 @@ export function sendControllerResponse<T>(
       | AnyPaginationResult<unknown>
       | { data: unknown[]; page?: number; limit?: number; total?: number };
 
-    // Apply field-level read permissions BEFORE handing to toCanonicalList
-    // so the spread on the paginated path keeps the filtered rows.
+    // Filter BEFORE toCanonicalList so the paginated spread keeps the filtered rows.
     const filteredRows = hasFieldRestrictions
       ? (applyPermissions(payload.data) as unknown[])
       : (payload.data as unknown[]);
@@ -395,15 +309,8 @@ export function sendControllerResponse<T>(
     return;
   }
 
-  // Single-doc / scalar response — emit data raw (no envelope; HTTP status
-  // discriminates success vs error). `fieldCaps`/`meta` merge in only when
-  // the data is an object; otherwise they would clobber primitive payloads.
-  //
-  // Mongoose documents carry framework internals (`$__`, `_doc`, `$isNew`)
-  // as enumerable own properties, so a naive `{...doc}` spread leaks them
-  // onto the wire. Call `.toJSON()` first (every mongoose doc implements
-  // it; it returns the projected `_doc` minus internals + applies any
-  // toJSON transforms the schema declares). Plain objects pass through.
+  // Single-doc / scalar: data raw, no envelope. `meta`/`fieldCaps` merge only into objects.
+  // `.toJSON()` first — a `{...doc}` spread of a Mongoose doc leaks `$__`, `_doc`, etc.
   const rawData = hasFieldRestrictions ? applyPermissions(response.data) : response.data;
   const filteredData =
     rawData !== null &&
@@ -427,12 +334,8 @@ export function sendControllerResponse<T>(
 }
 
 /**
- * Bridge an `IController` method (`(ctx: IRequestContext) => Promise<IControllerResponse<T>>`)
- * into a Fastify route handler. Translates between arc's curated request
- * context surface and Fastify's request/reply, and routes the envelope
- * through `sendControllerResponse` so the pipeline applies field
- * permissions, status, and meta uniformly. Internal plumbing, not a
- * portability layer — arc is Fastify-only.
+ * Bridge an `IController` method into a Fastify route handler, sending the
+ * envelope through `sendControllerResponse`.
  *
  * @example
  * ```typescript
@@ -448,23 +351,15 @@ export function createFastifyHandler<T>(
     const requestContext = createRequestContext(req);
     const response = await controllerMethod(requestContext);
     sendControllerResponse(reply, response, req);
-    // Return the reply to signal "response owned — don't auto-send the
-    // handler's resolved value." Without this, Fastify resolves the async
-    // handler with `undefined` while the `reply.send()` pipeline is still
-    // in flight; a genuinely-async `preSerialization`/`onSend` hook (e.g.
-    // payload encryption via jose) then yields the event loop and Fastify
-    // flushes an empty body first, producing `ERR_HTTP_HEADERS_SENT` when
-    // the real serialized body tries to write. Returning `reply` is the
-    // documented Fastify contract for handlers that call `reply.send()`
-    // themselves.
+    // Return `reply` ("response owned"): resolving `undefined` lets Fastify flush an
+    // empty body while an async `preSerialization`/`onSend` hook is still running,
+    // then the real body hits ERR_HTTP_HEADERS_SENT.
     return reply;
   };
 }
 
 /**
- * Create Fastify adapters for all CRUD methods of an IController
- *
- * Returns Fastify-compatible handlers for each CRUD operation
+ * Fastify handlers for each CRUD method of an IController.
  *
  * @example
  * ```typescript

@@ -4,8 +4,6 @@
  */
 
 import type { DataAdapter } from "@classytic/repo-core/adapter";
-import type { StandardRepo } from "@classytic/repo-core/repository";
-import type { IController } from "./handlers.js";
 import type { ResourceConfig } from "./resource/index.js";
 
 /**
@@ -34,7 +32,3 @@ export type InferDocType<T> =
 export type InferAdapterDoc<A> = A extends DataAdapter<infer D> ? D : unknown;
 
 export type InferResourceDoc<T> = T extends ResourceConfig<infer D> ? D : never;
-
-export type TypedResourceConfig<TDoc> = ResourceConfig<TDoc>;
-export type TypedController<TDoc> = IController<TDoc>;
-export type TypedRepository<TDoc> = StandardRepo<TDoc>;
