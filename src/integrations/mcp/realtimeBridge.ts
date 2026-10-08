@@ -42,7 +42,12 @@
  */
 
 import type { z } from "zod";
+import { isZodTypeSchema } from "./route-input-schema.js";
 import type { CallToolResult, ToolContext, ToolDefinition } from "./types.js";
+
+function isPlainArgs(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 /**
  * Inbound tool-call shape — accepts both LiveKit Agents (`arguments`)
@@ -158,7 +163,22 @@ async function dispatchOne<TSession>(
   // Zod input validation — the same path the MCP server uses. We
   // construct an ad-hoc validator from the flat shape so we don't
   // duplicate logic.
-  if (def.inputSchema) {
+  if (isZodTypeSchema(def.inputSchema)) {
+    // A whole schema validates as one value, exactly as the MCP server does.
+    const result = def.inputSchema.safeParse(parsedArgs);
+    if (!result.success) {
+      return {
+        id: call.id,
+        name: call.name,
+        isError: true,
+        response: {
+          error: "argument validation failed",
+          fields: result.error.issues.map((i) => `${i.path.join(".") || "input"}: ${i.message}`),
+        },
+      };
+    }
+    parsedArgs = isPlainArgs(result.data) ? result.data : {};
+  } else if (def.inputSchema) {
     const fieldErrors: string[] = [];
     const validated: Record<string, unknown> = {};
     for (const [key, schema] of Object.entries(def.inputSchema)) {

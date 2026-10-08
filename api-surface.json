@@ -222,7 +222,7 @@
       "version",
       "when"
     ],
-    "typesHash": "8343c988b2487345"
+    "typesHash": "57f4c1ecf1a67220"
   },
   "./permissions": {
     "stability": "stable",
@@ -372,7 +372,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "13b02faf0debbc86"
+    "typesHash": "7d99e98a4ee79ec3"
   },
   "./cache": {
     "stability": "stable",
@@ -515,7 +515,7 @@
       "WriteContext",
       "WriteVerbKey"
     ],
-    "typesHash": "7085e40803e0a8b1"
+    "typesHash": "1d2de422dbb6504e"
   },
   "./types/storage": {
     "stability": "stable",
@@ -670,7 +670,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "1b17af3f9ed0660c"
+    "typesHash": "3bb4ec0e35be131d"
   },
   "./presets": {
     "stability": "stable",
@@ -726,7 +726,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "92a76365ec2ab4c5"
+    "typesHash": "52daa7ca61c6ea85"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -738,7 +738,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "8ba9f22da45e0743"
+    "typesHash": "630fdbf00f9ded8a"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -758,7 +758,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "9c14bf58402e4569"
+    "typesHash": "a10572d9430402ef"
   },
   "./presets/search": {
     "stability": "stable",
@@ -773,7 +773,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "523ade85eebcacd8"
+    "typesHash": "9816281fd9552a5d"
   },
   "./auth": {
     "stability": "stable",
@@ -792,6 +792,7 @@
       "BetterAuthHandler",
       "BetterAuthOpenApiOptions",
       "CorsOriginsConfig",
+      "CredentialVerifier",
       "MemorySessionStore",
       "MemorySessionStoreOptions",
       "MirrorTrustedOriginsOptions",
@@ -806,7 +807,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "de534ab49f4c892c"
+    "typesHash": "8c529db90e6d6cfa"
   },
   "./hooks": {
     "stability": "stable",
@@ -840,7 +841,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "f4670e1a7ccba753"
+    "typesHash": "a4fde908421db32c"
   },
   "./middleware": {
     "stability": "stable",
@@ -858,7 +859,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "b0e16967a6ff1c6c"
+    "typesHash": "e060a9cb8fd61bb4"
   },
   "./pipeline": {
     "stability": "stable",
@@ -887,7 +888,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "17ab17052f60e8b1"
+    "typesHash": "d66383c8b10eed85"
   },
   "./context": {
     "stability": "stable",
@@ -975,7 +976,7 @@
       "getCascadingResourcesWithMetadata",
       "introspectionPlugin"
     ],
-    "typesHash": "07a8baf176dde90e"
+    "typesHash": "2d0fdafb7ffa7aad"
   },
   "./utils": {
     "stability": "stable",
@@ -1133,7 +1134,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "cbf91330d21652f1"
+    "typesHash": "559029140952208b"
   },
   "./cli": {
     "stability": "stable",
@@ -1227,7 +1228,7 @@
       "ssePlugin",
       "versioningPlugin"
     ],
-    "typesHash": "8b4dc25b75313530"
+    "typesHash": "5cdfae58b2e7eec4"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1250,6 +1251,7 @@
     "stability": "stable",
     "runtime": [
       "MemoryAuditStore",
+      "auditContextOf",
       "auditPlugin",
       "createAuditEntry",
       "repositoryAsAuditStore"
@@ -1261,16 +1263,19 @@
       "AuditLogger",
       "AuditPluginOptions",
       "AuditQueryOptions",
+      "AuditRequestLike",
       "AuditStore",
       "AuditStoreOptions",
       "MemoryAuditStore",
       "MemoryAuditStoreOptions",
       "RepositoryAuditStoreOptions",
+      "RequestAuditLogger",
+      "auditContextOf",
       "auditPlugin",
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "d08b96febfa2ead4"
+    "typesHash": "fadb8fd4a3235c96"
   },
   "./docs": {
     "stability": "stable",
@@ -1289,7 +1294,7 @@
       "openApiPlugin",
       "scalarPlugin"
     ],
-    "typesHash": "97eb2969e54bd315"
+    "typesHash": "01089609cf8910f5"
   },
   "./encryption": {
     "stability": "stable",
@@ -1343,7 +1348,7 @@
       "idempotencyPlugin",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "acc4da80ae7a1908"
+    "typesHash": "dd5796d557e7142c"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1444,7 +1449,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "6e057b427ccafb84"
+    "typesHash": "98410963ba852202"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1475,6 +1480,7 @@
     "runtime": [
       "HttpTestHarness",
       "TEST_ACTOR_HEADER",
+      "assertModuleBootsAlone",
       "bootModuleApp",
       "createBetterAuthProvider",
       "createBetterAuthTestHelpers",
@@ -1525,6 +1531,8 @@
       "HttpTestHarness",
       "HttpTestHarnessOptions",
       "MockRepository",
+      "ModuleBootsAloneOptions",
+      "ModuleBootsAloneResult",
       "ModuleTestApp",
       "OrgResponse",
       "RoleConfig",
@@ -1545,6 +1553,7 @@
       "TestFixtures",
       "TestModuleSetup",
       "TestkitContext",
+      "assertModuleBootsAlone",
       "bootModuleApp",
       "createBetterAuthProvider",
       "createBetterAuthTestHelpers",
@@ -1575,7 +1584,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "3f87e46fdedee72a"
+    "typesHash": "7dd5ccfaf75194d3"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1608,8 +1617,10 @@
       "DEFAULT_LOGGER_REDACT_PATHS",
       "activateBridges",
       "analyzeModuleGraph",
+      "assertComposable",
       "buildModuleGraph",
       "collectModuleWorkflows",
+      "compositionProblems",
       "createApp",
       "createRelayNudge",
       "createWorker",
@@ -1621,6 +1632,7 @@
       "eventTopology",
       "extendModule",
       "getModuleExports",
+      "getModuleResources",
       "getModuleState",
       "getOptionalModuleExports",
       "getPreset",
@@ -1630,12 +1642,14 @@
       "lazyRequiredModuleExports",
       "loadResources",
       "orderModules",
+      "planModules",
       "preloadResources",
       "preloadResourcesAsync",
       "productionPreset",
       "renderModuleGraph",
       "resolveContribution",
       "resolveModule",
+      "resolveModuleClosure",
       "subscribeModuleEventHandlers",
       "testingPreset",
       "toAsyncApi",
@@ -1644,16 +1658,21 @@
       "withRelayNudge"
     ],
     "types": [
+      "ArcCompositionConfig",
       "ArcFactory",
       "ArcModule",
       "ArcModuleInput",
       "ArcModuleRegistry",
+      "ArcPortRegistry",
+      "ArcPorts",
       "ArcWorker",
       "AsyncApiCatalogEntry",
       "AsyncApiInfo",
       "AuthOption",
       "BetterAuthOption",
       "BootDisposer",
+      "ClosureNode",
+      "CompositionProblem",
       "CreateAppOptions",
       "CreateWorkerOptions",
       "CrudSurface",
@@ -1678,9 +1697,15 @@
       "ModuleGraphNode",
       "ModuleGraphOptions",
       "ModuleKind",
+      "ModuleName",
+      "ModulePlan",
+      "ModulePorts",
+      "ModuleRequirements",
       "ModuleSetupContext",
       "ModuleState",
       "MultipartOptions",
+      "PlanModulesOptions",
+      "PortName",
       "RawBodyOptions",
       "RelayNudge",
       "RelayOption",
@@ -1694,8 +1719,10 @@
       "WorkerHealthOptions",
       "activateBridges",
       "analyzeModuleGraph",
+      "assertComposable",
       "buildModuleGraph",
       "collectModuleWorkflows",
+      "compositionProblems",
       "createApp",
       "createRelayNudge",
       "createWorker",
@@ -1707,6 +1734,7 @@
       "eventTopology",
       "extendModule",
       "getModuleExports",
+      "getModuleResources",
       "getModuleState",
       "getOptionalModuleExports",
       "getPreset",
@@ -1716,12 +1744,14 @@
       "lazyRequiredModuleExports",
       "loadResources",
       "orderModules",
+      "planModules",
       "preloadResources",
       "preloadResourcesAsync",
       "productionPreset",
       "renderModuleGraph",
       "resolveContribution",
       "resolveModule",
+      "resolveModuleClosure",
       "subscribeModuleEventHandlers",
       "testingPreset",
       "toAsyncApi",
@@ -1729,7 +1759,7 @@
       "verifyModuleGraph",
       "withRelayNudge"
     ],
-    "typesHash": "169c75a50e7c3d4f"
+    "typesHash": "02fda4e07a489eed"
   },
   "./schemas": {
     "stability": "stable",
@@ -1840,7 +1870,7 @@
       "WorkflowLike",
       "WorkflowRunLike"
     ],
-    "typesHash": "af60ceee3e2d3fc9"
+    "typesHash": "4eb756ac92bdf8bd"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1999,7 +2029,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "5b9c1100ed8a0c90"
+    "typesHash": "30561388e93ad0f2"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -2141,7 +2171,8 @@
       "resourceToTools",
       "toCallToolError",
       "toCallToolResult",
-      "toCallToolSuccess"
+      "toCallToolSuccess",
+      "toolInputShape"
     ],
     "types": [
       "AuthRef",
@@ -2176,6 +2207,7 @@
       "ToolAnnotations",
       "ToolContext",
       "ToolDefinition",
+      "ToolInputSchema",
       "bridgeToMcp",
       "buildMcpToolsFromBridges",
       "buildRequestContext",
@@ -2208,9 +2240,10 @@
       "resourceToTools",
       "toCallToolError",
       "toCallToolResult",
-      "toCallToolSuccess"
+      "toCallToolSuccess",
+      "toolInputShape"
     ],
-    "typesHash": "0e957042eb89294e"
+    "typesHash": "5c178426f793ff8e"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2225,7 +2258,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "c8a14ebc01022605"
+    "typesHash": "ad9e1a26e1a33660"
   },
   "./scim": {
     "stability": "stable",
@@ -2393,7 +2426,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "63352fbe116352ff"
+    "typesHash": "49b5b244d565287b"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2406,7 +2439,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "59f131bf60207877"
+    "typesHash": "80e05c6985928539"
   },
   "./testing/outbox": {
     "stability": "stable",

@@ -55,6 +55,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { arcRouteValidatorCompiler } from "../core/routeValidator.js";
 import { eventAudienceOf, isEventVisible } from "../core/tenancy.js";
 import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
@@ -600,9 +601,11 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
   // any denial rejects the whole subscription (explicit, fail-closed —
   // partial silent success would hide authorization bugs).
   const multiplexPath = path.replace(/\/:resource$/, "");
+  const validatorCompiler = arcRouteValidatorCompiler(fastify);
   fastify.route({
     method: "GET",
     url: multiplexPath,
+    ...(validatorCompiler ? { validatorCompiler } : {}),
     schema: {
       tags: ["Events"],
       summary: "Realtime multi-resource change feed",

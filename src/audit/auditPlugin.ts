@@ -23,7 +23,8 @@ import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { transactionContext } from "../context/transactionContext.js";
-import type { RequestContext, UserBase } from "../types/index.js";
+import { getClientId, getUserId, type RequestScope } from "../scope/types.js";
+import type { UserBase } from "../types/index.js";
 import { declareRuntimeCapability } from "../utils/runtimeCapabilities.js";
 import { repositoryAsAuditStore } from "./repository-audit-adapter.js";
 import type { AuditContext, AuditEntry, AuditStore } from "./stores/interface.js";
@@ -132,8 +133,13 @@ declare module "fastify" {
   }
 
   interface FastifyRequest {
-    /** Audit context for current request */
+    /**
+     * Audit context for the current request. The actor and organization are read from
+     * the VALIDATED scope when this is read — never captured before auth ran.
+     */
     auditContext?: AuditContext;
+    /** Extra fields a handler attaches to the audit row arc writes for this request. */
+    auditMetadata?: Record<string, unknown>;
   }
 }
 
@@ -180,6 +186,12 @@ export interface AuditLogger {
     context?: AuditContext,
   ) => Promise<void>;
 
+  /**
+   * A logger bound to one request: every entry's actor and organization come from that
+   * request's validated scope, so a caller can neither forget nor forge them.
+   */
+  forRequest: (request: AuditRequestLike) => RequestAuditLogger;
+
   /** Query audit logs (if stores support it) */
   query: (options: import("./stores/interface.js").AuditQueryOptions) => Promise<AuditEntry[]>;
 
@@ -207,6 +219,7 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
     // Provide no-op audit methods
     fastify.decorate("audit", createNoopLogger());
     fastify.decorateRequest("auditContext", undefined);
+    fastify.decorateRequest("auditMetadata", undefined);
     fastify.log?.debug?.("Audit plugin disabled");
     return;
   }
@@ -281,6 +294,17 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
       await logToStores(entry);
     },
 
+    forRequest(request) {
+      const ctx = (): AuditContext => auditContextOf(request);
+      return {
+        create: (resource, documentId, data) => audit.create(resource, documentId, data, ctx()),
+        update: (resource, documentId, before, after) => audit.update(resource, documentId, before, after, ctx()),
+        delete: (resource, documentId, data) => audit.delete(resource, documentId, data, ctx()),
+        restore: (resource, documentId, data) => audit.restore(resource, documentId, data, ctx()),
+        custom: (resource, documentId, action, data) => audit.custom(resource, documentId, action, data, ctx()),
+      };
+    },
+
     async query(options) {
       // Use first store that supports querying
       for (const store of stores) {
@@ -306,40 +330,14 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
 
   fastify.decorate("audit", audit);
 
-  // Extract audit context from request
-  fastify.decorateRequest("auditContext", undefined);
-
-  fastify.addHook("onRequest", async (request) => {
-    const user = (request as FastifyRequest & { user?: UserBase }).user;
-    const _context = (request as FastifyRequest & { context?: RequestContext }).context;
-
-    // Derive org ID from request.scope (set by auth adapters)
-    const scope = request.scope;
-    const auditOrgId =
-      scope?.kind === "member"
-        ? scope.organizationId
-        : scope?.kind === "elevated"
-          ? scope.organizationId
-          : undefined;
-
-    request.auditContext = {
-      user,
-      organizationId: auditOrgId,
-      requestId: request.id,
-      ipAddress: request.ip,
-      userAgent: request.headers["user-agent"],
-      endpoint: undefined,
-      duration: undefined,
-    };
+  // A getter, not a value captured in `onRequest`: global onRequest hooks run BEFORE a
+  // route authenticates, so a captured context carried no actor on every authed route.
+  fastify.decorateRequest("auditContext", {
+    getter(this: FastifyRequest) {
+      return auditContextOf(this);
+    },
   });
-
-  // Populate endpoint and duration after response is sent
-  fastify.addHook("onResponse", async (request, reply) => {
-    if (request.auditContext) {
-      request.auditContext.endpoint = `${request.method} ${request.routeOptions?.url ?? request.url}`;
-      request.auditContext.duration = Math.round(reply.elapsedTime);
-    }
-  });
+  fastify.decorateRequest("auditMetadata", undefined);
 
   // Retention — periodic auto-purge. `purgeIntervalMs: 0` disables the
   // timer; manual `fastify.audit.purge(...)` still works.
@@ -427,8 +425,12 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
 
             const docId = autoAuditExtractId(ctx.result);
             const scope = (ctx.context as Record<string, unknown> | undefined)?._scope;
+            const scopedActor = scope
+              ? (getUserId(scope as RequestScope) ?? getClientId(scope as RequestScope))
+              : undefined;
             const auditCtx: AuditContext = {
               user: ctx.user,
+              ...(scopedActor ? { actorId: String(scopedActor) } : {}),
               organizationId: scope ? autoAuditGetOrgId(scope) : undefined,
             };
 
@@ -460,6 +462,54 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
 
   fastify.log?.debug?.({ stores: stores.map((s) => s.name) }, "Audit plugin enabled");
 };
+
+/** {@link AuditLogger} writes with the context bound to one request. */
+export interface RequestAuditLogger {
+  create: (resource: string, documentId: string, data: Record<string, unknown>) => Promise<void>;
+  update: (
+    resource: string,
+    documentId: string,
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+  ) => Promise<void>;
+  delete: (resource: string, documentId: string, data: Record<string, unknown>) => Promise<void>;
+  restore: (resource: string, documentId: string, data: Record<string, unknown>) => Promise<void>;
+  custom: (resource: string, documentId: string, action: string, data?: Record<string, unknown>) => Promise<void>;
+}
+
+/** What {@link auditContextOf} reads — a FastifyRequest, or arc's `IRequestContext`. */
+export interface AuditRequestLike {
+  readonly scope?: unknown;
+  readonly user?: unknown;
+  readonly id?: string;
+  readonly ip?: string;
+  readonly headers?: Record<string, unknown>;
+  readonly method?: string;
+  readonly url?: string;
+  readonly routeOptions?: { readonly url?: string };
+  readonly metadata?: unknown;
+}
+
+/**
+ * The audit context of a request, from its VALIDATED scope: the actor is the scope's user
+ * (or service client) and the organization is the scope's active organization.
+ */
+export function auditContextOf(request: AuditRequestLike): AuditContext {
+  const meta = request.metadata as { _scope?: RequestScope } | undefined;
+  const scope = meta?._scope ?? (request.scope as RequestScope | undefined);
+  const actorId = scope ? (getUserId(scope) ?? getClientId(scope)) : undefined;
+  const userAgent = request.headers?.["user-agent"];
+  return {
+    user: request.user as UserBase | undefined,
+    ...(actorId ? { actorId: String(actorId) } : {}),
+    organizationId: scope ? autoAuditGetOrgId(scope) : undefined,
+    requestId: request.id,
+    ipAddress: request.ip,
+    userAgent: typeof userAgent === "string" ? userAgent : undefined,
+    // The route TEMPLATE, never the raw url: ids and query strings stay out of audit rows.
+    endpoint: request.method && request.routeOptions?.url ? `${request.method} ${request.routeOptions.url}` : undefined,
+  };
+}
 
 /** Extract document ID from a result */
 function autoAuditExtractId(doc: unknown): string {
@@ -503,6 +553,7 @@ function createNoopLogger(): AuditLogger {
     delete: noop,
     restore: noop,
     custom: noop,
+    forRequest: () => ({ create: noop, update: noop, delete: noop, restore: noop, custom: noop }),
     query: async () => [],
     purge: async () => 0,
     _noop: true,

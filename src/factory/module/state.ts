@@ -41,6 +41,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import type { ResourceDefinition } from "../../core/defineResource.js";
 
 export type ModuleState = "resolved" | "bootstrapping" | "ready" | "closing" | "closed" | "failed";
 
@@ -102,4 +103,37 @@ export function hasModule(fastify: FastifyInstance, name: string): boolean {
 export function getModuleState(fastify: FastifyInstance, name: string): ModuleState | undefined {
   const states = readStates(fastify);
   return states !== undefined && Object.hasOwn(states, name) ? states[name] : undefined;
+}
+
+/**
+ * The `ResourceDefinition`s module `name` mounted, in its declared order — for building that
+ * module's MCP tools or docs after boot. Throws when `name` is not a composed module (a typo would
+ * otherwise read as "no resources"), and when called before `registerResources` has published the
+ * descriptors. A resource declaring `skipRegistry` is absent, as from every introspection surface.
+ */
+export function getModuleResources(
+  fastify: FastifyInstance,
+  name: string,
+): ResourceDefinition<unknown>[] {
+  const descriptors = fastify.arc?.moduleDescriptors;
+  const registry = fastify.arc?.registry;
+  if (!descriptors || !registry) {
+    throw new Error(
+      `[arc] getModuleResources("${name}"): no composed module graph on this instance yet — call it after boot (afterResources, onReady, or after app.ready()).`,
+    );
+  }
+  const descriptor = descriptors.find((d) => d.name === name);
+  if (!descriptor) {
+    const known = descriptors.map((d) => d.name).join(", ") || "(none)";
+    throw new Error(
+      `[arc] getModuleResources: "${name}" is not a composed module. Composed: ${known}.`,
+    );
+  }
+  const out: ResourceDefinition<unknown>[] = [];
+  for (const resource of descriptor.resources) {
+    const definition =
+      resource.name === undefined ? undefined : registry.getDefinition(resource.name);
+    if (definition) out.push(definition);
+  }
+  return out;
 }

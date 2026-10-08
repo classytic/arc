@@ -21,6 +21,7 @@ import Fastify, {
   type RawServerDefault,
 } from "fastify";
 import qs from "qs";
+import { arcAjvCustomOptions, markArcRootValidator } from "../core/routeValidator.js";
 import {
   type ArcLoggerOptions,
   arcLog,
@@ -398,19 +399,10 @@ async function buildApp(
       // above Fastify's stock default so signed-token URLs route.
       maxParamLength: config.maxParamLength ?? 400,
     },
-    ajv: {
-      customOptions: {
-        coerceTypes: true,
-        useDefaults: true,
-        removeAdditional: false,
-        // Kits emit `additionalProperties: true` WITHOUT `type: 'object'` for
-        // any-value (`Mixed`) fields — correct, but `strictTypes` would flag
-        // it at boot. Other Ajv strict checks stay on.
-        strictTypes: false,
-        keywords: ["example", ...(config.ajv?.keywords ?? [])],
-      },
-    },
+    // The same options arc compiles its own routes with on a bare host (see routeValidator.ts).
+    ajv: { customOptions: arcAjvCustomOptions(config.ajv?.keywords) },
   });
+  markArcRootValidator(fastify);
 
   // Publish IMMEDIATELY so a later throw still has an instance to close.
   onInstance(fastify);

@@ -5,7 +5,7 @@
 
 import type { FastifyInstance } from "fastify";
 import type { EventHandler } from "../../events/EventTransport.js";
-import { wrapWithBoundary } from "../../events/subscribe-helpers.js";
+import { wrapWithAttribution, wrapWithBoundary } from "../../events/subscribe-helpers.js";
 import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule, EventHandlerDefinition } from "./types.js";
 
@@ -44,7 +44,7 @@ export async function subscribeModuleEventHandlers(
           `[arc] module "${m.name}" declares eventHandlers but the event subsystem is unavailable (fastify.events). Enable arcPlugins.events.`,
         );
       }
-      for (const def of handlers) {
+      for (const [index, def] of handlers.entries()) {
         if (def.name !== undefined) {
           const prior = owner.get(def.name);
           if (prior !== undefined) {
@@ -54,8 +54,13 @@ export async function subscribeModuleEventHandlers(
           }
           owner.set(def.name, m.name);
         }
-        const handler = applyBoundary(def, m.name, fastify);
         const patterns = Array.isArray(def.event) ? def.event : [def.event as string];
+        const handler = applyBoundary(
+          def,
+          m.name,
+          handlerLabel(def, m.name, patterns, index),
+          fastify,
+        );
         consumedByModule?.set(m.name, [...(consumedByModule.get(m.name) ?? []), ...patterns]);
         for (const pattern of patterns) {
           unsubscribes.push(await bus.subscribe(pattern, handler));
@@ -76,17 +81,33 @@ export async function subscribeModuleEventHandlers(
 }
 
 /**
- * Apply the opt-in error boundary. Without it a throw reaches the transport —
- * that is what makes the durable path work (unacked → redelivered → DLQ). With
- * it, failures are logged and swallowed. Unnamed handlers are labelled
- * `<module>.<pattern>` so the log line stays attributable.
+ * The name a subscriber's errors and logs carry: its declared `name`, else
+ * `<module>:<patterns>#<index in the module's handlers>` — unique, so two unnamed
+ * subscribers of one event stay distinguishable in a dead-lettered row.
+ */
+function handlerLabel(
+  def: EventHandlerDefinition,
+  moduleName: string,
+  patterns: readonly string[],
+  index: number,
+): string {
+  return def.name ?? `${moduleName}:${patterns.join(",")}#${index}`;
+}
+
+/**
+ * Without a boundary, attribute the handler's errors to `label` and let them reach the transport —
+ * that is what makes the durable path work (unacked → redelivered → DLQ), and the label is what
+ * names the subscriber in the outbox's `lastError`. With the opt-in boundary, failures are logged
+ * under the handler's name (`<module>.<pattern>` when unnamed) and swallowed, so the original error
+ * reaches the boundary's `onError` untouched.
  */
 function applyBoundary(
   def: EventHandlerDefinition,
   moduleName: string,
+  label: string,
   fastify: FastifyInstance,
 ): EventHandler {
-  if (!def.boundary) return def.handler;
+  if (!def.boundary) return wrapWithAttribution(def.handler, label);
   const onError = typeof def.boundary === "object" ? def.boundary.onError : undefined;
   return wrapWithBoundary(def.handler, {
     logger: fastify.log,

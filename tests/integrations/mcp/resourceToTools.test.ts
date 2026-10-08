@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ResourceDefinition } from "../../../src/core/defineResource.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
+import { toolInputShape } from "../../../src/integrations/mcp/route-input-schema.js";
 
 function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefinition {
   return {
@@ -231,9 +232,9 @@ describe("resourceToTools", () => {
       const listTool = tools.find((t) => t.name === "list_products")!;
 
       // Should have status and companyId from queryParser, plus pagination fields
-      expect(listTool.inputSchema).toHaveProperty("status");
-      expect(listTool.inputSchema).toHaveProperty("companyId");
-      expect(listTool.inputSchema).toHaveProperty("page");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("status");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("companyId");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("page");
     });
 
     it("prefers explicit filterableFields over queryParser.allowedFilterFields", () => {
@@ -257,8 +258,8 @@ describe("resourceToTools", () => {
       const listTool = tools.find((t) => t.name === "list_products")!;
 
       // Should only have status (from explicit filterableFields), not companyId
-      expect(listTool.inputSchema).toHaveProperty("status");
-      expect(listTool.inputSchema).not.toHaveProperty("companyId");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("status");
+      expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("companyId");
     });
   });
 
@@ -594,16 +595,16 @@ describe("resourceToTools", () => {
     it("list tool advertises `cursor` for keyset pagination (offset still available)", () => {
       const tools = resourceToTools(mockResource());
       const list = tools.find((t) => t.name === "list_products")!;
-      expect(list.inputSchema).toHaveProperty("cursor");
-      expect(list.inputSchema).toHaveProperty("page"); // offset path unchanged
-      expect(list.inputSchema).toHaveProperty("limit");
+      expect(toolInputShape(list.inputSchema)).toHaveProperty("cursor");
+      expect(toolInputShape(list.inputSchema)).toHaveProperty("page"); // offset path unchanged
+      expect(toolInputShape(list.inputSchema)).toHaveProperty("limit");
     });
 
     it("get tool advertises `select` projection alongside id", () => {
       const tools = resourceToTools(mockResource());
       const get = tools.find((t) => t.name === "get_product")!;
-      expect(get.inputSchema).toHaveProperty("id");
-      expect(get.inputSchema).toHaveProperty("select");
+      expect(toolInputShape(get.inputSchema)).toHaveProperty("id");
+      expect(toolInputShape(get.inputSchema)).toHaveProperty("select");
     });
 
     it("delete tool stays id-only — no projection", () => {

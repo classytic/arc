@@ -32,6 +32,7 @@ import {
   resolveRouterPluginMw,
   routeHookOptions,
   selectPluginMw,
+  tryRegisterRoute,
 } from "../routerShared.js";
 import { buildAggregationHandler } from "./buildHandler.js";
 import type { AggregationsMap } from "./types.js";
@@ -238,22 +239,26 @@ function registerOne(
         `compose with the declaration's base filter + tenant scope.`,
   };
 
-  fastify.route({
-    method: "GET",
-    url: `/aggregations/${name}`,
-    schema: routeSchema as FastifySchema,
-    ...routeHookOptions(hooks),
-    ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
-    handler: async (req: FastifyRequest, reply: FastifyReply) => {
-      try {
-        return await handler(req, reply);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        req.log.error({ err, aggregation: name }, "Aggregation handler error");
-        throw createError(500, `Aggregation "${name}" failed: ${message}`);
-      }
+  tryRegisterRoute(
+    fastify,
+    {
+      method: "GET",
+      url: `/aggregations/${name}`,
+      schema: routeSchema as FastifySchema,
+      ...routeHookOptions(hooks),
+      ...(rateLimitConfig ? { config: rateLimitConfig } : {}),
+      handler: async (req: FastifyRequest, reply: FastifyReply) => {
+        try {
+          return await handler(req, reply);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          req.log.error({ err, aggregation: name }, "Aggregation handler error");
+          throw createError(500, `Aggregation "${name}" failed: ${message}`);
+        }
+      },
     },
-  });
+    { resourceName: tag ?? name, op: `aggregation:${name}` },
+  );
 }
 
 /**

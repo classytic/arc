@@ -47,7 +47,7 @@ import type {
   ResourceExtensions,
   RouteSchemaOptions,
 } from "../types/index.js";
-import { createError } from "../utils/errors.js";
+import { createError, NotFoundError } from "../utils/errors.js";
 import { sendControllerResponse } from "./fastifyAdapter.js";
 import {
   buildActionPermissionMw,
@@ -192,6 +192,50 @@ export interface ActionRouterConfig {
    * Defaults to `[]` (all actions are id-bound — pre-2.15.5 behaviour).
    */
   readonly idLessActionNames?: readonly string[];
+
+  /**
+   * Authorizes an id-bound action's TARGET: `true` iff the caller could read that row
+   * (`GET /:id`'s id + tenant + row-policy filter). Absent = no fence (a resource with no
+   * row scope). `defineResource` builds it from the controller.
+   */
+  readonly isTargetVisible?: (id: string, req: FastifyRequest) => Promise<boolean>;
+
+  /** Id-bound actions whose handler authorizes its own target (`target: { scope: 'handler' }`). */
+  readonly handlerScopedActionNames?: readonly string[];
+
+  /**
+   * Write `audit.custom(resource, id, action)` after every successful action, with the actor
+   * from the request's validated scope. Set by `defineResource` from the resource's `audit` flag.
+   */
+  readonly auditActions?: boolean;
+}
+
+/**
+ * Record a successful action. The actor and organization come from the request's
+ * validated scope (`auditContext`); a failed write is logged, never turned into a 500
+ * after the action has already happened.
+ */
+async function auditAction(
+  req: FastifyRequest,
+  resource: string,
+  id: string,
+  action: string,
+): Promise<void> {
+  const audit = (
+    req.server as { audit?: { custom?: (...args: never[]) => Promise<void>; _noop?: boolean } }
+  ).audit;
+  if (!audit?.custom || audit._noop === true) return;
+  try {
+    await (audit as import("../audit/auditPlugin.js").AuditLogger).custom(
+      resource,
+      id,
+      action,
+      { ...(req.auditMetadata ?? {}) },
+      req.auditContext,
+    );
+  } catch (err) {
+    req.log.error({ err, resource, id, action }, "[arc] action audit write failed");
+  }
 }
 
 // ============================================================================
@@ -227,7 +271,11 @@ export function createActionRouter(
     rateLimit,
     idLessActionNames = [],
     extensions,
+    isTargetVisible,
+    handlerScopedActionNames = [],
+    auditActions = false,
   } = config;
+  const handlerScoped = new Set(handlerScopedActionNames);
 
   const allActionNames = Object.keys(actions);
 
@@ -507,8 +555,20 @@ export function createActionRouter(
             );
           }
 
+          if (
+            hasId &&
+            isTargetVisible &&
+            !handlerScoped.has(action) &&
+            !(await isTargetVisible(id, req))
+          ) {
+            throw new NotFoundError(resourceName);
+          }
+
           try {
             const response = await handler(id, data, req as RequestWithExtras);
+            if (auditActions && (response.status ?? 200) < 400) {
+              await auditAction(req, resourceName, id, action);
+            }
             sendControllerResponse(reply, response, req);
             // Return the reply (not the void result) so Fastify treats the
             // response as owned and doesn't race an async serialization hook
@@ -577,7 +637,7 @@ export function createActionRouter(
  * `action: { const }` and carrying its own `required`.
  *
  * EVERY BRANCH LISTS THE FULL PROPERTY UNION — the non-obvious part. AJV's
- * `removeAdditional: 'all'` (Fastify's default) strips a field during a
+ * `removeAdditional` (Fastify's default strips) strips a field during a
  * branch's evaluation when that branch's `properties` omits it, EVEN IF
  * another branch would have allowed it. The strip mutates the body before
  * `oneOf` finishes discriminating, so the winning branch receives a body that
@@ -586,11 +646,10 @@ export function createActionRouter(
  * every branch makes each walk see every field as its own, so nothing is
  * stripped; `required` stays per-action, so dispatch still gates correctly.
  *
- * Per-branch `additionalProperties: false` survives but cannot reject
- * sibling-action fields under host `removeAdditional: 'all'` — those strip at
- * top level instead. That is the host's opt-in; arc's job is only to stop
- * losing an action's OWN declared fields. Under arc's `createApp`
- * (`removeAdditional: false`) strict rejection works normally.
+ * Arc compiles this route with its own validator (`removeAdditional: false`, see
+ * `./routeValidator.ts`), whatever the host's AJV says — so per-branch
+ * `additionalProperties: false` rejects unknown fields on every host. The full
+ * property union stays because a host-supplied `validatorCompiler` may still strip.
  *
  * Pinned by `tests/core/action-discriminator-strip.test.ts` and
  * `action-strict-schema-parity.test.ts`. Exported so OpenAPI and MCP tool

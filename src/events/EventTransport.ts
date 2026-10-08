@@ -293,7 +293,7 @@ export class MemoryEventTransport implements EventTransport {
     if (failures.length > 0 && this.onHandlerError === "throw") {
       throw new AggregateError(
         failures,
-        `[EventTransport] ${failures.length} handler(s) failed for ${event.type}`,
+        `[EventTransport] ${failures.length} handler(s) failed for ${event.type}: ${describeFailures(failures)}`,
       );
     }
   }
@@ -329,4 +329,20 @@ export class MemoryEventTransport implements EventTransport {
   async close(): Promise<void> {
     this.router.clear();
   }
+}
+
+/** Per-cause and total caps, so a dead-lettered row's `lastError` stays readable and bounded. */
+const CAUSE_MESSAGE_MAX = 300;
+const FAILURES_MESSAGE_MAX = 1500;
+
+/** Every cause's message, `; `-joined and truncated — the aggregate names what failed. */
+function describeFailures(failures: readonly unknown[]): string {
+  const parts = failures.map((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.length > CAUSE_MESSAGE_MAX ? `${message.slice(0, CAUSE_MESSAGE_MAX)}…` : message;
+  });
+  const joined = parts.join("; ");
+  return joined.length > FAILURES_MESSAGE_MAX
+    ? `${joined.slice(0, FAILURES_MESSAGE_MAX)}… (${failures.length} causes)`
+    : joined;
 }

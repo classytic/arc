@@ -61,6 +61,13 @@ export interface ActionDefinition {
    */
   readonly id?: boolean;
   /**
+   * Where an id-bound action's TARGET is authorized. Default: arc loads it through the
+   * resource's access control (id + tenant + row policy, as `GET /:id` does) and answers
+   * 404 when the caller could not read it. `{ scope: 'handler', reason }` hands that check
+   * to the handler — for a target that is deliberately not a row of this resource's tenant.
+   */
+  readonly target?: { readonly scope: "handler"; readonly reason: string };
+  /**
    * MCP tool generation:
    * - omitted/true: auto-generate
    * - false: skip

@@ -345,6 +345,11 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * ```
    */
   idField?: (keyof TDoc & string) | (string & {});
+  /**
+   * Further unique keys `GET /:id` and an action's `:id` accept, tried in order after `idField`
+   * — a business number beside `_id`. Same tenant and row-policy scope as the primary lookup.
+   */
+  lookupFields?: readonly ((keyof TDoc & string) | (string & {}))[];
   /** For grouping in registry */
   module?: string;
   /** Domain events */

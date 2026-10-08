@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
+import { toolInputShape } from "../../src/integrations/mcp/route-input-schema.js";
 import { createTestMcpClient } from "../../src/integrations/mcp/testing.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { ArcQueryParser } from "../../src/utils/queryParser.js";
@@ -290,11 +291,11 @@ describe("MCP tool schemas from ArcQueryParser", () => {
 
   it("list tool has filterable fields from ArcQueryParser in schema", () => {
     const listTool = tools.find((t) => t.name === "list_tasks")!;
-    expect(listTool.inputSchema).toHaveProperty("status");
-    expect(listTool.inputSchema).toHaveProperty("priority");
-    expect(listTool.inputSchema).toHaveProperty("assignee");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("status");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("priority");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("assignee");
     // title is NOT in allowedFilterFields
-    expect(listTool.inputSchema).not.toHaveProperty("title");
+    expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("title");
   });
 
   it("list tool description includes filterable fields", () => {

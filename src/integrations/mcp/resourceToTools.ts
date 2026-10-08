@@ -20,8 +20,6 @@
 import { z } from "zod";
 import { resolveActionPermission } from "../../core/actionPermissions.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { normalizeSchemaIR } from "../../core/schemaIR.js";
-import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import { getOrgId, getUserId } from "../../scope/types.js";
 import type { ResourcePermissions, RouteDefinition } from "../../types/index.js";
@@ -38,6 +36,7 @@ import {
 } from "./crud-tools.js";
 import type { FieldRuleEntry } from "./fieldRulesToZod.js";
 import { buildInputSchema, deriveFieldRulesFromAdapter, getAdapterBodies } from "./input-schema.js";
+import { buildRouteInputSchema } from "./route-input-schema.js";
 import {
   createCustomRouteHandler,
   createMcpHandlerPassthrough,
@@ -182,7 +181,9 @@ export function resourceToTools(
           sortableFields,
         }),
         annotations: CRUD_ANNOTATIONS[op],
-        inputSchema,
+        // A read's unknown key is a dropped filter — a WIDER result. Refuse it instead of
+        // letting the SDK's default z.object strip it.
+        inputSchema: op === "list" || op === "get" ? z.strictObject(inputSchema) : inputSchema,
         handler: createCrudHandler(
           op,
           controller,
@@ -265,41 +266,15 @@ export function resourceToTools(
       route.summary ??
       route.description ??
       `${opName} on ${resource.displayName}`;
+    // A GET route is a read: advertise it as one unless the author says otherwise.
     const toolAnnotations: ToolAnnotations = mcpConfig?.annotations
       ? { ...mcpConfig.annotations }
-      : { openWorldHint: true };
+      : route.method.toUpperCase() === "GET"
+        ? { readOnlyHint: true }
+        : { openWorldHint: true };
 
-    // Build input schema from route.schema (body + querystring) — mirrors
-    // the REST contract so authors declare validation once. Without this,
-    // MCP tools had only `id` in their input, forcing hosts to reason about
-    // two parallel contracts for the same route.
-    //
-    // Priority:
-    //   - schema.body (POST/PUT/PATCH/DELETE) — the primary input surface
-    //   - schema.querystring merged IN ADDITION for routes that care about
-    //     query params from MCP callers
-    // The IR preserves `additionalProperties` — strict routes can be wired
-    // the same way actions are.
-    const inputShape: Record<string, z.ZodTypeAny> = {};
-    if (hasId) inputShape.id = z.string().describe("Resource ID");
-
-    const routeSchema = route.schema as
-      | { body?: Record<string, unknown>; querystring?: Record<string, unknown> }
-      | undefined;
-    if (routeSchema?.body) {
-      const ir = normalizeSchemaIR(routeSchema.body);
-      for (const [key, val] of Object.entries(schemaIRToZodShape(ir))) {
-        inputShape[key] = val;
-      }
-    }
-    if (routeSchema?.querystring) {
-      const ir = normalizeSchemaIR(routeSchema.querystring);
-      for (const [key, val] of Object.entries(schemaIRToZodShape(ir))) {
-        // Don't clobber body fields with querystring fields of the same
-        // name — body wins (it's the primary input channel for mutations).
-        if (!(key in inputShape)) inputShape[key] = val;
-      }
-    }
+    // The route's own schema is the tool's input contract — see route-input-schema.ts.
+    const inputShape = buildRouteInputSchema(route, hasId);
 
     const toolName = prefix ? `${prefix}_${opName}_${resource.name}` : `${opName}_${resource.name}`;
 

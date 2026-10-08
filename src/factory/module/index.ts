@@ -68,6 +68,7 @@ export {
 } from "./relay-nudge.js";
 export { resolveContribution, resolveModule } from "./resolve.js";
 export {
+  getModuleResources,
   getModuleState,
   hasModule,
   initModuleStates,

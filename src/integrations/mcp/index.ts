@@ -107,6 +107,7 @@ export {
   type RealtimeToolResponse,
 } from "./realtimeBridge.js";
 export { type ResourceToToolsConfig, resourceToTools } from "./resourceToTools.js";
+export { toolInputShape } from "./route-input-schema.js";
 // Error/success helpers — re-exported so custom tools can produce the
 // canonical CallToolResult shape without depending on an internal subpath.
 export {
@@ -133,4 +134,5 @@ export type {
   ToolAnnotations,
   ToolContext,
   ToolDefinition,
+  ToolInputSchema,
 } from "./types.js";

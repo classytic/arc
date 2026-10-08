@@ -111,6 +111,9 @@ function threadConfigureLifecycle<TDoc extends object>(
   if (resolvedConfig.schemaOptions !== undefined && wasDeclared("schemaOptions")) {
     opts.schemaOptions = resolvedConfig.schemaOptions;
   }
+  if (resolvedConfig.lookupFields !== undefined && wasDeclared("lookupFields")) {
+    opts.lookupFields = resolvedConfig.lookupFields;
+  }
   if (resolvedConfig.idField !== undefined && wasDeclared("idField")) {
     opts.idField = resolvedConfig.idField;
   }
@@ -295,6 +298,7 @@ function buildBaseController<TDoc extends object>(
       : {}),
     tenantField: resolvedConfig.tenantField,
     idField: resolvedConfig.idField,
+    ...(resolvedConfig.lookupFields ? { lookupFields: resolvedConfig.lookupFields } : {}),
     ...(resolvedConfig.defaultSort !== undefined
       ? { defaultSort: resolvedConfig.defaultSort }
       : {}),

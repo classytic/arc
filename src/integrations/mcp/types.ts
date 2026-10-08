@@ -92,8 +92,12 @@ export interface ToolDefinition<TSession = McpAuthResult> {
   name: string;
   description: string;
   title?: string;
-  /** Flat Zod shape: `{ field: z.string() }`. NOT z.object(). */
-  inputSchema?: Record<string, z.ZodTypeAny>;
+  /**
+   * Flat Zod shape `{ field: z.string() }` (the SDK wraps it in a STRIPPING
+   * `z.object()`), or a whole Zod schema registered as-is — use the whole form
+   * when unknown keys must be refused or the input is a union of objects.
+   */
+  inputSchema?: ToolInputSchema;
   /** Flat Zod shape for structured output validation */
   outputSchema?: Record<string, z.ZodTypeAny>;
   annotations?: ToolAnnotations;
@@ -110,6 +114,9 @@ export interface ToolDefinition<TSession = McpAuthResult> {
    */
   source?: string;
 }
+
+/** A tool's input contract: a flat Zod shape, or a whole Zod schema validated as-is. */
+export type ToolInputSchema = Record<string, z.ZodTypeAny> | z.ZodType;
 
 /** Output of definePrompt() — plain data, not yet registered */
 export interface PromptDefinition {

@@ -224,6 +224,30 @@ export async function subscribeWithSchema<T>(
 // Error-boundary subscribe helpers (fire-and-forget projections)
 // ============================================================================
 
+/**
+ * Wrap a handler so anything it throws names it: `[<name>] <message>`, the original as `cause`
+ * and its string `code` kept. A transport's aggregate error — and so an outbox row's `lastError`
+ * — then says WHICH subscriber failed. A message already carrying the label is left as is.
+ */
+export function wrapWithAttribution(handler: EventHandler, name: string): EventHandler {
+  const label = `[${name}]`;
+  return async (event) => {
+    try {
+      await handler(event);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith(label)) throw err;
+      const attributed = new Error(`${label} ${message}`, { cause: err });
+      if (err instanceof Error) {
+        attributed.name = err.name;
+        const code: unknown = Reflect.get(err, "code");
+        if (typeof code === "string") Reflect.set(attributed, "code", code);
+      }
+      throw attributed;
+    }
+  };
+}
+
 export interface WrapWithBoundaryOptions {
   /**
    * Called when the handler throws. Default behaviour: log the error with

@@ -44,7 +44,11 @@ export interface IdempotencyPluginOptions {
   ttlMs?: number;
   /** Lock timeout in ms (default: 30000 = 30s) */
   lockTimeoutMs?: number;
-  /** HTTP methods to apply idempotency to (default: ['POST', 'PUT', 'PATCH']) */
+  /**
+   * HTTP methods a key is honoured on when the route does not declare `config.idempotency`
+   * (default: ['POST', 'PUT', 'PATCH']). A route declaring `required: true` is fenced whatever
+   * its method — DELETE included — and whatever `include` / `exclude` say.
+   */
   methods?: string[];
   /** URL patterns to include (regex). If set, only matching URLs use idempotency */
   include?: RegExp[];
@@ -111,7 +115,9 @@ declare module "fastify" {
   interface FastifyContextConfig {
     /**
      * Per-route idempotency. `required: true` refuses a call with no idempotency key (400
-     * `arc.idempotency_key_required`) — set it on any route whose retry must not execute twice.
+     * `arc.idempotency_key_required`) and dedupes a keyed one, on any method — set it on any route
+     * whose retry must not execute twice. Boot refuses the declaration when nothing would enforce
+     * it: the plugin disabled, or the route's `preHandler` lacking `fastify.idempotency.middleware`.
      */
     idempotency?: { required?: boolean };
   }
@@ -298,8 +304,16 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     }
   }
 
-  // Skip if not enabled
+  // Skip if not enabled — but never let a route believe it is fenced.
   if (!enabled) {
+    fastify.addHook("onRoute", (route) => {
+      if (route.config?.idempotency?.required !== true) return;
+      throw new Error(
+        `[arc] ${String(route.method)} ${route.url} declares config.idempotency.required, but the ` +
+          "idempotency plugin is disabled — its key would be accepted and never deduplicated. " +
+          "Enable idempotencyPlugin({ enabled: true }) or drop the declaration.",
+      );
+    });
     // Provide no-op utilities
     fastify.decorate("idempotency", {
       invalidate: async () => {},
@@ -329,6 +343,9 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    * Check if this request should use idempotency
    */
   function shouldApplyIdempotency(request: FastifyRequest): boolean {
+    // A route that declares the fence is fenced — specific beats the plugin-wide defaults.
+    if (request.routeOptions.config?.idempotency?.required === true) return true;
+
     // Check method
     if (!methodSet.has(request.method)) {
       return false;
@@ -472,6 +489,19 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // reached this point.
     reply.header(HEADER_IDEMPOTENCY_KEY, idempotencyKey);
   };
+
+  // A route that declares the fence must actually run it — a host route registered without the
+  // middleware would accept the key and execute every retry.
+  fastify.addHook("onRoute", (route) => {
+    if (route.config?.idempotency?.required !== true) return;
+    const preHandlers = Array.isArray(route.preHandler) ? route.preHandler : [route.preHandler];
+    if (preHandlers.includes(idempotencyMiddleware)) return;
+    throw new Error(
+      `[arc] ${String(route.method)} ${route.url} declares config.idempotency.required but its ` +
+        "preHandler does not run fastify.idempotency.middleware, so a retry would execute twice. " +
+        "Add it after authentication: preHandler: [fastify.authenticate, fastify.idempotency.middleware].",
+    );
+  });
 
   // Decorate with utilities + middleware
   fastify.decorate("idempotency", {

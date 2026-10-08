@@ -1,8 +1,10 @@
 /**
- * Route registration — duplicate detection wrapper.
+ * Route registration — the one place every arc router hands a route to Fastify: arc's request
+ * validator, the idempotency-declaration fence, and duplicate-route diagnostics.
  */
 
 import type { FastifyWithDecorators } from "../../types/index.js";
+import { arcRouteValidatorCompiler } from "../routeValidator.js";
 
 /**
  * Register a route with friendly handling of `FST_ERR_DUPLICATED_ROUTE`.
@@ -20,8 +22,18 @@ export function tryRegisterRoute(
   opts: Parameters<FastifyWithDecorators["route"]>[0],
   context: { resourceName: string; op?: string },
 ): void {
+  // A declared fence with no plugin to run it would accept the key and execute every retry.
+  // (A REGISTERED plugin checks its own routes — disabled or middleware-less — at `onRoute`.)
+  if (opts.config?.idempotency?.required === true && !fastify.hasDecorator("idempotency")) {
+    throw new Error(
+      `[arc] ${String(opts.method)} ${opts.url} on resource "${context.resourceName}" declares ` +
+        "config.idempotency.required, but idempotencyPlugin is not registered — register it " +
+        "(enabled) before the resources, or drop the declaration.",
+    );
+  }
+  const validatorCompiler = opts.validatorCompiler ?? arcRouteValidatorCompiler(fastify);
   try {
-    fastify.route(opts);
+    fastify.route(validatorCompiler ? { ...opts, validatorCompiler } : opts);
   } catch (err) {
     const fastifyErr = err as { code?: string; message?: string };
     if (fastifyErr?.code !== "FST_ERR_DUPLICATED_ROUTE") throw err;

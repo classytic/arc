@@ -27,7 +27,8 @@
  * `AuditStore` interface and pass via `customStores: [...]`.
  */
 
-export type { AuditLogger, AuditPluginOptions } from "./auditPlugin.js";
+export type { AuditLogger, AuditPluginOptions, AuditRequestLike, RequestAuditLogger } from "./auditPlugin.js";
+export { auditContextOf } from "./auditPlugin.js";
 // Plugin
 export { default as auditPlugin } from "./auditPlugin.js";
 /**

@@ -46,12 +46,30 @@ export class ResourceRegistry {
    * runtime-only handle is still reachable.
    */
   private _adapters: Map<string, unknown>;
+  /** The mounted definitions, in registration order — see `getDefinitions`. */
+  private _definitions: Map<string, ResourceDefinition<unknown>>;
   private _frozen: boolean;
 
   constructor() {
     this._resources = new Map();
     this._adapters = new Map();
+    this._definitions = new Map();
     this._frozen = false;
+  }
+
+  /**
+   * The live `ResourceDefinition`s that mounted, in registration order — what a host hands to
+   * `mcpPlugin({ resources })` or a docs generator instead of re-collecting them. A resource
+   * declaring `skipRegistry` (incl. `customRoutesOnly`) opted out and is absent. Fresh array per call.
+   * One composed module's share: `getModuleResources(fastify, name)` from `@classytic/arc/factory`.
+   */
+  getDefinitions(): ResourceDefinition<unknown>[] {
+    return [...this._definitions.values()];
+  }
+
+  /** The live definition registered under `name`, or `undefined`. */
+  getDefinition(name: string): ResourceDefinition<unknown> | undefined {
+    return this._definitions.get(name);
   }
 
   /**
@@ -195,6 +213,7 @@ export class ResourceRegistry {
     // Keep the live adapter reachable for cascade / cleanup / migration
     // helpers. The public `entry.adapter` stays serializable-narrow.
     if (resource.adapter) this._adapters.set(resource.name, resource.adapter);
+    this._definitions.set(resource.name, resource);
     return this;
   }
 
@@ -395,6 +414,7 @@ export class ResourceRegistry {
   reset(): void {
     this._resources.clear();
     this._adapters.clear();
+    this._definitions.clear();
     this._frozen = false;
   }
 

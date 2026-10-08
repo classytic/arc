@@ -13,6 +13,7 @@ import { QueryParser } from "@classytic/mongokit";
 import { describe, expect, it, vi } from "vitest";
 import type { ResourceDefinition } from "../../../src/core/defineResource.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
+import { toolInputShape } from "../../../src/integrations/mcp/route-input-schema.js";
 
 function mockResourceWithMongoKit(
   parserOpts: ConstructorParameters<typeof QueryParser>[0] = {},
@@ -76,16 +77,16 @@ describe("MongoKit QueryParser → MCP Tools E2E", () => {
       const listTool = tools.find((t) => t.name === "list_jobs")!;
 
       expect(listTool).toBeDefined();
-      expect(listTool.inputSchema).toHaveProperty("companyId");
-      expect(listTool.inputSchema).toHaveProperty("status");
-      expect(listTool.inputSchema).toHaveProperty("phase");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("companyId");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("status");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("phase");
       // salary and repository are NOT in allowedFilterFields
-      expect(listTool.inputSchema).not.toHaveProperty("salary");
-      expect(listTool.inputSchema).not.toHaveProperty("repository");
+      expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("salary");
+      expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("repository");
       // Pagination fields always present
-      expect(listTool.inputSchema).toHaveProperty("page");
-      expect(listTool.inputSchema).toHaveProperty("limit");
-      expect(listTool.inputSchema).toHaveProperty("sort");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("page");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("limit");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("sort");
     });
 
     it("prefers explicit schemaOptions.filterableFields over QueryParser", () => {
@@ -110,9 +111,9 @@ describe("MongoKit QueryParser → MCP Tools E2E", () => {
       const tools = resourceToTools(resource);
       const listTool = tools.find((t) => t.name === "list_jobs")!;
 
-      expect(listTool.inputSchema).toHaveProperty("status");
-      expect(listTool.inputSchema).not.toHaveProperty("companyId");
-      expect(listTool.inputSchema).not.toHaveProperty("phase");
+      expect(toolInputShape(listTool.inputSchema)).toHaveProperty("status");
+      expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("companyId");
+      expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("phase");
     });
   });
 

@@ -88,6 +88,7 @@ export {
   eventTopology,
   extendModule,
   getModuleExports,
+  getModuleResources,
   getModuleState,
   getOptionalModuleExports,
   hasModule,

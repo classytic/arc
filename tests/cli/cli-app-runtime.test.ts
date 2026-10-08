@@ -26,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { resourceToTools } from "../../src/integrations/mcp/resourceToTools.js";
+import { toolInputShape } from "../../src/integrations/mcp/route-input-schema.js";
 import { createTestMcpClient } from "../../src/integrations/mcp/testing.js";
 import { allowPublic } from "../../src/permissions/index.js";
 
@@ -238,14 +239,14 @@ describe("Runtime: defineResource → MCP tool schemas", () => {
 
   it("list tool has filterable fields from QueryParser in schema", () => {
     const listTool = tools.find((t) => t.name === "list_products")!;
-    expect(listTool.inputSchema).toHaveProperty("category");
-    expect(listTool.inputSchema).toHaveProperty("isActive");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("category");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("isActive");
     // price is NOT filterable
-    expect(listTool.inputSchema).not.toHaveProperty("price");
+    expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("price");
     // pagination always present
-    expect(listTool.inputSchema).toHaveProperty("page");
-    expect(listTool.inputSchema).toHaveProperty("limit");
-    expect(listTool.inputSchema).toHaveProperty("sort");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("page");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("limit");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("sort");
   });
 
   it("list tool description includes filterable fields", () => {
@@ -434,9 +435,9 @@ describe("Runtime: QueryParser auto-derive (no explicit filterableFields)", () =
     const listTool = tools.find((t) => t.name === "list_tasks")!;
 
     // Auto-derived from QueryParser.allowedFilterFields
-    expect(listTool.inputSchema).toHaveProperty("status");
-    expect(listTool.inputSchema).toHaveProperty("priority");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("status");
+    expect(toolInputShape(listTool.inputSchema)).toHaveProperty("priority");
     // assignee is NOT in allowedFilterFields
-    expect(listTool.inputSchema).not.toHaveProperty("assignee");
+    expect(toolInputShape(listTool.inputSchema)).not.toHaveProperty("assignee");
   });
 });

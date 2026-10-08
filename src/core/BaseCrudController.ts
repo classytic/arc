@@ -44,6 +44,7 @@ import { requireSingleHeaderValue } from "../utils/headers.js";
 import { scheduleBackground } from "../utils/runtime.js";
 import { getUserId } from "../utils/userHelpers.js";
 import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
+import { resolveTenancy } from "./tenancy.js";
 import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
 import {
   buildCacheEnvelope,
@@ -114,6 +115,9 @@ export class BaseCrudController<
   protected resourceName?: string;
   protected tenantField: string | false;
   protected idField: string = DEFAULT_ID_FIELD;
+  /** Alternate unique keys, each with its own access control over the SAME scope. */
+  protected lookupAccess: AccessControl[] = [];
+  private _lookupFields: readonly string[] | undefined;
 
   // Not `readonly`: `configure()` / `setQueryParser()` rebuild these post-construction.
   /** Access control (ID filtering, policy checks, org scope, ownership). */
@@ -175,6 +179,8 @@ export class BaseCrudController<
       idField: this.idField,
       matchesFilter: this._matchesFilter,
     });
+    this._lookupFields = options.lookupFields;
+    this.lookupAccess = this.buildLookupAccess(options.lookupFields);
     this.bodySanitizer = new BodySanitizer({
       schemaOptions: this.schemaOptions,
       onFieldWriteDenied: this._onFieldWriteDenied,
@@ -282,12 +288,17 @@ export class BaseCrudController<
         : null;
     }
 
+    if (options.lookupFields !== undefined) {
+      this._lookupFields = options.lookupFields;
+      rebuildAccessControl = true;
+    }
     if (rebuildAccessControl) {
       this.accessControl = new AccessControl({
         tenantField: this.tenantField,
         idField: this.idField,
         matchesFilter: this._matchesFilter,
       });
+      this.lookupAccess = this.buildLookupAccess(this._lookupFields);
     }
     if (rebuildBodySanitizer) {
       this.bodySanitizer = new BodySanitizer({
@@ -373,6 +384,69 @@ export class BaseCrudController<
       throw new ForbiddenError("You do not have permission to modify this resource");
     }
     return { id, existing: doc, repoId: this.resolveRepoId(id, doc as AnyRecord) };
+  }
+
+  /**
+   * Whether the target of an id-bound ACTION is a row this request may read — the same
+   * compound filter (id + tenant + `_policyFilters`) `GET /:id` uses. The action router
+   * refuses the action with a 404 when it is not, so a caller can act on a row iff it can
+   * read it. Skips the read when neither tenancy nor a row policy narrows the request.
+   */
+  private buildLookupAccess(fields: readonly string[] | undefined): AccessControl[] {
+    return (fields ?? [])
+      .filter((field) => field !== this.idField)
+      .map((idField) => new AccessControl({ tenantField: this.tenantField, idField, matchesFilter: this._matchesFilter }));
+  }
+
+  /**
+   * THE single-row lookup — `GET /:id` and the action-target fence both read through it.
+   * The primary key first; when it finds nothing (or the id cannot be that key's type), each
+   * `lookupFields` key in turn, under the same tenant and row policy.
+   */
+  protected async fetchByAnyKey(
+    id: string,
+    req: IRequestContext,
+    options: QueryOptions | undefined,
+  ): Promise<{ doc: TDoc | null; reason: FetchDenialReason | null }> {
+    let primary: { doc: TDoc | null; reason: FetchDenialReason | null } | undefined;
+    let primaryError: unknown;
+    try {
+      primary = await this.accessControl.fetchDetailed<TDoc>(id, req, this.repository, options);
+      if (primary.doc || this.lookupAccess.length === 0) return primary;
+    } catch (err) {
+      // The id may not even be a value of the PRIMARY key's type (a business number against an
+      // ObjectId `_id`) — kits report that inconsistently (400, or an untranslated 500), so the
+      // alternates are tried and the original error stands only if none of them resolves it.
+      if (this.lookupAccess.length === 0) throw err;
+      primaryError = err;
+    }
+    let answered: { doc: TDoc | null; reason: FetchDenialReason | null } | undefined = primary;
+    for (const access of this.lookupAccess) {
+      try {
+        const found = await access.fetchDetailed<TDoc>(id, req, this.repository, options);
+        if (found.doc) return found;
+        // A clean miss on a key the id fits: the row is absent or out of scope — a 404.
+        answered ??= found;
+      } catch {
+        // Not a value of this key either; the next key, or the primary answer, decides.
+      }
+    }
+    if (answered) return answered;
+    throw primaryError;
+  }
+
+  /** Whether {@link isActionTargetVisible} can answer — it reads through the repository. */
+  canFenceActionTargets(): boolean {
+    return this.repository !== undefined && this.repository !== null;
+  }
+
+  async isActionTargetVisible(req: IRequestContext, id: string): Promise<boolean> {
+    const meta = this.meta(req);
+    const scoped = resolveTenancy(meta, this.tenantField).mode === "scoped";
+    const policy = meta?._policyFilters;
+    if (!scoped && (!policy || Object.keys(policy).length === 0)) return true;
+    const { doc } = await this.fetchByAnyKey(id, req, this.tenantRepoOptions(req));
+    return doc !== null && doc !== undefined;
   }
 
   /** `ETag: "<version>"` for a versioned document under optimistic concurrency. */
@@ -844,16 +918,9 @@ export class BaseCrudController<
     req: IRequestContext,
   ): Promise<{ doc: TDoc | null; reason: FetchDenialReason | null }> {
     const hooks = this.getHooks(req);
-    const fetchItem = async () => {
-      const result = await this.accessControl.fetchDetailed<TDoc>(
-        id,
-        req,
-        this.repository,
-        // fetchDetailed reads only the QueryOptions subset of the resolved options.
-        options as QueryOptions,
-      );
-      return result;
-    };
+    const fetchItem = async () =>
+      // fetchByAnyKey reads only the QueryOptions subset of the resolved options.
+      this.fetchByAnyKey(id, req, options as QueryOptions);
 
     if (hooks && this.resourceName) {
       const result = await fetchItem();

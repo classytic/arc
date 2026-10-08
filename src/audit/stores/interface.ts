@@ -42,6 +42,8 @@ export interface AuditEntry {
 
 export interface AuditContext {
   user?: UserBase;
+  /** The actor from the request's VALIDATED scope (user or service client). Wins over `user`. */
+  actorId?: string;
   organizationId?: string;
   requestId?: string;
   ipAddress?: string;
@@ -117,7 +119,7 @@ export function createAuditEntry(
     resource,
     documentId,
     action,
-    userId: extractUserId(context.user),
+    userId: context.actorId ?? extractUserId(context.user),
     organizationId: context.organizationId,
     before: data?.before,
     after: data?.after,

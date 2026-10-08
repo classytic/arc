@@ -177,13 +177,13 @@ describe("selectPluginMw", () => {
     expect(selectPluginMw("HEAD", mws)).toBe(cacheMw);
   });
 
-  it.each(["POST", "PUT", "PATCH"])("%s → idempotency middleware (mutation)", (method) => {
-    expect(selectPluginMw(method, mws)).toBe(idempotencyMw);
-  });
-
-  it("DELETE → no plugin middleware", () => {
-    expect(selectPluginMw("DELETE", mws)).toBeNull();
-  });
+  // DELETE included: a DELETE declaring `config.idempotency.required` must reach the fence.
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "%s → idempotency middleware (mutation)",
+    (method) => {
+      expect(selectPluginMw(method, mws)).toBe(idempotencyMw);
+    },
+  );
 
   it("OPTIONS → no plugin middleware (not a cacheable read, not an idempotent mutation)", () => {
     expect(selectPluginMw("OPTIONS", mws)).toBeNull();

@@ -18,16 +18,18 @@ export interface RouterPluginMw {
 
 /**
  * Pick the request-lifecycle plugin middleware for an HTTP method:
- *   - GET / HEAD        → response cache (if present)
- *   - POST / PUT / PATCH → idempotency (if present)
- *   - DELETE            → none
+ *   - GET / HEAD                  → response cache (if present)
+ *   - POST / PUT / PATCH / DELETE → idempotency (if present); the middleware itself decides
+ *     whether a key is honoured (plugin `methods`, or the route's `config.idempotency`)
  *
  * Either field may be `null` if the corresponding plugin wasn't registered.
  */
 export function selectPluginMw(method: string, mws: RouterPluginMw): RouteHandlerMethod | null {
   const upper = method.toUpperCase();
   if (upper === "GET" || upper === "HEAD") return mws.cacheMw;
-  if (upper === "POST" || upper === "PUT" || upper === "PATCH") return mws.idempotencyMw;
+  if (upper === "POST" || upper === "PUT" || upper === "PATCH" || upper === "DELETE") {
+    return mws.idempotencyMw;
+  }
   return null;
 }
 

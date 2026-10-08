@@ -208,6 +208,12 @@ export interface ControllerConfigurableOptions {
    */
   idField?: string;
   /**
+   * Further unique keys a single-row read and an action target accept, tried in order after
+   * `idField` (e.g. `['rmaNumber']` beside `_id`). Each lookup carries the same tenant and row
+   * policy as the primary one — an alternate key never widens what a caller can reach.
+   */
+  lookupFields?: readonly string[];
+  /**
    * Custom filter matching for policy enforcement.
    * Provided by the DataAdapter for non-MongoDB databases (SQL, etc.).
    */

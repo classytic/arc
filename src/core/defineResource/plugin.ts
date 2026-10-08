@@ -8,7 +8,7 @@
  * Schema-synthesis helpers are exported so unit tests can pin their invariants.
  */
 
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import type {
   ActionDefinition,
   ActionsMap,
@@ -16,6 +16,7 @@ import type {
   CrudController,
   CrudSchemas,
   FastifyWithDecorators,
+  IRequestContext,
   PermissionCheck,
   RequestWithExtras,
   ResourceConfig,
@@ -216,6 +217,8 @@ export function normalizeActionsToRouterConfig(
    * instead of `/:id/action`. Function-shorthand actions are always id-bound.
    */
   idLessActionNames: readonly string[];
+  /** Id-bound actions declaring `target: { scope: 'handler' }` — the router does not fence their target. */
+  handlerScopedActionNames: readonly string[];
 } {
   const handlers: Record<
     string,
@@ -224,6 +227,7 @@ export function normalizeActionsToRouterConfig(
   const permissions: Record<string, PermissionCheck> = {};
   const schemas: Record<string, Record<string, unknown>> = {};
   const idLessActionNames: string[] = [];
+  const handlerScopedActionNames: string[] = [];
 
   for (const [name, entry] of Object.entries(actions)) {
     const explicit =
@@ -238,6 +242,15 @@ export function normalizeActionsToRouterConfig(
       handlers[name] = def.handler;
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
       if (def.id === false) idLessActionNames.push(name);
+      if (def.target !== undefined) {
+        if (def.target.scope !== "handler" || def.target.reason.trim() === "") {
+          throw new Error(
+            `[Arc] Resource '${resourceName}': action '${name}' declares \`target\` without ` +
+              "`scope: 'handler'` and a non-empty `reason` — say why its target is not this resource's row.",
+          );
+        }
+        handlerScopedActionNames.push(name);
+      }
     }
 
     const effective = resolveActionPermission({
@@ -287,7 +300,47 @@ export function normalizeActionsToRouterConfig(
     actionPermissions: permissions,
     actionSchemas: schemas,
     idLessActionNames,
+    handlerScopedActionNames,
   };
+}
+
+/**
+ * The action-target fence: an id-bound action may act only on a row the caller could
+ * `GET`. Built from the controller's access control; a tenant-scoped resource whose
+ * controller cannot answer is refused at boot rather than mounted unfenced.
+ */
+function resolveActionTargetFence(
+  resource: { name: string; tenantField?: string | false; controller?: unknown },
+  actionConfig: { actions: Record<string, unknown>; idLessActionNames: readonly string[]; handlerScopedActionNames: readonly string[] },
+): ((id: string, req: FastifyRequest) => Promise<boolean>) | undefined {
+  const exempt = new Set([...actionConfig.idLessActionNames, ...actionConfig.handlerScopedActionNames]);
+  const fenced = Object.keys(actionConfig.actions).filter((name) => !exempt.has(name));
+  if (fenced.length === 0) return undefined;
+  const ctrl = resource.controller as
+    | {
+        isActionTargetVisible?: (req: IRequestContext, id: string) => Promise<boolean>;
+        canFenceActionTargets?: () => boolean;
+      }
+    | undefined;
+  const check = ctrl?.isActionTargetVisible;
+  const canFence = typeof check === "function" && ctrl?.canFenceActionTargets?.() === true;
+  if (!canFence) {
+    // A controller scopes on `organizationId` unless told `false`, so an UNDECLARED
+    // tenantField with a controller is tenanted too — only `false` is untenanted.
+    const tenanted =
+      typeof resource.tenantField === "string" || (ctrl !== undefined && resource.tenantField !== false);
+    if (tenanted) {
+      throw new Error(
+        `[Arc] Resource '${resource.name}' is tenant-scoped (tenantField ` +
+          `'${resource.tenantField === undefined ? "organizationId (default)" : resource.tenantField}') and ` +
+          `declares id-bound actions [${fenced.join(", ")}], but its controller cannot authorize an ` +
+          "action target. Use a BaseController with a repository, declare `tenantField: false`, or declare " +
+          "`target: { scope: 'handler', reason }` on each action.",
+      );
+    }
+    return undefined;
+  }
+  return (id, req) => check.call(ctrl, createRequestContext(req), id);
 }
 
 // ============================================================================
@@ -468,8 +521,11 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             resource.name,
             typedInstance.log,
           );
+          const actionTarget = resolveActionTargetFence(resource, actionConfig);
           createActionRouter(typedInstance, {
             ...actionConfig,
+            ...(actionTarget ? { isTargetVisible: actionTarget } : {}),
+            auditActions: Boolean(resource.audit),
             resourceName: resource.name,
             fields: resource.fields,
             schemaOptions: resource.schemaOptions,
