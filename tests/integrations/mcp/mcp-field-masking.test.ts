@@ -18,6 +18,16 @@ import { applyMcpReadMasking } from "../../../src/integrations/mcp/tool-helpers.
 import type { CallToolResult, McpAuthResult } from "../../../src/integrations/mcp/types.js";
 import { fields } from "../../../src/permissions/fields.js";
 
+import { allowPublic } from "../../../src/permissions/index.js";
+
+const PUBLIC_CRUD = {
+  list: allowPublic(),
+  get: allowPublic(),
+  create: allowPublic(),
+  update: allowPublic(),
+  delete: allowPublic(),
+};
+
 const FIELD_PERMS = {
   password: fields.hidden(),
   salary: fields.visibleTo(["admin"]),
@@ -46,8 +56,11 @@ function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefiniti
       delete: vi.fn().mockResolvedValue({ data: { ok: true } }),
     },
     fields: FIELD_PERMS,
+    // An untenanted fixture: a controller that cannot fence action targets needs `false`.
+    tenantField: false,
     schemaOptions: {},
-    permissions: {},
+    // Every slot gated: MCP mounts no tool for an ungated one.
+    permissions: PUBLIC_CRUD,
     routes: [],
     middlewares: {},
     disableDefaultRoutes: false,

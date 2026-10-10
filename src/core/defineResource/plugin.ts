@@ -328,16 +328,17 @@ export function normalizeActionsToRouterConfig(
 /**
  * The action-target fence: an id-bound action may act only on a row the caller could
  * `GET`. Built from the controller's access control; a tenant-scoped resource whose
- * controller cannot answer is refused at boot rather than mounted unfenced.
+ * controller cannot answer is refused at boot rather than mounted unfenced. HTTP and MCP
+ * both call it, so the two surfaces fence the same rows.
  */
-function resolveActionTargetFence(
+export function resolveActionTargetFence(
   resource: { name: string; tenantField?: string | false; controller?: unknown },
   actionConfig: {
     actions: Record<string, unknown>;
     idLessActionNames: readonly string[];
     handlerScopedActionNames: readonly string[];
   },
-): ((id: string, req: FastifyRequest) => Promise<boolean>) | undefined {
+): ((id: string, ctx: IRequestContext) => Promise<boolean>) | undefined {
   const exempt = new Set([
     ...actionConfig.idLessActionNames,
     ...actionConfig.handlerScopedActionNames,
@@ -369,7 +370,7 @@ function resolveActionTargetFence(
     }
     return undefined;
   }
-  return (id, req) => check.call(ctrl, createRequestContext(req), id);
+  return (id, ctx) => check.call(ctrl, ctx, id);
 }
 
 // ============================================================================
@@ -566,7 +567,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           const actionTarget = resolveActionTargetFence(resource, actionConfig);
           createActionRouter(typedInstance, {
             ...actionConfig,
-            ...(actionTarget ? { isTargetVisible: actionTarget } : {}),
+            ...(actionTarget
+              ? { isTargetVisible: (id, req) => actionTarget(id, createRequestContext(req)) }
+              : {}),
             auditActions: Boolean(resource.audit),
             resourceName: resource.name,
             fields: resource.fields,

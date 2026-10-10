@@ -18,8 +18,16 @@ import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ServerAccessor } from "../../types/handlers.js";
-import type { ResourcePermissions } from "../../types/index.js";
+import type { IRequestContext, ResourcePermissions } from "../../types/index.js";
+import { NotFoundError } from "../../utils/errors.js";
 import { buildRequestContext, type McpContextExtras } from "./buildRequestContext.js";
+import {
+  auditToolAction,
+  idempotencyKeyRequiredResult,
+  idempotencyStoreOf,
+  rateLimitedResult,
+  runIdempotentTool,
+} from "./http-parity.js";
 import {
   applyMcpReadMasking,
   evaluatePermission,
@@ -27,7 +35,27 @@ import {
   toCallToolError,
   toCallToolSuccess,
 } from "./tool-helpers.js";
-import type { McpExecutionWiring, ToolDefinition } from "./types.js";
+import type {
+  CallToolResult,
+  McpAuthResult,
+  McpExecutionWiring,
+  ToolDefinition,
+} from "./types.js";
+
+/** What the action's HTTP route enforces, resolved once at tool generation. */
+export interface ActionToolParity {
+  readonly toolName: string;
+  /** `idempotency.required`: a keyless call is 400. */
+  readonly keyRequired: boolean;
+  /** `dedup: 'handler'`: the key is demanded and passed through, never stored. */
+  readonly handlerDedup: boolean;
+  /** The target fence: `false` = the caller cannot read that row (404). */
+  readonly fence?: (id: string, ctx: IRequestContext) => Promise<boolean>;
+  /** The resource is audited: record the action like the route does. */
+  readonly audit: boolean;
+  /** The resource's rate limit, per caller. */
+  readonly allow?: (session: McpAuthResult | null) => boolean;
+}
 
 /**
  * Convert an action's `schema` field into a Zod shape for MCP input.
@@ -90,9 +118,13 @@ export function createActionToolHandler(
     wiring?: McpExecutionWiring;
     schemaOptions?: unknown;
     idField?: string;
+    /** HTTP parity gates; see `http-parity.ts`. */
+    parity?: ActionToolParity;
   },
 ): ToolDefinition["handler"] {
   const wiring = extras?.wiring;
+  const parity = extras?.parity;
+  const toolName = parity?.toolName ?? `${actionName}_${resourceName}`;
   const contextExtras: McpContextExtras | undefined = wiring
     ? {
         arc: {
@@ -121,12 +153,22 @@ export function createActionToolHandler(
   // For id-less actions, `id` is NOT a legal key — the tool's input schema
   // doesn't advertise one, so an agent passing it indicates a contract
   // mismatch worth flagging.
-  const allowedBaseKeys = idLess ? [] : ["id"];
+  const allowedBaseKeys = [
+    ...(idLess ? [] : ["id"]),
+    ...(parity?.keyRequired ? ["_idempotencyKey"] : []),
+  ];
   const allowedKeys =
     strict && ir ? new Set([...allowedBaseKeys, ...Object.keys(ir.properties)]) : undefined;
 
-  return async (input, ctx) => {
+  return async (rawInput, ctx) => {
     const session = ctx.session;
+    if (parity?.allow && !parity.allow(session)) return rateLimitedResult(toolName);
+
+    const { _idempotencyKey: rawKey, ...input } = rawInput;
+    const idempotencyKey = typeof rawKey === "string" && rawKey !== "" ? rawKey : undefined;
+    if (parity?.keyRequired && idempotencyKey === undefined) {
+      return idempotencyKeyRequiredResult(toolName);
+    }
 
     if (allowedKeys) {
       const extras = Object.keys(input).filter((k) => !allowedKeys.has(k));
@@ -181,16 +223,44 @@ export function createActionToolHandler(
     const { id: _discardId, ...data } = input;
 
     try {
-      // Pass the full IRequestContext as `req` so action handlers see user,
-      // scope, metadata, and filters in the same shape as the HTTP path.
-      const result = await handler(id, data, reqCtx);
-      // No-envelope contract: emit the action's raw return as the success
-      // payload. The `isError: false` (default) on `CallToolResult`
-      // discriminates success/error for MCP, mirroring HTTP status.
-      // Field-read masking mirrors the REST action route's arc decorator.
-      return toCallToolSuccess(
-        applyMcpReadMasking(result, { fields, session, scopeOverride: permResult?.scope }),
-      );
+      if (!idLess && parity?.fence && !(await parity.fence(id, reqCtx))) {
+        throw new NotFoundError(resourceName);
+      }
+      const run = async (): Promise<CallToolResult> => {
+        // The handler deduplicating itself reads the key where HTTP puts it.
+        const req =
+          idempotencyKey === undefined ? reqCtx : { ...reqCtx, idempotencyKey };
+        // Pass the full IRequestContext as `req` so action handlers see user,
+        // scope, metadata, and filters in the same shape as the HTTP path.
+        const result = await handler(id, data, req);
+        if (parity?.audit) {
+          await auditToolAction(wiring?.audit, {
+            resourceName,
+            id,
+            action: actionName,
+            toolName,
+            session,
+            log: wiring?.log,
+          });
+        }
+        // Field-read masking mirrors the REST action route's arc decorator.
+        return toCallToolSuccess(
+          applyMcpReadMasking(result, { fields, session, scopeOverride: permResult?.scope }),
+        );
+      };
+      const store = idempotencyStoreOf(wiring?.idempotencyStore);
+      if (idempotencyKey !== undefined && store && !parity?.handlerDedup) {
+        return await runIdempotentTool({
+          store,
+          key: idempotencyKey,
+          resourceName,
+          operation: `action.${actionName}`,
+          input,
+          session,
+          dispatch: run,
+        });
+      }
+      return await run();
     } catch (err) {
       // Route ArcError / HttpError throws through the canonical
       // `toErrorContract` so MCP agents see the same shape HTTP clients

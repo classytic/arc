@@ -28,9 +28,6 @@
  * internal subpath.
  */
 
-import { createHash, randomUUID } from "node:crypto";
-import type { IdempotencyStore } from "../../idempotency/stores/interface.js";
-import { createIdempotencyResult } from "../../idempotency/stores/interface.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { RequestScope } from "../../scope/types.js";
@@ -41,6 +38,7 @@ import {
   type McpContextExtras,
   type McpOperation,
 } from "./buildRequestContext.js";
+import { idempotencyStoreOf, runIdempotentTool } from "./http-parity.js";
 import {
   applyMcpReadMasking,
   evaluatePermission,
@@ -149,40 +147,6 @@ function buildContextExtras(options: InvokeControllerOptions): McpContextExtras 
   };
 }
 
-/**
- * Stable fingerprint of a tool invocation — sorted-key JSON, hashed.
- * Scopes an idempotency key to (resource, action, input, caller) so a
- * reused key with DIFFERENT input is a fresh execution, matching the HTTP
- * plugin's method+url+bodyHash+user fingerprint semantics.
- */
-function invocationFingerprint(
-  resourceName: string,
-  actionName: string,
-  input: Record<string, unknown>,
-  session: McpAuthResult | null,
-): string {
-  const sortKeys = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(sortKeys);
-    if (value !== null && typeof value === "object") {
-      return Object.fromEntries(
-        Object.keys(value as Record<string, unknown>)
-          .sort()
-          .map((k) => [k, sortKeys((value as Record<string, unknown>)[k])]),
-      );
-    }
-    return value;
-  };
-  const inputHash = createHash("sha256")
-    .update(JSON.stringify(sortKeys(input)))
-    .digest("hex")
-    .substring(0, 16);
-  const caller = session?.userId ?? session?.clientId ?? "anon";
-  return `mcp:${resourceName}:${actionName}:${inputHash}:u=${caller}`;
-}
-
-/** TTLs matching the HTTP idempotency plugin's defaults. */
-const MCP_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
-const MCP_IDEMPOTENCY_LOCK_MS = 10_000;
 
 /**
  * Invoke a controller method through the MCP synthetic-context path.
@@ -281,38 +245,18 @@ export async function invokeController(
       return toCallToolResult(data === response.data ? response : { ...response, data });
     };
 
-    // ── Idempotent execution (key + store present) ──
-    // Same protocol as the HTTP plugin: cached → replay; locked → 409;
-    // else lock → execute → record success → unlock. Success results are
-    // recorded with the same 24h TTL; error results are never cached so a
-    // retry after a transient failure re-executes.
-    const store = wiring?.idempotencyStore as IdempotencyStore | undefined;
+    // Same protocol as the HTTP idempotency plugin; error results are never cached.
+    const store = idempotencyStoreOf(wiring?.idempotencyStore);
     if (idempotencyKey && store) {
-      const fullKey = `${idempotencyKey}:${invocationFingerprint(resourceName, actionName, input, session)}`;
-      const cached = await store.get(fullKey);
-      if (cached) return cached.body as CallToolResult;
-
-      const lockId = randomUUID();
-      const locked = await store.tryLock(fullKey, lockId, MCP_IDEMPOTENCY_LOCK_MS);
-      if (!locked) {
-        return toCallToolError({
-          code: "arc.idempotency_conflict",
-          message: "A call with this idempotency key is already in progress",
-          status: 409,
-        });
-      }
-      try {
-        const result = await dispatch();
-        if (!result.isError) {
-          await store.set(
-            fullKey,
-            createIdempotencyResult(200, result, {}, MCP_IDEMPOTENCY_TTL_MS),
-          );
-        }
-        return result;
-      } finally {
-        await store.unlock(fullKey, lockId);
-      }
+      return await runIdempotentTool({
+        store,
+        key: idempotencyKey,
+        resourceName,
+        operation: actionName,
+        input,
+        session,
+        dispatch,
+      });
     }
 
     return await dispatch();

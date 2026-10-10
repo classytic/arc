@@ -23,6 +23,16 @@ import type {
   McpExecutionWiring,
 } from "../../../src/integrations/mcp/types.js";
 
+import { allowPublic } from "../../../src/permissions/index.js";
+
+const PUBLIC_CRUD = {
+  list: allowPublic(),
+  get: allowPublic(),
+  create: allowPublic(),
+  update: allowPublic(),
+  delete: allowPublic(),
+};
+
 // ── Fixtures ────────────────────────────────────────────────────────────
 
 function makeRepo() {
@@ -47,7 +57,8 @@ function makeResource(
     prefix: "/tasks",
     adapter: { repository: repo },
     schemaOptions: {},
-    permissions: {},
+    // Every slot gated: MCP mounts no tool for an ungated one.
+    permissions: PUBLIC_CRUD,
     routes: [],
     middlewares: {},
     disableDefaultRoutes: false,

@@ -14,11 +14,13 @@
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
+import { idempotencyKeyRequiredResult, rateLimitedResult } from "./http-parity.js";
 import { invokeController } from "./invokeController.js";
 import type {
   CrudDescriptionMeta,
   CrudDescriptionOverride,
   CrudOperation,
+  McpAuthResult,
   McpExecutionWiring,
   ToolAnnotations,
   ToolDefinition,
@@ -53,10 +55,23 @@ export function createCrudHandler(
     wiring?: McpExecutionWiring;
     schemaOptions?: unknown;
     idField?: string;
+    /** The route declares `idempotency.required` for this op: a keyless call is refused. */
+    keyRequired?: boolean;
+    /** The resource's HTTP rate limit, per caller. */
+    allow?: (session: McpAuthResult | null) => boolean;
+    toolName?: string;
   },
 ): ToolDefinition["handler"] {
   const permission = permissions?.[op as keyof ResourcePermissions];
-  return (input, ctx) => {
+  const toolName = extras?.toolName ?? `${op}_${resourceName}`;
+  return async (input, ctx) => {
+    if (extras?.allow && !extras.allow(ctx.session)) return rateLimitedResult(toolName);
+    if (
+      extras?.keyRequired &&
+      (typeof input._idempotencyKey !== "string" || input._idempotencyKey === "")
+    ) {
+      return idempotencyKeyRequiredResult(toolName);
+    }
     // `_idempotencyKey` is executor metadata, never body data — lift it out
     // before dispatch so BodySanitizer / strict schemas never see it.
     let idempotencyKey: string | undefined;

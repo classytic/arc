@@ -15,6 +15,16 @@ import type { ResourceDefinition } from "../../../src/core/defineResource.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
 import { toolInputShape } from "../../../src/integrations/mcp/route-input-schema.js";
 
+import { allowPublic } from "../../../src/permissions/index.js";
+
+const PUBLIC_CRUD = {
+  list: allowPublic(),
+  get: allowPublic(),
+  create: allowPublic(),
+  update: allowPublic(),
+  delete: allowPublic(),
+};
+
 function mockResourceWithMongoKit(
   parserOpts: ConstructorParameters<typeof QueryParser>[0] = {},
   overrides?: Partial<ResourceDefinition>,
@@ -53,7 +63,8 @@ function mockResourceWithMongoKit(
       // NOTE: No filterableFields — should auto-derive from QueryParser
     },
     queryParser,
-    permissions: {},
+    // Every slot gated: MCP mounts no tool for an ungated one.
+    permissions: PUBLIC_CRUD,
     routes: [],
     middlewares: {},
     disableDefaultRoutes: false,

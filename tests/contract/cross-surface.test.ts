@@ -80,6 +80,8 @@ function buildOrderResource(): ResourceDefinition<OrderDoc> {
     prefix: "/orders",
     skipValidation: true,
     controller: stubController() as never,
+    // The stub cannot fence action targets, so the fixture is untenanted (as HTTP requires).
+    tenantField: false,
     permissions: {
       list: allowPublic(),
       get: allowPublic(),

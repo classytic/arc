@@ -73,7 +73,7 @@ describe("createApp — durability is reported, never blocks (phase 1)", () => {
     const lines: string[] = [];
     const app = await createApp({
       auth: false,
-      logger: { level: "warn", stream: { write: (s: string) => void lines.push(s) } } as never,
+      logger: { level: "warn", stream: { write: (s: string) => void lines.push(s) } },
       moduleGraph: { events: "strict" },
       modules: [
         createOutboxModule({ store, relayEveryMs: 60_000, runOnStart: false, health: false }),

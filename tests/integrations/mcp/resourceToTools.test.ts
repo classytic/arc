@@ -3,6 +3,16 @@ import type { ResourceDefinition } from "../../../src/core/defineResource.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
 import { toolInputShape } from "../../../src/integrations/mcp/route-input-schema.js";
 
+import { allowPublic } from "../../../src/permissions/index.js";
+
+const PUBLIC_CRUD = {
+  list: allowPublic(),
+  get: allowPublic(),
+  create: allowPublic(),
+  update: allowPublic(),
+  delete: allowPublic(),
+};
+
 function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefinition {
   return {
     name: "product",
@@ -26,7 +36,8 @@ function mockResource(overrides?: Partial<ResourceDefinition>): ResourceDefiniti
       hiddenFields: [],
       readonlyFields: [],
     },
-    permissions: {},
+    // Every slot gated: MCP mounts no tool for an ungated one.
+    permissions: PUBLIC_CRUD,
     routes: [],
     middlewares: {},
     disableDefaultRoutes: false,
@@ -509,18 +520,9 @@ describe("resourceToTools", () => {
       expect(ctx.metadata._policyFilters).toEqual({ ownerId: "async-user" });
     });
 
-    it("works without permissions defined (no restriction)", async () => {
+    it("an ungated slot generates no tool — never an allow-everyone tool", () => {
       const resource = mockResource({ permissions: {} });
-      const tools = resourceToTools(resource);
-      const listTool = tools.find((t) => t.name === "list_products")!;
-
-      await listTool.handler(
-        {},
-        { session: null, log: vi.fn().mockResolvedValue(undefined), extra: {} },
-      );
-
-      const ctx = (resource.controller as any).list.mock.calls[0][0];
-      expect(ctx.metadata._policyFilters).toEqual({});
+      expect(resourceToTools(resource).map((t) => t.name)).toEqual([]);
     });
   });
 

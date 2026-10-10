@@ -7,7 +7,6 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
-import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { z } from "zod";
 import {
   createMcpServer,
@@ -15,6 +14,17 @@ import {
   defineTool,
   resourceToTools,
 } from "../../../src/integrations/mcp/index.js";
+import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
+
+import { allowPublic } from "../../../src/permissions/index.js";
+
+const PUBLIC_CRUD = {
+  list: allowPublic(),
+  get: allowPublic(),
+  create: allowPublic(),
+  update: allowPublic(),
+  delete: allowPublic(),
+};
 
 // Helper: connect server + client over the shared loopback harness
 /**
@@ -239,7 +249,8 @@ describe("resourceToTools → createMcpServer integration", () => {
       hiddenFields: [],
       readonlyFields: [],
     },
-    permissions: {},
+    // Every slot gated: MCP mounts no tool for an ungated one.
+    permissions: PUBLIC_CRUD,
     routes: [],
     disabledRoutes: [],
     disableDefaultRoutes: false,

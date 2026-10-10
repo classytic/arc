@@ -26,7 +26,12 @@ import type { ResourcePermissions, RouteDefinition } from "../../types/index.js"
 import { pluralize } from "../../utils/pluralize.js";
 import { convertActionSchemaToZod, createActionToolHandler } from "./action-tools.js";
 import { buildAggregationTools } from "./aggregation-tools.js";
+import {
+  normalizeActionsToRouterConfig,
+  resolveActionTargetFence,
+} from "../../core/defineResource/plugin.js";
 import { buildScope } from "./buildRequestContext.js";
+import { createToolRateLimiter, idempotencyStoreOf } from "./http-parity.js";
 import {
   ALL_CRUD_OPS,
   CRUD_ANNOTATIONS,
@@ -124,6 +129,9 @@ export function resourceToTools(
   const tools: ToolDefinition[] = [];
   const prefix = config.toolNamePrefix;
   const wiring = config.wiring;
+  const hasIdempotencyStore = idempotencyStoreOf(wiring?.idempotencyStore) !== undefined;
+  const keyRequiredOps = new Set<CrudOperation>(resource.idempotency?.required ?? []);
+  const rateLimit = resource.rateLimit;
 
   // ── CRUD tools ──
   if (controller) {
@@ -131,6 +139,16 @@ export function resourceToTools(
     if (config.operations) ops = ops.filter((op) => config.operations?.includes(op));
 
     for (const op of ops) {
+      // An ungated slot is public over HTTP only by omission; MCP never mounts it.
+      if (!resource.permissions?.[op as keyof ResourcePermissions]) continue;
+      const keyRequired = keyRequiredOps.has(op);
+      if (keyRequired && !hasIdempotencyStore) {
+        throw new Error(
+          `[Arc/MCP] Resource '${resource.name}': '${op}' declares idempotency.required but no ` +
+            "idempotency store is wired — register idempotencyPlugin before mcpPlugin, or the key " +
+            "would be demanded and never deduplicated.",
+        );
+      }
       const name =
         config.names?.[op] ??
         (op === "list"
@@ -159,7 +177,12 @@ export function resourceToTools(
       // wired — advertising a no-op input would mislead agents into a
       // retry-safety they don't have. The handler lifts it out of the
       // payload before dispatch, so it never reaches BodySanitizer.
-      if (wiring?.idempotencyStore && op !== "list" && op !== "get") {
+      if (keyRequired) {
+        inputSchema._idempotencyKey = z
+          .string()
+          .min(1)
+          .describe("Required idempotency key — reuse it on a retry; the first result replays.");
+      } else if (hasIdempotencyStore && op !== "list" && op !== "get") {
         inputSchema._idempotencyKey = z
           .string()
           .optional()
@@ -194,6 +217,9 @@ export function resourceToTools(
             wiring,
             schemaOptions: resource.schemaOptions,
             idField: resource.idField,
+            keyRequired,
+            allow: createToolRateLimiter(rateLimit),
+            toolName: name,
           },
         ),
         source: `crud:${resource.name}:${op}`,
@@ -323,6 +349,19 @@ export function resourceToTools(
 
   // ── Declarative actions → MCP tools (v2.8.1) ──
   if (resource.actions) {
+    // The SAME derivation the HTTP action router uses — idempotency, target fence, gates.
+    const actionConfig = normalizeActionsToRouterConfig(
+      resource.actions,
+      resource.actionPermissions as PermissionCheck | undefined,
+      resource.tag,
+      resource.permissions,
+      resource.name,
+      undefined,
+    );
+    const fence = resolveActionTargetFence(resource, actionConfig);
+    const handlerScoped = new Set(actionConfig.handlerScopedActionNames);
+    const keyRequiredActions = new Set(actionConfig.idempotentActionNames);
+    const allow = createToolRateLimiter(rateLimit);
     for (const [actionName, entry] of Object.entries(resource.actions)) {
       const def = typeof entry === "function" ? { handler: entry } : entry;
       if (typeof def !== "function" && "mcp" in def && def.mcp === false) continue;
@@ -359,6 +398,22 @@ export function resourceToTools(
       const toolName = prefix
         ? `${prefix}_${actionName}_${resource.name}`
         : `${actionName}_${resource.name}`;
+
+      const keyRequired = keyRequiredActions.has(actionName);
+      const handlerDedup = actionConfig.handlerDedupOwners[actionName] !== undefined;
+      if (keyRequired && !handlerDedup && !hasIdempotencyStore) {
+        throw new Error(
+          `[Arc/MCP] Resource '${resource.name}': action '${actionName}' declares ` +
+            "idempotency.required but no idempotency store is wired — register idempotencyPlugin " +
+            "before mcpPlugin, or the key would be demanded and never deduplicated.",
+        );
+      }
+      if (keyRequired) {
+        inputShape._idempotencyKey = z
+          .string()
+          .min(1)
+          .describe("Required idempotency key — reuse it on a retry; the first result replays.");
+      }
 
       const handler = typeof entry === "function" ? entry : def.handler;
       // Resolve via the shared chain so MCP honours the SAME fallback that
@@ -417,6 +472,14 @@ export function resourceToTools(
             wiring,
             schemaOptions: resource.schemaOptions,
             idField: resource.idField,
+            parity: {
+              toolName,
+              keyRequired,
+              handlerDedup,
+              ...(fence && !idLess && !handlerScoped.has(actionName) ? { fence } : {}),
+              audit: Boolean(resource.audit),
+              ...(allow ? { allow } : {}),
+            },
           },
         ),
       });

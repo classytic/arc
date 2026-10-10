@@ -22,6 +22,14 @@ import {
 import { allowPublic } from "../../../src/permissions/index.js";
 import type { IRequestContext, RouteDefinition } from "../../../src/types/index.js";
 
+const PUBLIC_CRUD = {
+  list: allowPublic(),
+  get: allowPublic(),
+  create: allowPublic(),
+  update: allowPublic(),
+  delete: allowPublic(),
+};
+
 const PERIOD = z.union([
   z.strictObject({ dateOption: z.literal("month"), month: z.string().regex(/^\d{4}-\d{2}$/) }),
   z.strictObject({ dateOption: z.literal("year"), year: z.string().regex(/^\d{4}$/) }),
@@ -36,7 +44,8 @@ function makeResource(routes: RouteDefinition[]): ResourceDefinition {
     disabledRoutes: [],
     disableDefaultRoutes: true,
     schemaOptions: {},
-    permissions: {},
+    // Every slot gated: MCP mounts no tool for an ungated one.
+    permissions: PUBLIC_CRUD,
     routes,
     _appliedPresets: [],
     tag: "Reports",
