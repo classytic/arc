@@ -28,6 +28,7 @@ const NOT_ERROR_CODES = new Set([
   "arc.webhook.delivery",
   "arc.session",
   "arc.module.absent",
+  "arc.shutdown", // Symbol.for key in utils/shutdown.ts
 ]);
 
 /**
