@@ -141,6 +141,16 @@ export function buildPaginatedListSchema(itemRef: string): SchemaObject {
           pages: { type: "integer" },
           hasNext: { type: "boolean" },
           hasPrev: { type: "boolean" },
+          totalIsEstimate: {
+            type: "boolean",
+            description: "true when `total` is an estimate or a cap (render as e.g. '10,000+').",
+          },
+          countedAt: {
+            type: "string",
+            format: "date-time",
+            nullable: true,
+            description: "When `total` was counted; null when no count was taken.",
+          },
         },
       },
       {
@@ -162,6 +172,19 @@ export function buildPaginatedListSchema(itemRef: string): SchemaObject {
             description:
               "Opaque cursor for the next page, or null when `hasMore` is false. " +
               "Round-trip verbatim as the `after` query param.",
+          },
+          prev: {
+            type: "string",
+            nullable: true,
+            description:
+              "Opaque cursor for the previous page, or null on the first page. " +
+              "Round-trip verbatim as the `before` query param.",
+          },
+          hasPrev: { type: "boolean" },
+          end: {
+            type: "string",
+            nullable: true,
+            description: "Cursor at this page's last row — resume a feed with `after` from here.",
           },
         },
       },

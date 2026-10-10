@@ -279,6 +279,15 @@ export class ArcQueryParser implements QueryParserInterface {
           type: "string",
           description: "Cursor value for keyset pagination",
         },
+        before: {
+          type: "string",
+          description: "Cursor from a page's `prev` — fetch the page before it",
+        },
+        mode: {
+          type: "string",
+          enum: ["offset", "keyset"],
+          description: "Pagination mode (default offset). `keyset` walks by cursor",
+        },
         _filterOperators: {
           type: "string",
           description: [

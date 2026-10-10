@@ -360,6 +360,19 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
     });
 
     // ── Invariants 3 + 4: acknowledge ownership + unknown-id no-op ──────────
+    describe("acknowledgeMany — one write per flush", () => {
+      it("marks every listed event delivered and ignores unknown ids", async ({ skip }) => {
+        if (!store.acknowledgeMany) return skip();
+        const events = await seed(3);
+        await store.acknowledgeMany([
+          idOf(events[0] as DomainEvent),
+          idOf(events[2] as DomainEvent),
+          "nope",
+        ]);
+        expect((await store.getPending(10)).map(idOf)).toEqual([idOf(events[1] as DomainEvent)]);
+      });
+    });
+
     describe("acknowledge", () => {
       it("removes the event from pending", async () => {
         const [e] = await seed(1);

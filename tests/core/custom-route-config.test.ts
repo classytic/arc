@@ -236,12 +236,27 @@ describe("custom route config — merged with arc's own", () => {
           },
         ],
       }),
+      // A declared route rateLimit needs the limiter registered first (boot refuses otherwise).
+      async (f) => {
+        const { default: rateLimit } = await import("@fastify/rate-limit");
+        await f.register(rateLimit, { global: false });
+      },
     );
 
     const res = await app.inject({ method: "POST", url: "/hookrls/webhooks", payload: {} });
     const cfg = JSON.parse(res.body).cfg;
     expect(cfg.rawBody).toBe(true);
-    expect(cfg.rateLimit.max).toBe(5);
+    // arc's own resource budget enforces the declared limit, so the plugin's per-route slot is off.
+    expect(cfg.rateLimit).toBe(false);
+    for (let i = 0; i < 4; i++) {
+      expect(
+        (await app.inject({ method: "POST", url: "/hookrls/webhooks", payload: {} })).statusCode,
+      ).toBe(200);
+    }
+    // The 6th call: arc's 5 won, not the hand-written 9999.
+    expect(
+      (await app.inject({ method: "POST", url: "/hookrls/webhooks", payload: {} })).statusCode,
+    ).toBe(429);
     await app.close();
   });
 });

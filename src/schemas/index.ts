@@ -86,6 +86,8 @@ export function ArcOffsetListResponse<T extends TSchema>(itemSchema: T) {
     pages: Type.Integer(),
     hasNext: Type.Boolean(),
     hasPrev: Type.Boolean(),
+    totalIsEstimate: Type.Optional(Type.Boolean()),
+    countedAt: Type.Optional(Type.Union([Type.String({ format: "date-time" }), Type.Null()])),
   });
 }
 
@@ -97,6 +99,9 @@ export function ArcKeysetListResponse<T extends TSchema>(itemSchema: T) {
     limit: Type.Integer(),
     hasMore: Type.Boolean(),
     next: Type.Union([Type.String(), Type.Null()]),
+    prev: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    hasPrev: Type.Optional(Type.Boolean()),
+    end: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   });
 }
 

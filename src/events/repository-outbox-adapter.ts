@@ -371,6 +371,26 @@ export function repositoryAsOutboxStore(
     },
     claimPendingFenced,
 
+    // One `updateMany` for a whole post-commit flush; a kit without it keeps per-id acknowledge.
+    ...(typeof repository.updateMany === "function"
+      ? {
+          async acknowledgeMany(eventIds: readonly string[]): Promise<void> {
+            if (eventIds.length === 0) return;
+            await repository.updateMany?.(
+              and(anyOf(idField, [...eventIds]), ne("status", "delivered")),
+              update({
+                set: {
+                  status: "delivered",
+                  deliveredAt: new Date(),
+                  leaseOwner: null,
+                  leaseExpiresAt: null,
+                },
+              }),
+            );
+          },
+        }
+      : {}),
+
     async acknowledge(eventId: string, options?: OutboxAcknowledgeOptions): Promise<void> {
       const now = new Date();
       const baseFilter = and(eqFilter(idField, eventId), ne("status", "delivered"));

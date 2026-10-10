@@ -23,7 +23,7 @@ import type {
   RouteSchemaOptions,
   UserLike,
 } from "../types/index.js";
-import { ValidationError } from "../utils/errors.js";
+import { createDomainError, ValidationError } from "../utils/errors.js";
 import { ArcQueryParser } from "../utils/queryParser.js";
 import { collectReadBlockedFields, pathTouchesBlocked } from "./fieldRulePredicates.js";
 import { toRepositoryFilter } from "./repositoryFilter.js";
@@ -229,6 +229,9 @@ export class QueryResolver {
       const { _policyFilters: _ignored, ...rest } = rawQuery;
       query = rest;
     }
+    // Pagination controls arc owns: never handed to a parser that would read them as filters.
+    const keyset = readKeysetControls(query);
+    if (keyset.stripped) query = keyset.query;
 
     const parsed = this.queryParser.parse(query);
 
@@ -243,8 +246,11 @@ export class QueryResolver {
 
     // Enforce limits
     const limit = Math.min(Math.max(1, parsed.limit || this.defaultLimit), this.maxLimit);
-    // Only set page if not using keyset pagination (after/cursor)
-    const page = parsed.after ? undefined : parsed.page ? Math.max(1, parsed.page) : 1;
+    // Keyset when asked for (`mode=keyset`) or anchored by a cursor; offset page 1 otherwise.
+    const after = parsed.after;
+    const before = keyset.before;
+    const keysetMode = keyset.mode === "keyset" || after !== undefined || before !== undefined;
+    const page = keysetMode ? undefined : parsed.page ? Math.max(1, parsed.page) : 1;
 
     // Convert sort object to string if needed
     const sortString = parsed.sort
@@ -300,7 +306,9 @@ export class QueryResolver {
       filters: portableFilters,
       // MongoKit features
       search: parsed.search,
-      after: parsed.after,
+      ...(after !== undefined ? { after } : {}),
+      ...(before !== undefined ? { before } : {}),
+      ...(keysetMode ? { mode: "keyset" as const } : {}),
       user: req.user as UserLike | undefined,
       context: arcContext,
     };
@@ -515,4 +523,36 @@ export class QueryResolver {
       fields.map((field) => ({ field, message: "Field is not readable" })),
     );
   }
+}
+
+/**
+ * `mode` and `before` — lifted out of the query so no
+ * parser reads them as filters. An unknown `mode` is refused with a closed code.
+ */
+function readKeysetControls(query: AnyRecord | undefined): {
+  query: AnyRecord | undefined;
+  stripped: boolean;
+  mode?: "offset" | "keyset";
+  before?: string;
+} {
+  if (!query || !("mode" in query || "before" in query)) return { query, stripped: false };
+  const { mode, before, ...rest } = query;
+  if (mode !== undefined && mode !== "offset" && mode !== "keyset") {
+    throw createDomainError(
+      "arc.pagination.invalid_mode",
+      `mode must be 'offset' or 'keyset', got '${String(mode)}'`,
+      400,
+    );
+  }
+  if (before !== undefined && (typeof before !== "string" || before === "")) {
+    throw new ValidationError("before must be a non-empty cursor string", [
+      { field: "before", message: "a cursor from a page's prev" },
+    ]);
+  }
+  return {
+    query: rest,
+    stripped: true,
+    ...(mode !== undefined ? { mode } : {}),
+    ...(typeof before === "string" ? { before } : {}),
+  };
 }

@@ -129,11 +129,23 @@ export function normalizeListQuerySchema(listQuerySchema: AnyRecord): AnyRecord 
       normalizedProps[key] = NORMALIZED_PROPS[key] ?? {};
     }
   }
+  // Keyset controls arc reads itself — advertised on every list, whichever parser it uses.
+  const keysetProps: AnyRecord = {
+    mode: {
+      type: "string",
+      // No enum: an unknown mode gets arc's closed `arc.pagination.invalid_mode`, on every surface.
+      description: "Pagination mode: `offset` (default) or `keyset` (walk by `after` / `before`).",
+    },
+    before: { type: "string", description: "Cursor from a page's `prev` — the page before it." },
+  };
   return {
     // Ajv strict mode requires `type: 'object'` next to `additionalProperties`.
     type: "object",
     ...listQuerySchema,
-    ...(normalizedProps ? { properties: normalizedProps } : {}),
+    properties: {
+      ...keysetProps,
+      ...(normalizedProps ?? (listQuerySchema.properties as AnyRecord | undefined) ?? {}),
+    },
     additionalProperties: listQuerySchema.additionalProperties ?? true,
   };
 }

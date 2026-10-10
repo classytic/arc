@@ -60,6 +60,8 @@ function setupModels() {
   ProductModel = mongoose.models.LookupProduct || mongoose.model("LookupProduct", ProductSchema);
 
   productRepo = new Repository(ProductModel);
+  // A join target must be governed: its repository declares the scope the join carries.
+  new Repository(CategoryModel);
 }
 
 // ============================================================================
@@ -506,17 +508,17 @@ describe("Keyset pagination + lookup", () => {
 
     const page1 = await app.inject({
       method: "GET",
-      url: `/lookup-products?limit=2&sort=price`,
+      url: `/lookup-products?mode=keyset&limit=2&sort=price`,
     });
     expect(page1.statusCode).toBe(200);
     const body1 = page1.json();
     expect(body1.data.length).toBe(2);
 
-    // Use last doc's _id as cursor for next page
-    const cursor = body1.data[body1.data.length - 1]._id;
+    // The page's opaque `next` is the cursor — never a raw id (cursors are scope-bound).
+    const cursor = encodeURIComponent(body1.next);
     const page2 = await app.inject({
       method: "GET",
-      url: `/lookup-products?limit=2&after=${cursor}&sort=price`,
+      url: `/lookup-products?mode=keyset&limit=2&after=${cursor}&sort=price`,
     });
     expect(page2.statusCode).toBe(200);
     const body2 = page2.json();

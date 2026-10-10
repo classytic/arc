@@ -51,7 +51,8 @@ describe("MongoKit 3.5.5 features — built dist smoke test", () => {
         hiddenFields: [],
         readonlyFields: [],
       },
-      permissions: {},
+      // Gated: MCP mounts no tool for an ungated CRUD slot.
+      permissions: { list: () => true },
       routes: [],
       middlewares: {},
       disableDefaultRoutes: false,

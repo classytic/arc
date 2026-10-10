@@ -124,6 +124,14 @@ export function listResponse(itemSchema: JsonSchema): JsonSchema {
       // keyset cursor fields
       hasMore: { type: "boolean" },
       next: { type: ["string", "null"], description: "Cursor token for the next page, or null." },
+      prev: {
+        type: ["string", "null"],
+        description: "Cursor token for the previous page, or null.",
+      },
+      end: { type: ["string", "null"], description: "Cursor at the page's last row." },
+      // offset count provenance
+      totalIsEstimate: { type: "boolean" },
+      countedAt: { type: ["string", "null"], format: "date-time" },
     },
     additionalProperties: true,
   };
@@ -142,6 +150,8 @@ export function offsetListResponse(itemSchema: JsonSchema): JsonSchema {
       pages: { type: "integer", example: 5 },
       hasNext: { type: "boolean", example: false },
       hasPrev: { type: "boolean", example: false },
+      totalIsEstimate: { type: "boolean", example: false },
+      countedAt: { type: ["string", "null"], format: "date-time" },
     },
     required: ["method", "data", "page", "limit", "total", "pages", "hasNext", "hasPrev"],
     additionalProperties: true,
@@ -158,6 +168,12 @@ export function keysetListResponse(itemSchema: JsonSchema): JsonSchema {
       limit: { type: "integer", example: 20 },
       hasMore: { type: "boolean", example: true },
       next: { type: ["string", "null"], description: "Cursor token for the next page, or null." },
+      prev: {
+        type: ["string", "null"],
+        description: "Cursor token for the previous page, or null.",
+      },
+      hasPrev: { type: "boolean" },
+      end: { type: ["string", "null"], description: "Cursor at the page's last row." },
     },
     required: ["method", "data", "limit", "hasMore", "next"],
     additionalProperties: true,

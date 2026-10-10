@@ -8,7 +8,7 @@
  * Tests marked with "MONGOKIT BUG" are issues that need fixing in MongoKit.
  */
 
-import { QueryParser, Repository } from "@classytic/mongokit";
+import { JOIN_ERROR_CODES, QueryParser, Repository } from "@classytic/mongokit";
 import mongoose from "mongoose";
 import qs from "qs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -481,17 +481,17 @@ describe("5. POTENTIAL BUG: select + lookup combined", () => {
 // ============================================================================
 
 describe("6. Keyset (cursor) pagination", () => {
-  it("keyset pagination with plain ObjectId (fixed in 3.4.1)", async () => {
+  it("keyset pagination resumes from a page's next cursor", async () => {
     await seed();
 
-    const page1 = await empRepo.getAll({ limit: 2, sort: { name: 1 } });
+    const page1 = await empRepo.getAll({ mode: "keyset", limit: 2, sort: { name: 1 } });
     expect(page1.data.length).toBe(2);
     expect(page1.data[0].name).toBe("Alice");
     expect(page1.data[1].name).toBe("Bob");
 
-    // Fixed in MongoKit 3.4.1: accepts plain ObjectId as cursor
-    const lastId = page1.data[page1.data.length - 1]._id.toString();
-    const page2Parsed = parseQuery(`after=${lastId}&limit=2&sort=name`);
+    // The opaque `next` is the cursor; a raw ObjectId is not (cursors are scope-bound).
+    const next = "next" in page1 ? page1.next : null;
+    const page2Parsed = parseQuery(`after=${encodeURIComponent(String(next))}&limit=2&sort=name`);
     const page2 = await empRepo.getAll(page2Parsed);
     expect(page2.data.length).toBeGreaterThanOrEqual(1);
     // Should get Carol and/or Dave (alphabetically after Bob)
@@ -596,16 +596,14 @@ describe("9. Edge cases", () => {
     expect(result.total).toBeUndefined();
   });
 
-  it("lookup to non-existent collection returns null for single (fixed in 3.4.1)", async () => {
+  it("a lookup into a collection no model owns is refused, never a silent empty join", async () => {
     await seed();
     const parsed = parseQuery(
       "lookup[x][from]=nonexistent_collection&lookup[x][localField]=departmentSlug&lookup[x][foreignField]=slug&lookup[x][single]=true",
     );
-    const result = await empRepo.getAll(parsed);
-    expect(result.data.length).toBe(4);
-    const alice = result.data.find((d: any) => d.name === "Alice");
-    // Fixed in MongoKit 3.4.1: returns null for no-match
-    expect(alice.x).toBeNull();
+    await expect(empRepo.getAll(parsed)).rejects.toMatchObject({
+      code: JOIN_ERROR_CODES.UNKNOWN_COLLECTION,
+    });
   });
 
   it("should handle lookup with limit=1", async () => {
