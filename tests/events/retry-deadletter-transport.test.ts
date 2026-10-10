@@ -95,7 +95,7 @@ describe("withRetry + transport.deadLetter auto-routing", () => {
     expect(onDead).toHaveBeenCalledTimes(1);
   });
 
-  it("no transport, no onDead: silently exhausts (existing behaviour)", async () => {
+  it("no transport, no onDead: RETHROWS — nothing recorded the failure, so it stays owed", async () => {
     const wrapped = withRetry(
       async () => {
         throw new Error("boom");
@@ -103,11 +103,10 @@ describe("withRetry + transport.deadLetter auto-routing", () => {
       { maxRetries: 0, backoffMs: 1, logger: silentLogger },
     );
 
-    // Must not throw — the retry wrapper swallows after logging.
-    await expect(wrapped(createEvent("x", {}))).resolves.toBeUndefined();
+    await expect(wrapped(createEvent("x", {}))).rejects.toThrow(/no dead-letter sink/);
   });
 
-  it("transport without a deadLetter() method is ignored (no crash)", async () => {
+  it("transport without a deadLetter() method is no sink — the exhausted event rethrows", async () => {
     const transport = new MemoryEventTransport({ logger: silentLogger }); // no deadLetter
     const wrapped = withRetry(
       async () => {
@@ -116,7 +115,7 @@ describe("withRetry + transport.deadLetter auto-routing", () => {
       { maxRetries: 0, backoffMs: 1, transport, logger: silentLogger },
     );
 
-    await expect(wrapped(createEvent("x", {}))).resolves.toBeUndefined();
+    await expect(wrapped(createEvent("x", {}))).rejects.toThrow(/no dead-letter sink/);
   });
 
   it("transport.deadLetter() failing RETHROWS by default — the transport must redeliver, not ack a lost event", async () => {

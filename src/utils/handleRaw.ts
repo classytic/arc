@@ -43,40 +43,40 @@ import { ArcError } from "./errors.js";
  *   The return value is sent raw (no envelope). If it returns `undefined`,
  *   the response body is empty (HTTP status only).
  * @param statusCode - HTTP status code for successful responses (default: 200)
+ * @returns The reply, so Fastify waits for it: resolving `undefined` after `reply.send()` while an
+ *   async `preSerialization` hook (idempotency, encryption) is pending re-sends an empty body.
  */
 export function handleRaw<T>(
   handler: (request: FastifyRequest, reply: FastifyReply) => Promise<T>,
   statusCode = 200,
-): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
-  return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+): (request: FastifyRequest, reply: FastifyReply) => Promise<FastifyReply> {
+  return async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     try {
       const result = await handler(request, reply);
 
       // Handler may have already sent a response (streaming, SSE, redirect)
-      if (reply.sent) return;
+      if (reply.sent) return reply;
 
       if (result === undefined || result === null) {
-        reply.code(statusCode).send();
-      } else {
-        reply.code(statusCode).send(result);
+        return reply.code(statusCode).send();
       }
+      return reply.code(statusCode).send(result);
     } catch (err) {
       // Don't double-send if reply was already sent before the throw
-      if (reply.sent) return;
+      if (reply.sent) return reply;
 
       if (err instanceof ArcError) {
-        reply.code(err.statusCode).send({
+        return reply.code(err.statusCode).send({
           error: err.message,
           code: err.code,
           ...(err.details ? { details: err.details } : {}),
         });
-        return;
       }
 
       const error = err as Error & { statusCode?: number; status?: number; code?: string };
       const code = error.statusCode ?? error.status ?? 500;
 
-      reply.code(code).send({
+      return reply.code(code).send({
         error: error.message ?? "Internal server error",
         ...(error.code && { code: error.code }),
       });

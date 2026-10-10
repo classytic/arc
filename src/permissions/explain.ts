@@ -95,21 +95,23 @@ export type PermissionRequirement =
  */
 export function describePermission(check: PermissionCheck): PermissionRequirement {
   // FIRST — a closed door cannot be softened by anything below it.
-  if (check._isDenied) return { kind: "denied" };
+  if (check._isDenied || check._deniedWhen?.() === true) return { kind: "denied" };
   if (check._isPublic)
     return check._rowPolicy ? { kind: "public", rowFiltered: true } : { kind: "public" };
   const roles = [...(check._roles ?? []), ...(check._orgRoles ?? [])];
   const scope = check._scopeContext;
-  const conditional = check._conditional ? true : undefined;
+  const conditional = check._conditional === true;
+  // `conditional` is present only when true, so a published requirement has one stable shape.
+  const flag = conditional ? { conditional: true } : {};
   if (scope && Object.keys(scope).length > 0) {
     return roles.length > 0
-      ? { kind: "scoped", scope, roles, conditional }
-      : { kind: "scoped", scope, conditional };
+      ? { kind: "scoped", scope, roles, ...flag }
+      : { kind: "scoped", scope, ...flag };
   }
   if (check._orgPermission === "membership" && !conditional) {
     return roles.length > 0 ? { kind: "member", roles } : { kind: "member" };
   }
-  if (roles.length > 0) return { kind: "roles", roles, conditional };
+  if (roles.length > 0) return { kind: "roles", roles, ...flag };
   return { kind: "authenticated" };
 }
 

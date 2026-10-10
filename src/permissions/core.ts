@@ -480,6 +480,11 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
   // allowPublic())` is a closed door, not a public one.
   if (checks.some((c) => c._isDenied)) {
     check._isDenied = true;
+  } else if (checks.some((c) => c._deniedWhen)) {
+    check._deniedWhen = () => checks.some((c) => c._deniedWhen?.() === true);
+  }
+  if (check._isDenied) {
+    // closed — no further meta
   } else if (checks.length > 0 && checks.every((c) => c._isPublic)) {
     check._isPublic = true;
     // AND: every branch's policy is conjoined, so ONE row-filtered branch
@@ -524,7 +529,8 @@ export function allOf(...checks: PermissionCheck[]): PermissionCheck {
         c._orgRoles?.length ||
         (c._scopeContext && Object.keys(c._scopeContext).length > 0),
     );
-  const opaqueBranch = checks.some((c) => !hasMetaSurface(c) && !c._requiresAuth);
+  // A `_deniedWhen` branch is fully described by that flag, so it is not opaque either.
+  const opaqueBranch = checks.some((c) => !hasMetaSurface(c) && !c._requiresAuth && !c._deniedWhen);
   // Also PROPAGATE a nested child's own conditionality: an already-conditional
   // child (e.g. `allOf(requireRoles(...), requireOwnership(...))`) exposes role
   // meta, so it isn't "opaque" above — but its surfaced roles are themselves
@@ -577,8 +583,11 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
   // A disjunction is closed only when EVERY branch is — the mirror of `allOf`.
   // One `denyAll()` among granting branches contributes nothing and must not
   // describe the union as denied.
+  const closed = (c: PermissionCheck): boolean => Boolean(c._isDenied || c._deniedWhen?.());
   if (checks.length > 0 && checks.every((c) => c._isDenied)) {
     check._isDenied = true;
+  } else if (checks.length > 0 && checks.every((c) => c._isDenied || c._deniedWhen)) {
+    check._deniedWhen = () => checks.every(closed);
   } else if (checks.some((c) => c._isPublic)) {
     check._isPublic = true;
     // What an ANONYMOUS caller gets is decided by the first public branch in
@@ -603,6 +612,17 @@ export function anyOf(...checks: PermissionCheck[]): PermissionCheck {
     // unconditional sibling branch to conditional (a single boolean can't say
     // "admin→allow, editor→conditional"); the precise fix is an expression AST.
     if (checks.some((c) => c._conditional)) check._conditional = true;
+    // Scope survives the union only when EVERY branch demands the same scope; a branch
+    // that is scoped differently (or not at all) leaves a union no flat meta can state.
+    const scopes = checks.map((c) => c._scopeContext ?? {});
+    const key = (s: Record<string, string | undefined>) =>
+      JSON.stringify(Object.entries(s).sort(([a], [b]) => a.localeCompare(b)));
+    const first = scopes[0] ?? {};
+    if (scopes.every((s) => key(s) === key(first))) {
+      if (Object.keys(first).length > 0) check._scopeContext = { ...first };
+    } else {
+      check._conditional = true;
+    }
   } else if (
     checks.some(isMembershipGate) &&
     checks.every((c) => isMembershipGate(c) || isPlainRoleGate(c))

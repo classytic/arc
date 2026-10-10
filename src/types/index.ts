@@ -175,6 +175,7 @@ export type {
   ResourceExtensions,
   ResourceHookContext,
   ResourceHooks,
+  ResourceIdempotencyConfig,
   ResourcePermissions,
   ResourceWrites,
   RouteDefinition,

@@ -31,6 +31,13 @@ import fp from "fastify-plugin";
 import { createDomainError } from "../utils/errors.js";
 import { requireSingleHeaderValue } from "../utils/headers.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
+import {
+  declaresIdempotencyFence,
+  idempotencyConfigProblem,
+  type RouteIdempotencyConfig,
+  requestDedupedByHandler,
+  requestRequiresIdempotencyKey,
+} from "./requirement.js";
 import type { IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";
 import { MemoryIdempotencyStore } from "./stores/memory.js";
@@ -114,12 +121,13 @@ declare module "fastify" {
 
   interface FastifyContextConfig {
     /**
-     * Per-route idempotency. `required: true` refuses a call with no idempotency key (400
-     * `arc.idempotency_key_required`) and dedupes a keyed one, on any method — set it on any route
-     * whose retry must not execute twice. Boot refuses the declaration when nothing would enforce
-     * it: the plugin disabled, or the route's `preHandler` lacking `fastify.idempotency.middleware`.
+     * Per-route idempotency. `required: true` (or, on an action route, `requiredActions`
+     * naming the `body.action` values) refuses a call with no idempotency key (400
+     * `arc.idempotency_key_required`) and dedupes a keyed one, on any method. Boot refuses the
+     * declaration when nothing would enforce it: the plugin disabled, or the route's
+     * `preHandler` lacking `fastify.idempotency.middleware`.
      */
-    idempotency?: { required?: boolean };
+    idempotency?: RouteIdempotencyConfig;
   }
 
   interface FastifyInstance {
@@ -307,7 +315,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   // Skip if not enabled — but never let a route believe it is fenced.
   if (!enabled) {
     fastify.addHook("onRoute", (route) => {
-      if (route.config?.idempotency?.required !== true) return;
+      if (!declaresIdempotencyFence(route.config)) return;
       throw new Error(
         `[arc] ${String(route.method)} ${route.url} declares config.idempotency.required, but the ` +
           "idempotency plugin is disabled — its key would be accepted and never deduplicated. " +
@@ -344,7 +352,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    */
   function shouldApplyIdempotency(request: FastifyRequest): boolean {
     // A route that declares the fence is fenced — specific beats the plugin-wide defaults.
-    if (request.routeOptions.config?.idempotency?.required === true) return true;
+    if (requestRequiresIdempotencyKey(request)) return true;
 
     // Check method
     if (!methodSet.has(request.method)) {
@@ -410,12 +418,17 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
 
     // A route that declares `config.idempotency.required` refuses a keyless call — a retry
     // of it would execute twice.
-    if (!idempotencyKey && request.routeOptions.config?.idempotency?.required === true) {
+    if (!idempotencyKey && requestRequiresIdempotencyKey(request)) {
       throw createDomainError(
         ARC_ERROR_CODES.IDEMPOTENCY_KEY_REQUIRED,
         `This operation requires an '${headerName}' header, stable across retries of the same request.`,
         400,
       );
+    }
+
+    if (requestDedupedByHandler(request)) {
+      if (idempotencyKey) request.idempotencyKey = idempotencyKey;
+      return;
     }
 
     if (!shouldApplyIdempotency(request)) {
@@ -493,7 +506,13 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   // A route that declares the fence must actually run it — a host route registered without the
   // middleware would accept the key and execute every retry.
   fastify.addHook("onRoute", (route) => {
-    if (route.config?.idempotency?.required !== true) return;
+    const problem = idempotencyConfigProblem(route.config);
+    if (problem) {
+      throw new Error(
+        `[arc] ${String(route.method)} ${route.url}: config.idempotency: ${problem}.`,
+      );
+    }
+    if (!declaresIdempotencyFence(route.config)) return;
     const preHandlers = Array.isArray(route.preHandler) ? route.preHandler : [route.preHandler];
     if (preHandlers.includes(idempotencyMiddleware)) return;
     throw new Error(

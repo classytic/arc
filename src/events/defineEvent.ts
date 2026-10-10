@@ -23,6 +23,11 @@
  */
 
 import { createRequire } from "node:module";
+import {
+  durableEventMeta,
+  type EventDurability,
+  type FactExpectation,
+} from "@classytic/primitives/durable-events";
 import { createEvent, type DomainEvent } from "./EventTransport.js";
 
 // ============================================================================
@@ -45,7 +50,20 @@ export interface ZodPayloadSchema {
   };
 }
 
-export interface EventDefinitionInput {
+/**
+ * Whether the event books money or moves stock. `'durable'` needs `occurrence` (aggregate id plus
+ * step): `.create()` derives a fixed id from it, and `fastify.events.publish` refuses the type —
+ * it is written to the outbox in its unit of work. Undeclared reads as not yet classified.
+ */
+export type EventDurabilityInput<T> =
+  | { durability?: "ephemeral"; occurrence?: never; produces?: never }
+  | {
+      durability: "durable";
+      occurrence(payload: T): string;
+      produces?: readonly FactExpectation<T>[];
+    };
+
+export interface EventDefinitionBase {
   /** Event type name (e.g., 'order.created') */
   name: string;
   /**
@@ -61,6 +79,8 @@ export interface EventDefinitionInput {
   description?: string;
 }
 
+export type EventDefinitionInput<T = unknown> = EventDefinitionBase & EventDurabilityInput<T>;
+
 export interface EventDefinitionOutput<T = unknown> {
   /** Event type name */
   readonly name: string;
@@ -72,7 +92,12 @@ export interface EventDefinitionOutput<T = unknown> {
   readonly version: number;
   /** Human-readable description */
   readonly description?: string;
-  /** Create a DomainEvent with this type + auto-generated metadata */
+  /** `undefined` = not yet classified. */
+  readonly durability?: EventDurability;
+  /** Present on a durable definition: the occurrence its fixed id derives from. */
+  occurrence?(payload: T): string;
+  readonly produces?: readonly FactExpectation<T>[];
+  /** Create a DomainEvent with this type + auto-generated metadata (a fixed id when durable) */
   create(payload: T, meta?: Partial<DomainEvent["meta"]>): DomainEvent<T>;
 }
 
@@ -118,6 +143,7 @@ export interface EventRegistry {
     version: number;
     description?: string;
     schema?: EventSchema;
+    durability?: EventDurability;
   }>;
   /**
    * Validate a payload against a registered event's schema.
@@ -146,11 +172,15 @@ export interface EventRegistry {
  * const event = OrderCreated.create({ orderId: '123' });
  */
 export function defineEvent<S extends ZodPayloadSchema>(
-  input: EventDefinitionInput & { payload: S; schema?: never },
+  input: EventDefinitionInput<S["_zod"]["output"]> & { payload: S; schema?: never },
 ): EventDefinitionOutput<S["_zod"]["output"]>;
-export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefinitionOutput<T>;
-export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefinitionOutput<T> {
+export function defineEvent<T = unknown>(input: EventDefinitionInput<T>): EventDefinitionOutput<T>;
+export function defineEvent<T = unknown>(input: EventDefinitionInput<T>): EventDefinitionOutput<T> {
   const { name, payload, version = 1, description } = input;
+  const durable = input.durability === "durable" ? input : undefined;
+  if (durable && typeof durable.occurrence !== "function") {
+    throw new Error(`[arc] durable event "${name}" must declare \`occurrence(payload)\`.`);
+  }
   if (payload && input.schema) {
     throw new Error(
       `[arc] event "${name}" declares both \`payload\` and \`schema\` — declare the payload once.`,
@@ -164,7 +194,19 @@ export function defineEvent<T = unknown>(input: EventDefinitionInput): EventDefi
     ...(payload ? { payloadSchema: payload } : {}),
     version,
     description,
+    ...(input.durability !== undefined ? { durability: input.durability } : {}),
+    ...(durable ? { occurrence: (p: T) => durable.occurrence(p) } : {}),
+    ...(durable?.produces ? { produces: durable.produces } : {}),
     create(payload: T, meta?: Partial<DomainEvent["meta"]>): DomainEvent<T> {
+      if (durable) {
+        const fixed = durableEventMeta(name, version, durable.occurrence(payload));
+        if (meta?.id !== undefined && meta.id !== fixed.id) {
+          throw new Error(
+            `[arc] durable event "${name}": meta.id "${meta.id}" contradicts its occurrence id "${fixed.id}".`,
+          );
+        }
+        return createEvent(name, payload, { schemaVersion: version, ...meta, ...fixed });
+      }
       // Auto-stamp `schemaVersion` so consumers can route by version during
       // migrations without hosts having to remember to pass it on every
       // `.create()` call. Caller-supplied `meta.schemaVersion` still wins —
@@ -257,12 +299,14 @@ export function createEventRegistry(options?: EventRegistryOptions): EventRegist
       version: number;
       description?: string;
       schema?: EventSchema;
+      durability?: EventDurability;
     }> {
       return Array.from(definitions.values()).map((def) => ({
         name: def.name,
         version: def.version,
         description: def.description,
         schema: def.schema,
+        ...(def.durability !== undefined ? { durability: def.durability } : {}),
       }));
     },
 

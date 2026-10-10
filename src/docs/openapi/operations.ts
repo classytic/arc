@@ -148,6 +148,9 @@ export function createOperation(
     ...(applicableSteps.length > 0 && {
       "x-arc-pipeline": applicableSteps.map((s) => ({ type: s.type, name: s.name })),
     }),
+    ...(resource.idempotency?.required.some((o) => o === operation) && {
+      "x-arc-idempotency": { required: true as const },
+    }),
     responses: buildErrorResponses({
       requiresAuth,
       permRoles: permAnnotation?.roles,

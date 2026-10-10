@@ -27,10 +27,14 @@
  * `AuditStore` interface and pass via `customStores: [...]`.
  */
 
-export type { AuditLogger, AuditPluginOptions, AuditRequestLike, RequestAuditLogger } from "./auditPlugin.js";
-export { auditContextOf } from "./auditPlugin.js";
+export type {
+  AuditLogger,
+  AuditPluginOptions,
+  AuditRequestLike,
+  RequestAuditLogger,
+} from "./auditPlugin.js";
 // Plugin
-export { default as auditPlugin } from "./auditPlugin.js";
+export { auditContextOf, default as auditPlugin } from "./auditPlugin.js";
 /**
  * Repository → AuditStore adapter. Use when you want a repo-backed store
  * as one entry in `customStores: [...]` (fan-out to DB + Kafka/S3/etc.),

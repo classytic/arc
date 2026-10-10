@@ -42,7 +42,8 @@ function buildController(): StatsController {
   // Mock repo — no DB needed; the custom routes don't touch the
   // repo, they just exercise dispatch.
   const repo = createMockRepositoryMock();
-  return new StatsController(repo, { resourceName: "stats" });
+  // No resourceName: defineResource binds each resource's own name.
+  return new StatsController(repo);
 }
 
 describe("RouteDefinition.controllerMethod — typed function refs", () => {

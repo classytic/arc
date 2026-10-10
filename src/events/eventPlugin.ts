@@ -14,6 +14,7 @@
  * });
  */
 
+import { NonDurablePublishError } from "@classytic/primitives/durable-events";
 import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
@@ -86,6 +87,9 @@ export interface EventPluginOptions {
    * silently drop events while requests continue succeeding. Pair with the
    * `onPublishError` callback to monitor failures, or use `wal` for
    * at-least-once delivery guarantees.
+   *
+   * Never applies to a type the `registry` declares `durability: 'durable'`: the facade
+   * refuses it with `NonDurablePublishError` (it belongs in the outbox).
    */
   failOpen?: boolean;
   /**
@@ -330,6 +334,16 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
         ...meta,
       };
       const event = createEvent(type, payload, enrichedMeta);
+
+      // A durable type is fail-CLOSED whatever `failOpen` says: the facade writes no row, so a
+      // publish here is lost on a handler failure or a crash.
+      if (registry?.get(type, event.meta.schemaVersion)?.durability === "durable") {
+        throw new NonDurablePublishError(
+          type,
+          "fastify.events writes no outbox row — save it in the unit of work that made it true " +
+            "(dispatchDomainEvent, or outbox.save in the session)",
+        );
+      }
 
       // Dev-mode duplicate-publish detector. Keyed on (type, correlationId)
       // with a 5-second window. Catches the dual-publish trap where a

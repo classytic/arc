@@ -74,6 +74,14 @@ export interface Operation {
   "x-arc-permission"?: { type: string; roles?: readonly string[] };
   /** Arc pipeline steps (OpenAPI extension) */
   "x-arc-pipeline"?: Array<{ type: string; name: string }>;
+  /** Idempotency-key fence: every call (`required`) or the listed actions (`requiredActions`). */
+  "x-arc-idempotency"?: {
+    required?: true;
+    requiredActions?: readonly string[];
+    dedup?: "handler";
+    owner?: string;
+    handlerDedup?: Readonly<Record<string, string>>;
+  };
 }
 
 export interface Parameter {

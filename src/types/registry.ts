@@ -9,6 +9,7 @@ import type {
   OpenApiSchemas,
   RateLimitConfig,
   ResolvedTenantPurge,
+  ResourceIdempotencyConfig,
   ResourcePermissions,
 } from "./resource/index.js";
 
@@ -35,6 +36,8 @@ export interface ResourceMetadata {
     capability?: string;
     raw?: boolean;
     schema?: unknown;
+    /** The route's `config.idempotency` — `required: true` means a key is mandatory. */
+    idempotency?: { required?: boolean; dedup?: "handler"; owner?: string };
   }>;
   routes: Array<{
     method: string;
@@ -93,6 +96,8 @@ export interface RegistryEntry extends ResourceMetadata {
   disabledRoutes?: string[];
   /** Rate limit config */
   rateLimit?: RateLimitConfig | false;
+  /** Built-in write ops that require an idempotency key (`defineResource({ idempotency })`). */
+  idempotency?: ResourceIdempotencyConfig;
   /** Per-resource audit opt-in flag (read by `auditPlugin` perResource mode) */
   audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
   /**
@@ -116,6 +121,12 @@ export interface RegistryEntry extends ResourceMetadata {
      * reading the action definition itself.
      */
     readonly id?: boolean;
+    /** `{ required: true }` — a call of this action requires an idempotency key. */
+    readonly idempotency?: {
+      readonly required: boolean;
+      readonly dedup?: "handler";
+      readonly owner?: string;
+    };
     /** MCP tool generation flag — `false` to skip, object for overrides */
     readonly mcp?:
       | boolean

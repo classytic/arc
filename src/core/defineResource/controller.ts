@@ -69,6 +69,7 @@ export function resolveOrAutoCreateController<TDoc extends object>(
   }
 
   if (userController) {
+    bindControllerResourceName(userController, resolvedConfig.name);
     threadQueryParser(userController, resolvedConfig);
     // BEFORE any option threading: a resource whose declared write verbs
     // cannot execute must fail with zero side effects to reason about.
@@ -155,6 +156,15 @@ function threadConfigureLifecycle<TDoc extends object>(
 
   if (Object.keys(opts).length === 0) return;
   ctrl.configure(opts);
+}
+
+/**
+ * Bind the resource name into a supplied controller (duck-typed `bindResourceName`), so a
+ * subclass that never passed `resourceName` to `super()` still runs its hooks, audit and events.
+ */
+function bindControllerResourceName(controller: unknown, name: string): void {
+  const ctrl = controller as { bindResourceName?: (n: string) => void };
+  if (typeof ctrl.bindResourceName === "function") ctrl.bindResourceName(name);
 }
 
 /**

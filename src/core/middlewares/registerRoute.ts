@@ -3,8 +3,13 @@
  * validator, the idempotency-declaration fence, and duplicate-route diagnostics.
  */
 
+import {
+  declaresIdempotencyFence,
+  idempotencyConfigProblem,
+} from "../../idempotency/requirement.js";
 import type { FastifyWithDecorators } from "../../types/index.js";
 import { arcRouteValidatorCompiler } from "../routeValidator.js";
+import { isValidationGate } from "./chain.js";
 
 /**
  * Register a route with friendly handling of `FST_ERR_DUPLICATED_ROUTE`.
@@ -22,14 +27,30 @@ export function tryRegisterRoute(
   opts: Parameters<FastifyWithDecorators["route"]>[0],
   context: { resourceName: string; op?: string },
 ): void {
+  const problem = idempotencyConfigProblem(opts.config);
+  if (problem) {
+    throw new Error(
+      `[arc] ${String(opts.method)} ${opts.url} on resource "${context.resourceName}": config.idempotency: ${problem}.`,
+    );
+  }
   // A declared fence with no plugin to run it would accept the key and execute every retry.
   // (A REGISTERED plugin checks its own routes — disabled or middleware-less — at `onRoute`.)
-  if (opts.config?.idempotency?.required === true && !fastify.hasDecorator("idempotency")) {
+  if (declaresIdempotencyFence(opts.config) && !fastify.hasDecorator("idempotency")) {
     throw new Error(
       `[arc] ${String(opts.method)} ${opts.url} on resource "${context.resourceName}" declares ` +
         "config.idempotency.required, but idempotencyPlugin is not registered — register it " +
         "(enabled) before the resources, or drop the declaration.",
     );
+  }
+  // A parked validation error with no gate to rethrow it hands invalid input to the handler.
+  if (opts.attachValidation === true) {
+    const preHandlers = Array.isArray(opts.preHandler) ? opts.preHandler : [opts.preHandler];
+    if (!preHandlers.some(isValidationGate)) {
+      throw new Error(
+        `[arc] ${String(opts.method)} ${opts.url} on resource "${context.resourceName}" sets ` +
+          "attachValidation without arc's validation gate — build its hooks with buildRouteHooks.",
+      );
+    }
   }
   const validatorCompiler = opts.validatorCompiler ?? arcRouteValidatorCompiler(fastify);
   try {

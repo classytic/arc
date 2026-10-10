@@ -97,8 +97,8 @@ export interface RetryOptions {
   onDead?: (event: DomainEvent, errors: Error[]) => void | Promise<void>;
 
   /**
-   * What to do when `transport.deadLetter()` ITSELF fails after retries are
-   * exhausted.
+   * What to do when retries are exhausted and no durable sink took the event —
+   * `transport.deadLetter()` / `deadLetter` failed, or neither is wired.
    *
    *  - `'rethrow'` (default) — the wrapper throws, so the transport treats
    *    the handler as failed: an at-least-once transport (Redis Streams,
@@ -245,6 +245,16 @@ export function withRetry<T = unknown>(
     // durable DLQ persistence failed so at-least-once transports retain
     // the original — otherwise the event is neither processed nor
     // dead-lettered. (onDead above is observability; it still ran.)
+    // No durable sink at all is the same loss as a failed one: nothing recorded the failure.
+    if (!transport?.deadLetter && !deadLetter && dlqFailureMode === "rethrow") {
+      throw new Error(
+        `[Arc Events] Handler '${label}' exhausted retries for ${event.type} and no dead-letter ` +
+          "sink is wired — rethrowing so the delivery stays owed (the outbox relay retries and " +
+          "dead-letters it) instead of acknowledging a lost event. Set dlqFailureMode: " +
+          "'log-and-drop' on a handler whose loss is acceptable.",
+        { cause: errors[errors.length - 1] },
+      );
+    }
     if (dlqPersistError && dlqFailureMode === "rethrow") {
       throw new Error(
         `[Arc Events] Handler '${label}' exhausted retries for ${event.type} AND ` +

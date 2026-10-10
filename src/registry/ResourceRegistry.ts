@@ -140,6 +140,20 @@ export class ResourceRegistry {
         capability: r.capability,
         raw: r.rawHandler !== undefined,
         schema: r.schema,
+        ...((r.config?.idempotency as { required?: unknown } | undefined)?.required === true
+          ? {
+              idempotency: {
+                required: true,
+                ...((r.config?.idempotency as { dedup?: "handler"; owner?: string }).dedup ===
+                "handler"
+                  ? {
+                      dedup: "handler" as const,
+                      owner: String((r.config?.idempotency as { owner?: string }).owner),
+                    }
+                  : {}),
+              },
+            }
+          : {}),
       })),
       events: Object.keys(resource.events ?? {}),
       registeredAt: new Date().toISOString(),
@@ -161,6 +175,7 @@ export class ResourceRegistry {
         resource.fields && Object.keys(resource.fields).length > 0 ? resource.fields : undefined,
       pipelineSteps: extractPipelineSteps(resource.pipe),
       rateLimit: resource.rateLimit,
+      idempotency: resource.idempotency,
       audit: resource.audit,
       // v2.8.1 — expose actions metadata + fallback permission for OpenAPI/MCP/introspection
       actionPermissions: resource.actionPermissions,
@@ -175,6 +190,7 @@ export class ResourceRegistry {
               schema: entry.schema as Record<string, unknown> | undefined,
               permissions: entry.permissions,
               mcp: entry.mcp,
+              idempotency: entry.idempotency,
               // 2.15.5: surface the mount preference so consumers (OpenAPI,
               // registry route enumeration, FE manifests) can pick the
               // right URL without re-reading the action definition.

@@ -3,25 +3,23 @@
  * middleware ingredient, plus the resolver that turns
  * `RouteDefinition.preHandler` into a flat array.
  *
- * Canonical order (CRUD + Actions + Aggregations must agree), split across
- * TWO Fastify lifecycle stages (2.22):
+ * Canonical order (CRUD + Actions + Aggregations must agree):
  *
  *   onRequest:  preAuth → arcDecorator → authMw
- *   preHandler: permissionMw → pluginMw → routeGuards → customMws
+ *   preHandler: prePermission → permissionMw → validationGate → pluginMw → routeGuards → customMws
  *
- * WHY the split: Fastify parses the body and runs schema validation BETWEEN
- * onRequest and preHandler. Auth belongs at `onRequest` (the Fastify
- * best-practice placement) so unauthenticated requests are rejected with a
- * 401 BEFORE arc pays body-parse + AJV cost for them — and before a 400
- * validation error leaks schema shape to anonymous callers (schema-probing
- * surface). Everything auth needs exists at onRequest: headers, cookies,
- * params, query. Everything body-shaped stays at preHandler: permission
- * checks (may read parsed data), idempotency (fingerprints the body),
- * response-cache (keys on the authed user), field-write filters, and
- * host middlewares.
+ * Auth runs before body parse; the permission gate runs before a schema error is
+ * surfaced, so a refused caller gets 401/403 and never a 400 that leaks the schema.
+ * A gated route registers with `attachValidation: true` and the gate rethrows the
+ * parked error. Pinned by `tests/core/authorize-before-validate.test.ts`.
  */
 
-import type { onRequestHookHandler, preHandlerHookHandler, RouteHandlerMethod } from "fastify";
+import type {
+  FastifyRequest,
+  onRequestHookHandler,
+  preHandlerHookHandler,
+  RouteHandlerMethod,
+} from "fastify";
 
 import type { FastifyWithDecorators } from "../../types/index.js";
 
@@ -32,12 +30,38 @@ import type { FastifyWithDecorators } from "../../types/index.js";
  */
 export type PreHandlerHook = preHandlerHookHandler | RouteHandlerMethod;
 
-/** The two route-level hook arrays every arc router registers. */
+/** The route-level hook arrays every arc router registers. */
 export interface RouteHookChains {
   /** `preAuth → arcDecorator → authMw` — headers/cookies/params only; body does not exist yet. */
   onRequest: PreHandlerHook[];
-  /** `permissionMw → pluginMw → routeGuards → customMws` — body-aware stage. */
+  /** `prePermission → permissionMw → validationGate → pluginMw → routeGuards → customMws`. */
   preHandler: PreHandlerHook[];
+  /** True iff `preHandler` carries a validation gate — the route must park AJV errors. */
+  attachValidation: boolean;
+}
+
+const validationGates = new WeakSet<PreHandlerHook>();
+
+/** True iff `hook` is a validation gate built by `buildRouteHooks`. */
+export function isValidationGate(hook: unknown): boolean {
+  return typeof hook === "function" && validationGates.has(hook as PreHandlerHook);
+}
+
+/**
+ * Build the gate that surfaces a parked validation error. `format` may rethrow it in a
+ * route-specific shape; whatever it does, a still-parked error is rethrown verbatim, so
+ * invalid input never reaches a later hook or the handler.
+ */
+function buildValidationGate(format?: RouteHandlerMethod | null): PreHandlerHook {
+  const gate: RouteHandlerMethod = async function arcValidationGate(req, reply) {
+    const parked = (req as FastifyRequest & { validationError?: Error }).validationError;
+    if (!parked) return;
+    if (format) await format.call(this, req, reply);
+    if (reply.sent) return;
+    throw parked;
+  };
+  validationGates.add(gate);
+  return gate;
 }
 
 /**
@@ -58,21 +82,30 @@ export function buildRouteHooks(parts: {
   preAuth?: ReadonlyArray<PreHandlerHook | null | undefined>;
   arcDecorator: RouteHandlerMethod;
   authMw?: RouteHandlerMethod | null;
+  /** Runs before the permission gate; must not surface schema detail (action dispatch check). */
+  prePermission?: RouteHandlerMethod | null;
   permissionMw?: RouteHandlerMethod | null;
+  /** Shapes the parked validation error after the gate; the error is rethrown regardless. */
+  validationFormatter?: RouteHandlerMethod | null;
   pluginMw?: RouteHandlerMethod | null;
   routeGuards?: ReadonlyArray<RouteHandlerMethod | null | undefined>;
   customMws?: ReadonlyArray<PreHandlerHook | null | undefined>;
 }): RouteHookChains {
+  // No permission gate = public route: Fastify rejects invalid input at preValidation as before.
+  const gated = Boolean(parts.permissionMw);
   return {
     onRequest: [...(parts.preAuth ?? []), parts.arcDecorator, parts.authMw ?? null].filter(
       Boolean,
     ) as PreHandlerHook[],
     preHandler: [
+      gated ? (parts.prePermission ?? null) : null,
       parts.permissionMw ?? null,
+      gated ? buildValidationGate(parts.validationFormatter) : null,
       parts.pluginMw ?? null,
       ...(parts.routeGuards ?? []),
       ...(parts.customMws ?? []),
     ].filter(Boolean) as PreHandlerHook[],
+    attachValidation: gated,
   };
 }
 
@@ -84,8 +117,10 @@ export function buildRouteHooks(parts: {
 export function routeHookOptions(hooks: RouteHookChains): {
   onRequest?: onRequestHookHandler[];
   preHandler?: preHandlerHookHandler[];
+  attachValidation?: true;
 } {
   return {
+    ...(hooks.attachValidation ? { attachValidation: true as const } : {}),
     ...(hooks.onRequest.length > 0 ? { onRequest: hooks.onRequest as onRequestHookHandler[] } : {}),
     ...(hooks.preHandler.length > 0
       ? { preHandler: hooks.preHandler as preHandlerHookHandler[] }

@@ -46,7 +46,11 @@
  */
 
 import type { DomainEvent } from "@classytic/primitives/events";
-import { OutboxOwnershipError, type OutboxStore } from "@classytic/primitives/outbox";
+import {
+  OutboxConflictError,
+  OutboxOwnershipError,
+  type OutboxStore,
+} from "@classytic/primitives/outbox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { claimedAttempts } from "../events/outbox/claimed.js";
 
@@ -162,6 +166,25 @@ export function runOutboxStoreContract(name: string, setup: OutboxStoreContractS
         const bad = { type: "x", payload: {}, meta: {} } as DomainEvent;
         await expect(store.save(bad)).rejects.toThrow();
         expect((await store.getPending(10)).length).toBe(0);
+      });
+    });
+
+    // ── Identity: a fixed id is one occurrence ──────────────────────────────
+    describe("save — one row per event id", () => {
+      it("a second save of the same id and payload is a no-op", async () => {
+        const e = event();
+        await store.save(e);
+        await store.save({ ...e, meta: { ...e.meta } });
+        expect((await store.getPending(10)).map(idOf)).toEqual([idOf(e)]);
+      });
+
+      it("THROWS OutboxConflictError when the same id arrives with a different payload", async () => {
+        const e = event();
+        await store.save(e);
+        await expect(store.save({ ...e, payload: { n: -1 } })).rejects.toBeInstanceOf(
+          OutboxConflictError,
+        );
+        expect((await store.getPending(10)).length).toBe(1);
       });
     });
 

@@ -649,13 +649,11 @@ export function createBetterAuthAdapter(
     if (presented) {
       const scope = await presented.verify(presented.value, request);
       if (!scope) {
-        reply
-          .code(401)
-          .send({
-            code: ARC_ERROR_CODES.UNAUTHORIZED,
-            message: "Invalid credentials",
-            status: 401,
-          });
+        reply.code(401).send({
+          code: ARC_ERROR_CODES.UNAUTHORIZED,
+          message: "Invalid credentials",
+          status: 401,
+        });
         return;
       }
       (request as unknown as { scope: RequestScope }).scope = scope;

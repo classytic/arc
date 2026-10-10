@@ -203,6 +203,12 @@ export interface ActionRouterConfig {
   /** Id-bound actions whose handler authorizes its own target (`target: { scope: 'handler' }`). */
   readonly handlerScopedActionNames?: readonly string[];
 
+  /** Actions whose call requires an idempotency key (`idempotency: { required: true }`). */
+  readonly idempotentActionNames?: readonly string[];
+
+  /** Actions that deduplicate themselves (`dedup: 'handler'`) -> their owner. */
+  readonly handlerDedupOwners?: Readonly<Record<string, string>>;
+
   /**
    * Write `audit.custom(resource, id, action)` after every successful action, with the actor
    * from the request's validated scope. Set by `defineResource` from the resource's `audit` flag.
@@ -273,6 +279,8 @@ export function createActionRouter(
     extensions,
     isTargetVisible,
     handlerScopedActionNames = [],
+    idempotentActionNames = [],
+    handlerDedupOwners = {},
     auditActions = false,
   } = config;
   const handlerScoped = new Set(handlerScopedActionNames);
@@ -403,9 +411,8 @@ export function createActionRouter(
       resourceName,
     );
 
-    // Filtered body schema. Filtering at the schema level means cross-mount
-    // calls (id-bound name on `/action`, id-less name on `/:id/action`)
-    // fail AJV BEFORE auth/pipeline overhead.
+    // Filtered body schema: a cross-mount call (id-bound name on `/action`, id-less
+    // name on `/:id/action`) fails the discriminator and the dispatch check names the mount.
     const subsetSchemas: Record<string, Record<string, unknown>> = {};
     for (const name of actionSubset) {
       if (actionSchemas[name]) subsetSchemas[name] = actionSchemas[name];
@@ -434,46 +441,36 @@ export function createActionRouter(
       };
     }
 
-    // 2.15.5 — action-scoped validation-error formatter. The body schema
-    // uses an AJV `oneOf` (one branch per action) and AJV emits a failing-
-    // branch error for EVERY branch on a mismatch. Without filtering,
-    // Fastify's default error rendering points at an unrelated action's
-    // `required` field — the mentora repro. We pick the branch matching
-    // `body.action` and re-throw a Fastify-shaped error so the global
-    // error handler maps it to the canonical `arc.validation_error`
-    // contract. The filter is keyed off `schemaPath` (`/oneOf/<idx>/...`),
-    // so the schema shape itself stays unchanged — the per-branch
-    // property-union strict-mode mechanics keep working (see
-    // `buildActionBodySchema`'s JSDoc).
+    // Dispatch check — BEFORE the permission gate: an unknown or wrong-mount action
+    // names no schema, and the permission gate cannot resolve a check without one.
+    const actionDispatchCheck: RouteHandlerMethod = async (req, _reply) => {
+      if (!(req as { validationError?: FastifyValidationError }).validationError) return;
+      const body = req.body as { action?: unknown } | undefined;
+      const submitted = typeof body?.action === "string" ? body.action : undefined;
+      if (submitted && subsetSet.has(submitted)) return;
+      const wrongMount = submitted && allActionNames.includes(submitted) ? submitted : undefined;
+      const otherMount = hasId ? "/action" : "/:id/action";
+      const message = wrongMount
+        ? `Action '${wrongMount}' on '${resourceName}' is mounted at 'POST ${otherMount}', not 'POST ${urlPath}'`
+        : submitted
+          ? `Unknown action '${submitted}' on '${resourceName}'. Valid at 'POST ${urlPath}': ${actionSubset.join(", ")}`
+          : `Missing 'action' field on '${resourceName}'. Valid at 'POST ${urlPath}': ${actionSubset.join(", ")}`;
+      throw createError(400, message, {
+        code: "arc.invalid_action",
+        validActions: actionSubset,
+        mount: urlPath,
+        ...(submitted ? { submitted } : {}),
+        ...(wrongMount ? { mountedAt: otherMount } : {}),
+      });
+    };
+
+    // AFTER the permission gate: AJV reports a failing `oneOf` branch for EVERY action,
+    // so keep only the submitted action's branch (`/oneOf/<idx>/`) before rethrowing.
     const actionValidationFormatter: RouteHandlerMethod = async (req, _reply) => {
       const validationError = (req as { validationError?: FastifyValidationError }).validationError;
       if (!validationError) return;
-
-      const body = req.body as { action?: unknown } | undefined;
-      const submitted = typeof body?.action === "string" ? body.action : undefined;
-
-      if (!submitted || !subsetSet.has(submitted)) {
-        // Sharper hint when the action exists but is mounted under the
-        // OTHER path — turns "Unknown action 'approve'" into something the
-        // caller can act on without grepping the resource definition.
-        const wrongMount = submitted && allActionNames.includes(submitted) ? submitted : undefined;
-        const otherMount = hasId ? "/action" : "/:id/action";
-        const message = wrongMount
-          ? `Action '${wrongMount}' on '${resourceName}' is mounted at 'POST ${otherMount}', not 'POST ${urlPath}'`
-          : submitted
-            ? `Unknown action '${submitted}' on '${resourceName}'. Valid at 'POST ${urlPath}': ${actionSubset.join(", ")}`
-            : `Missing 'action' field on '${resourceName}'. Valid at 'POST ${urlPath}': ${actionSubset.join(", ")}`;
-        throw createError(400, message, {
-          code: "arc.invalid_action",
-          validActions: actionSubset,
-          mount: urlPath,
-          ...(submitted ? { submitted } : {}),
-          ...(wrongMount ? { mountedAt: otherMount } : {}),
-        });
-      }
-
-      const branchIdx = actionSubset.indexOf(submitted);
-      const branchPath = `/oneOf/${branchIdx}/`;
+      const submitted = (req.body as { action: string }).action;
+      const branchPath = `/oneOf/${actionSubset.indexOf(submitted)}/`;
       const ajvErrors = validationError.validation ?? [];
       const scoped = ajvErrors.filter(
         (e) =>
@@ -499,20 +496,23 @@ export function createActionRouter(
       throw scopedError;
     };
 
-    // Auth (+ arc decorator) run at onRequest — BEFORE body parsing and AJV,
-    // so unauthenticated callers get a 401 without paying validation cost or
-    // learning the action schema from 400s. The validation formatter stays
-    // FIRST in preHandler: `attachValidation` parks AJV errors at the
-    // preValidation stage (after onRequest), so by preHandler time the
-    // formatter sees them — and only authenticated callers reach it.
+    const requiredActions = actionSubset.filter((name) => idempotentActionNames.includes(name));
+    const handlerDedup = Object.fromEntries(
+      requiredActions.flatMap((name) => {
+        const owner = handlerDedupOwners[name];
+        return owner === undefined ? [] : [[name, owner] as const];
+      }),
+    );
+
     const hooks = buildRouteHooks({
       arcDecorator,
       authMw,
+      prePermission: actionDispatchCheck,
       permissionMw,
+      validationFormatter: actionValidationFormatter,
       pluginMw: selectPluginMw("POST", pluginMw),
       routeGuards,
     });
-    const preHandler = [actionValidationFormatter, ...hooks.preHandler];
 
     tryRegisterRoute(
       fastify,
@@ -520,11 +520,18 @@ export function createActionRouter(
         method: "POST",
         url: urlPath,
         schema: routeSchema as FastifySchema,
-        // `attachValidation: true` parks AJV errors on `request.validationError`
-        // so the formatter above can re-throw with the matching action's scope.
-        attachValidation: true,
-        ...routeHookOptions({ onRequest: hooks.onRequest, preHandler }),
-        ...buildRouteConfig(rateLimitConfig, extensions),
+        ...routeHookOptions(hooks),
+        ...buildRouteConfig(
+          rateLimitConfig,
+          extensions,
+          undefined,
+          requiredActions.length > 0
+            ? {
+                requiredActions,
+                ...(Object.keys(handlerDedup).length > 0 ? { handlerDedup } : {}),
+              }
+            : undefined,
+        ),
         handler: async (req: FastifyRequest, reply: FastifyReply) => {
           const { action, ...data } = req.body as { action: string; [key: string]: unknown };
           // For id-less mounts there's no `:id` param — pass empty string.

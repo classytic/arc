@@ -298,10 +298,12 @@ const auditPlugin: FastifyPluginAsync<AuditPluginOptions> = async (
       const ctx = (): AuditContext => auditContextOf(request);
       return {
         create: (resource, documentId, data) => audit.create(resource, documentId, data, ctx()),
-        update: (resource, documentId, before, after) => audit.update(resource, documentId, before, after, ctx()),
+        update: (resource, documentId, before, after) =>
+          audit.update(resource, documentId, before, after, ctx()),
         delete: (resource, documentId, data) => audit.delete(resource, documentId, data, ctx()),
         restore: (resource, documentId, data) => audit.restore(resource, documentId, data, ctx()),
-        custom: (resource, documentId, action, data) => audit.custom(resource, documentId, action, data, ctx()),
+        custom: (resource, documentId, action, data) =>
+          audit.custom(resource, documentId, action, data, ctx()),
       };
     },
 
@@ -474,7 +476,12 @@ export interface RequestAuditLogger {
   ) => Promise<void>;
   delete: (resource: string, documentId: string, data: Record<string, unknown>) => Promise<void>;
   restore: (resource: string, documentId: string, data: Record<string, unknown>) => Promise<void>;
-  custom: (resource: string, documentId: string, action: string, data?: Record<string, unknown>) => Promise<void>;
+  custom: (
+    resource: string,
+    documentId: string,
+    action: string,
+    data?: Record<string, unknown>,
+  ) => Promise<void>;
 }
 
 /** What {@link auditContextOf} reads — a FastifyRequest, or arc's `IRequestContext`. */
@@ -507,7 +514,10 @@ export function auditContextOf(request: AuditRequestLike): AuditContext {
     ipAddress: request.ip,
     userAgent: typeof userAgent === "string" ? userAgent : undefined,
     // The route TEMPLATE, never the raw url: ids and query strings stay out of audit rows.
-    endpoint: request.method && request.routeOptions?.url ? `${request.method} ${request.routeOptions.url}` : undefined,
+    endpoint:
+      request.method && request.routeOptions?.url
+        ? `${request.method} ${request.routeOptions.url}`
+        : undefined,
   };
 }
 

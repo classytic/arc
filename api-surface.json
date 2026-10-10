@@ -222,7 +222,7 @@
       "version",
       "when"
     ],
-    "typesHash": "57f4c1ecf1a67220"
+    "typesHash": "d542531674e48e39"
   },
   "./permissions": {
     "stability": "stable",
@@ -372,7 +372,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "7d99e98a4ee79ec3"
+    "typesHash": "127079f050976f6e"
   },
   "./cache": {
     "stability": "stable",
@@ -499,6 +499,7 @@
       "ResourceExtensions",
       "ResourceHookContext",
       "ResourceHooks",
+      "ResourceIdempotencyConfig",
       "ResourceMetadata",
       "ResourcePermissions",
       "ResourceWrites",
@@ -515,7 +516,7 @@
       "WriteContext",
       "WriteVerbKey"
     ],
-    "typesHash": "1d2de422dbb6504e"
+    "typesHash": "a9e8338550415e24"
   },
   "./types/storage": {
     "stability": "stable",
@@ -670,7 +671,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "3bb4ec0e35be131d"
+    "typesHash": "ca5f98af250ba06e"
   },
   "./presets": {
     "stability": "stable",
@@ -726,7 +727,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "52daa7ca61c6ea85"
+    "typesHash": "2b52e36162b29319"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -738,7 +739,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "630fdbf00f9ded8a"
+    "typesHash": "a0aea703b3144c3f"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -758,7 +759,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "a10572d9430402ef"
+    "typesHash": "0f33344cfa2c0dee"
   },
   "./presets/search": {
     "stability": "stable",
@@ -773,7 +774,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "9816281fd9552a5d"
+    "typesHash": "78647bfba8ef4bf0"
   },
   "./auth": {
     "stability": "stable",
@@ -807,7 +808,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "8c529db90e6d6cfa"
+    "typesHash": "be8a976601d93aed"
   },
   "./hooks": {
     "stability": "stable",
@@ -841,7 +842,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "a4fde908421db32c"
+    "typesHash": "6f1469b11561dd14"
   },
   "./middleware": {
     "stability": "stable",
@@ -859,7 +860,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "e060a9cb8fd61bb4"
+    "typesHash": "18516664ef16485d"
   },
   "./pipeline": {
     "stability": "stable",
@@ -888,7 +889,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "d66383c8b10eed85"
+    "typesHash": "4019d6c1b82f38d7"
   },
   "./context": {
     "stability": "stable",
@@ -976,7 +977,7 @@
       "getCascadingResourcesWithMetadata",
       "introspectionPlugin"
     ],
-    "typesHash": "2d0fdafb7ffa7aad"
+    "typesHash": "8e199839f83c808e"
   },
   "./utils": {
     "stability": "stable",
@@ -1134,7 +1135,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "559029140952208b"
+    "typesHash": "f3afeca198b2c7f0"
   },
   "./cli": {
     "stability": "stable",
@@ -1228,7 +1229,7 @@
       "ssePlugin",
       "versioningPlugin"
     ],
-    "typesHash": "5cdfae58b2e7eec4"
+    "typesHash": "5aecb20a0ca3f039"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1275,7 +1276,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "fadb8fd4a3235c96"
+    "typesHash": "a8085fd958a9e236"
   },
   "./docs": {
     "stability": "stable",
@@ -1294,7 +1295,7 @@
       "openApiPlugin",
       "scalarPlugin"
     ],
-    "typesHash": "01089609cf8910f5"
+    "typesHash": "09b6c2a0b7aaa512"
   },
   "./encryption": {
     "stability": "stable",
@@ -1348,7 +1349,7 @@
       "idempotencyPlugin",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "dd5796d557e7142c"
+    "typesHash": "949344acfd231af6"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1584,7 +1585,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "7dd5ccfaf75194d3"
+    "typesHash": "96ce0edb6fbdb079"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1759,7 +1760,7 @@
       "verifyModuleGraph",
       "withRelayNudge"
     ],
-    "typesHash": "02fda4e07a489eed"
+    "typesHash": "f96c9995ee8e1eaa"
   },
   "./schemas": {
     "stability": "stable",
@@ -1870,7 +1871,7 @@
       "WorkflowLike",
       "WorkflowRunLike"
     ],
-    "typesHash": "4eb756ac92bdf8bd"
+    "typesHash": "d6546074c2cb7f7c"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -1896,7 +1897,7 @@
       "isStreamTerminal",
       "streamlinePlugin"
     ],
-    "typesHash": "95c7cf44c4ef1c5f"
+    "typesHash": "d0ee0f5a95eac015"
   },
   "./integrations/websocket": {
     "stability": "stable",
@@ -1977,7 +1978,7 @@
       "executeTimedHandler",
       "jobsPlugin"
     ],
-    "typesHash": "9a30fb246bc9662c"
+    "typesHash": "4f2af3a900b36fe1"
   },
   "./integrations/event-gateway": {
     "stability": "experimental",
@@ -2243,7 +2244,7 @@
       "toCallToolSuccess",
       "toolInputShape"
     ],
-    "typesHash": "5c178426f793ff8e"
+    "typesHash": "2363c0a5ac4b436f"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2258,7 +2259,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "ad9e1a26e1a33660"
+    "typesHash": "b41fb08e599532b8"
   },
   "./scim": {
     "stability": "stable",
@@ -2342,7 +2343,7 @@
       "usagePeriod",
       "usagePlugin"
     ],
-    "typesHash": "2c45185709eeca28"
+    "typesHash": "7f68407de5878203"
   },
   "./cleanup": {
     "stability": "stable",
@@ -2426,7 +2427,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "49b5b244d565287b"
+    "typesHash": "b1c38eb148f82ae1"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2439,7 +2440,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "80e05c6985928539"
+    "typesHash": "f23334fa609467bd"
   },
   "./testing/outbox": {
     "stability": "stable",

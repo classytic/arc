@@ -26,6 +26,15 @@ import type {
 import type { OnTenantDeleteConfig } from "./tenant.js";
 import type { ResourceWrites } from "./writes.js";
 
+/**
+ * Built-in write routes whose retry must not execute twice: each listed op answers a
+ * keyless call with 400 `arc.idempotency_key_required` and dedupes a keyed one. Needs
+ * `idempotencyPlugin` enabled; boot refuses an op that is not mounted.
+ */
+export interface ResourceIdempotencyConfig {
+  readonly required: readonly ("create" | "update" | "delete")[];
+}
+
 /** Standard controller type alias for CRUD operations. */
 export type CrudController<TDoc> = IController<TDoc>;
 
@@ -481,6 +490,8 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * registered. Set to `false` to disable for this resource.
    */
   rateLimit?: RateLimitConfig | false;
+  /** Idempotency-key fence for the built-in write routes. See `ResourceIdempotencyConfig`. */
+  idempotency?: ResourceIdempotencyConfig;
   /**
    * QueryCache configuration for this resource. Enables
    * stale-while-revalidate and auto-invalidation. Requires

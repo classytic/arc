@@ -9,6 +9,7 @@
  */
 
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+import { idempotencyConfigProblem } from "../../idempotency/requirement.js";
 import type {
   ActionDefinition,
   ActionsMap,
@@ -27,6 +28,7 @@ import { resolveActionPermission } from "../actionPermissions.js";
 import { createCrudRouter } from "../createCrudRouter.js";
 import { createRequestContext } from "../fastifyAdapter.js";
 import type { ResourceDefinition } from "./ResourceDefinition.js";
+import { withoutObjectIdPattern } from "./schemas.js";
 
 // ============================================================================
 // Pure schema-synthesis helpers (exported for unit tests)
@@ -219,6 +221,10 @@ export function normalizeActionsToRouterConfig(
   idLessActionNames: readonly string[];
   /** Id-bound actions declaring `target: { scope: 'handler' }` — the router does not fence their target. */
   handlerScopedActionNames: readonly string[];
+  /** Actions declaring `idempotency: { required: true }`. */
+  idempotentActionNames: readonly string[];
+  /** Of those, the ones that deduplicate themselves (`dedup: 'handler'`), with their owner. */
+  handlerDedupOwners: Readonly<Record<string, string>>;
 } {
   const handlers: Record<
     string,
@@ -228,6 +234,8 @@ export function normalizeActionsToRouterConfig(
   const schemas: Record<string, Record<string, unknown>> = {};
   const idLessActionNames: string[] = [];
   const handlerScopedActionNames: string[] = [];
+  const idempotentActionNames: string[] = [];
+  const handlerDedupOwners: Record<string, string> = {};
 
   for (const [name, entry] of Object.entries(actions)) {
     const explicit =
@@ -242,6 +250,17 @@ export function normalizeActionsToRouterConfig(
       handlers[name] = def.handler;
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
       if (def.id === false) idLessActionNames.push(name);
+      if (def.idempotency?.required === true) idempotentActionNames.push(name);
+      const problem = idempotencyConfigProblem({
+        idempotency: def.idempotency ? { ...def.idempotency } : undefined,
+      });
+      if (problem) {
+        throw new Error(
+          `[Arc] Resource '${resourceName}': action '${name}' idempotency: ${problem}.`,
+        );
+      }
+      if (def.idempotency?.dedup === "handler")
+        handlerDedupOwners[name] = String(def.idempotency.owner);
       if (def.target !== undefined) {
         if (def.target.scope !== "handler" || def.target.reason.trim() === "") {
           throw new Error(
@@ -301,6 +320,8 @@ export function normalizeActionsToRouterConfig(
     actionSchemas: schemas,
     idLessActionNames,
     handlerScopedActionNames,
+    idempotentActionNames,
+    handlerDedupOwners,
   };
 }
 
@@ -311,9 +332,16 @@ export function normalizeActionsToRouterConfig(
  */
 function resolveActionTargetFence(
   resource: { name: string; tenantField?: string | false; controller?: unknown },
-  actionConfig: { actions: Record<string, unknown>; idLessActionNames: readonly string[]; handlerScopedActionNames: readonly string[] },
+  actionConfig: {
+    actions: Record<string, unknown>;
+    idLessActionNames: readonly string[];
+    handlerScopedActionNames: readonly string[];
+  },
 ): ((id: string, req: FastifyRequest) => Promise<boolean>) | undefined {
-  const exempt = new Set([...actionConfig.idLessActionNames, ...actionConfig.handlerScopedActionNames]);
+  const exempt = new Set([
+    ...actionConfig.idLessActionNames,
+    ...actionConfig.handlerScopedActionNames,
+  ]);
   const fenced = Object.keys(actionConfig.actions).filter((name) => !exempt.has(name));
   if (fenced.length === 0) return undefined;
   const ctrl = resource.controller as
@@ -328,7 +356,8 @@ function resolveActionTargetFence(
     // A controller scopes on `organizationId` unless told `false`, so an UNDECLARED
     // tenantField with a controller is tenanted too — only `false` is untenanted.
     const tenanted =
-      typeof resource.tenantField === "string" || (ctrl !== undefined && resource.tenantField !== false);
+      typeof resource.tenantField === "string" ||
+      (ctrl !== undefined && resource.tenantField !== false);
     if (tenanted) {
       throw new Error(
         `[Arc] Resource '${resource.name}' is tenant-scoped (tenantField ` +
@@ -474,6 +503,18 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           resource.customSchemas as AnyRecord,
         );
 
+        // `GET /:id` resolves `lookupFields` keys too, so its id need not be an ObjectId.
+        const getParams = schemas?.get?.params as AnyRecord | undefined;
+        if (resource.lookupFields?.length && schemas?.get && getParams) {
+          schemas.get = {
+            ...(schemas.get as AnyRecord),
+            params: withoutObjectIdPattern(
+              getParams,
+              `${resource.idField ?? "_id"} or ${resource.lookupFields.join(" / ")}`,
+            ),
+          };
+        }
+
         // The parser's listQuery schema replaces the default querystring schema,
         // whose hardcoded `maximum: 100` would override the parser's maxLimit.
         const listQuerySchema = resource._registryMeta?.openApiSchemas?.listQuery;
@@ -501,6 +542,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           resourceName: resource.name,
           schemaOptions: resource.schemaOptions,
           rateLimit: resource.rateLimit,
+          idempotency: resource.idempotency,
           updateMethod: resource.updateMethod,
           pipe: resource.pipe,
           fields: resource.fields,

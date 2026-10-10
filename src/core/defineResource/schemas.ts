@@ -92,11 +92,25 @@ export function cleanLegacyObjectIdParams(
   idField: string | undefined,
 ): OpenApiSchemas | undefined {
   if (!openApiSchemas || !idField || idField === "_id") return openApiSchemas;
-  const params = openApiSchemas.params as AnyRecord | undefined;
-  if (!params || typeof params !== "object") return openApiSchemas;
+  const params = withoutObjectIdPattern(
+    openApiSchemas.params as AnyRecord | undefined,
+    `${idField} (custom ID field)`,
+  );
+  return params === openApiSchemas.params ? openApiSchemas : { ...openApiSchemas, params };
+}
+
+/**
+ * `params` with the ObjectId pattern removed from `id` — the same object when there is none.
+ * `GET /:id` on a resource with `lookupFields` uses it: the id may be a business number.
+ */
+export function withoutObjectIdPattern(
+  params: AnyRecord | undefined,
+  description: string,
+): AnyRecord | undefined {
+  if (!params || typeof params !== "object") return params;
   const properties = params.properties as AnyRecord | undefined;
   const idProp = properties?.id as AnyRecord | undefined;
-  if (!idProp || typeof idProp !== "object") return openApiSchemas;
+  if (!idProp || typeof idProp !== "object") return params;
 
   const pattern = idProp.pattern;
   const isObjectIdPattern =
@@ -105,22 +119,14 @@ export function cleanLegacyObjectIdParams(
       pattern === "^[a-f\\d]{24}$" ||
       pattern === "^[a-fA-F0-9]{24}$" ||
       /^\^\[[a-fA-F0-9\\d]+\]\{24\}\$$/.test(pattern));
-  if (!isObjectIdPattern) return openApiSchemas;
+  if (!isObjectIdPattern) return params;
 
   const cleanedId: AnyRecord = { ...idProp };
   delete cleanedId.pattern;
   delete cleanedId.minLength;
   delete cleanedId.maxLength;
-  if (!cleanedId.description) {
-    cleanedId.description = `${idField} (custom ID field)`;
-  }
-  return {
-    ...openApiSchemas,
-    params: {
-      ...params,
-      properties: { ...properties, id: cleanedId },
-    } as AnyRecord,
-  };
+  if (!cleanedId.description) cleanedId.description = description;
+  return { ...params, properties: { ...properties, id: cleanedId } };
 }
 
 /**

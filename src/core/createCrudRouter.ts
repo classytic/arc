@@ -5,7 +5,7 @@
  * live in `routerShared` so `createActionRouter` wires the same ingredients.
  */
 
-import type { FastifyInstance, FastifySchema, RouteHandlerMethod } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifySchema, RouteHandlerMethod } from "fastify";
 
 import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
 import type { PermissionCheck } from "../permissions/types.js";
@@ -62,6 +62,29 @@ function mergeRouteConfig(
   if (!hostConfig) return arcConfig;
   // Arc's keys last — see the call site for why they win a collision.
   return { config: { ...hostConfig, ...(arcConfig.config ?? {}) } };
+}
+
+/**
+ * Wrap a raw handler so one that called `reply.send()` and resolved `undefined` returns the
+ * reply: otherwise, while an async `preSerialization` hook (idempotency, encryption) is pending,
+ * Fastify re-sends the `undefined` and the client gets an empty body.
+ * Pinned by `tests/idempotency/raw-route-keyed-body.test.ts`.
+ */
+function keepRawReply(raw: RouteHandlerMethod): RouteHandlerMethod {
+  return async function rawRoute(this: FastifyInstance, request, reply) {
+    let sendCalled = false;
+    const send = reply.send;
+    reply.send = function trackedSend(this: FastifyReply, payload?: unknown): FastifyReply {
+      sendCalled = true;
+      return send.call(this, payload);
+    };
+    try {
+      const result = await raw.call(this, request, reply);
+      return result === undefined && (sendCalled || reply.sent) ? reply : result;
+    } finally {
+      reply.send = send;
+    }
+  };
 }
 
 /** Mount custom routes (from presets or user-defined `routes`) on Fastify. */
@@ -201,7 +224,7 @@ function createCustomRoutes<TDoc = unknown>(
               )
             : createFastifyHandler(boundMethod as ControllerHandler);
       } else {
-        handler = boundMethod as RouteHandlerMethod;
+        handler = keepRawReply(boundMethod as RouteHandlerMethod);
       }
     } else {
       // Function handler (inline OR resolved-from-controllerMethod)
@@ -217,7 +240,7 @@ function createCustomRoutes<TDoc = unknown>(
               )
             : createFastifyHandler(resolvedHandler as ControllerHandler);
       } else {
-        handler = resolvedHandler as RouteHandlerMethod;
+        handler = keepRawReply(resolvedHandler as RouteHandlerMethod);
       }
     }
 
@@ -363,7 +386,19 @@ export function createCrudRouter<TDoc = unknown>(
     // Surfaces on `req.arc.idField` (read by `getEntityQuery(req)`).
     idField,
     extensions,
+    idempotency,
   } = options;
+
+  // A fence on a route that is not mounted protects nothing — refuse it at boot.
+  const idempotentOps = new Set<string>(idempotency?.required ?? []);
+  for (const op of idempotentOps) {
+    if (disableDefaultRoutes || disabledRoutes.includes(op as (typeof disabledRoutes)[number])) {
+      throw new Error(
+        `[arc] Resource "${resourceName}" declares idempotency.required '${op}', but that ` +
+          "built-in route is not mounted — drop it from idempotency.required.",
+      );
+    }
+  }
 
   const rateLimitConfig = buildRateLimitConfig(rateLimit);
 
@@ -503,7 +538,12 @@ export function createCrudRouter<TDoc = unknown>(
             ) as FastifySchema,
             ...routeHookOptions(hooks),
             handler: handlers[spec.op],
-            ...buildRouteConfig(rateLimitConfig, extensions),
+            ...buildRouteConfig(
+              rateLimitConfig,
+              extensions,
+              undefined,
+              idempotentOps.has(spec.op) ? { required: true } : undefined,
+            ),
           },
           { resourceName, op: spec.op },
         );

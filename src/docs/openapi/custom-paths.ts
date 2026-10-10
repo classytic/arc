@@ -88,6 +88,15 @@ export function appendCustomRoutePaths(
       }
     }
 
+    if (route.idempotency?.required === true) {
+      extras["x-arc-idempotency"] = {
+        required: true,
+        ...(route.idempotency.dedup === "handler"
+          ? { dedup: "handler" as const, owner: route.idempotency.owner }
+          : {}),
+      };
+    }
+
     paths[fullPath][method] = createOperation(
       resource,
       handlerName,

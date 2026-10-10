@@ -20,7 +20,15 @@ function makeRepository(
 ): RepositoryLike {
   return {
     create: createImpl,
-    getOne: async () => null,
+    // A duplicate is read back and compared: the existing row is the same occurrence.
+    getOne: async () => ({
+      type: "order.created",
+      event: {
+        type: "order.created",
+        payload: {},
+        meta: { id: "existing", timestamp: new Date() },
+      },
+    }),
     // 2.10.2 switched from findAll → getAll for bounded reads (mongokit's
     // findAll has no skip/limit). Return a pagination envelope so the adapter
     // unwraps .data correctly.

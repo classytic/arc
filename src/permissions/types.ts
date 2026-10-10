@@ -189,6 +189,14 @@ export interface PermissionCheckMeta {
    */
   _isDenied?: boolean;
   /**
+   * A deployment-static closed door, read LAZILY by `describePermission`: when it returns
+   * `true`, nobody passes. Set it on a check whose ENTIRE runtime decision is `!_deniedWhen()`
+   * (a tier / feature flag fixed at boot but unknown when the check is built). `allOf` is
+   * denied when any child is; `anyOf` when every child is; such a check never taints `allOf`
+   * as `conditional`.
+   */
+  _deniedWhen?: () => boolean;
+  /**
    * Set by requireAuth() — a pure identity gate (must be signed in) that adds NO
    * row-level or environmental condition. Marked so `allOf` does not mistake it
    * for an opaque runtime branch and needlessly taint the composite `conditional`.

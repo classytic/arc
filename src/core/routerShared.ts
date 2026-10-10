@@ -47,6 +47,7 @@ export {
 } from "./middlewares/auth.js";
 export {
   buildRouteHooks,
+  isValidationGate,
   type PreHandlerHook,
   resolveRoutePreHandlers,
   routeHookOptions,

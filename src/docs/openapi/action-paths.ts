@@ -119,6 +119,18 @@ function emitMount(
     return typeof effective === "function" && !effective._isPublic;
   });
 
+  const requiredActions = subsetActions
+    .filter((a) => a.idempotency?.required === true)
+    .map((a) => a.name);
+
+  const handlerDedup = Object.fromEntries(
+    subsetActions.flatMap((a) =>
+      a.idempotency?.required === true && a.idempotency.dedup === "handler"
+        ? [[a.name, String(a.idempotency.owner)] as const]
+        : [],
+    ),
+  );
+
   if (!paths[actionPath]) paths[actionPath] = {};
   paths[actionPath].post = createOperation(
     resource,
@@ -139,6 +151,12 @@ function emitMount(
           }
         : {}),
       description: descLines.join("\n"),
+      ...(requiredActions.length > 0 && {
+        "x-arc-idempotency": {
+          requiredActions,
+          ...(Object.keys(handlerDedup).length > 0 ? { handlerDedup } : {}),
+        },
+      }),
       requestBody: {
         required: true,
         content: {

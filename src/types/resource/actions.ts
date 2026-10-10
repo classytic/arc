@@ -68,6 +68,18 @@ export interface ActionDefinition {
    */
   readonly target?: { readonly scope: "handler"; readonly reason: string };
   /**
+   * `{ required: true }`: a call of THIS action without an idempotency key is refused (400
+   * `arc.idempotency_key_required`) and a keyed one is deduplicated; other actions on the
+   * same mount stay optional. Needs `idempotencyPlugin` enabled.
+   */
+  readonly idempotency?: {
+    readonly required: boolean;
+    /** `'handler'`: the handler deduplicates; arc only demands and exposes the key. Needs `owner`. */
+    readonly dedup?: "handler";
+    /** The runner that owns at-most-once under `dedup: 'handler'`. */
+    readonly owner?: string;
+  };
+  /**
    * MCP tool generation:
    * - omitted/true: auto-generate
    * - false: skip

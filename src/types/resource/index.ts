@@ -22,7 +22,12 @@
 
 export type { ActionDefinition, ActionEntry, ActionHandlerFn, ActionsMap } from "./actions.js";
 export type { ResourceCacheConfig } from "./cache.js";
-export type { CrudController, ResourceConfig, ResourcePermissions } from "./config.js";
+export type {
+  CrudController,
+  ResourceConfig,
+  ResourceIdempotencyConfig,
+  ResourcePermissions,
+} from "./config.js";
 export type { EventDefinition } from "./events.js";
 export type { ResourceExtensions } from "./extensions.js";
 export type { ArcFieldRule, FieldRule } from "./fields.js";

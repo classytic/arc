@@ -197,7 +197,8 @@ describe("withRetry logger", () => {
       { maxRetries: 1, backoffMs: 1, jitter: 0, logger, name: "deadHandler" },
     );
 
-    await handler(testEvent());
+    // No dead-letter sink: the exhausted event rethrows (it stays owed).
+    await expect(handler(testEvent())).rejects.toThrow(/no dead-letter sink/);
 
     // 1 retry → 1 warn, then permanent failure → 1 error
     expect(logger.warnCalls.length).toBe(1);
@@ -224,7 +225,8 @@ describe("withRetry logger", () => {
       },
     );
 
-    await handler(testEvent());
+    // No dead-letter sink: the exhausted event rethrows (it stays owed).
+    await expect(handler(testEvent())).rejects.toThrow(/no dead-letter sink/);
 
     // 1 error for permanent failure + 1 error for the onDead callback failure
     expect(logger.errorCalls.length).toBe(2);
@@ -242,7 +244,8 @@ describe("withRetry logger", () => {
       { maxRetries: 1, backoffMs: 1, jitter: 0 },
     );
 
-    await handler(testEvent());
+    // No dead-letter sink: the exhausted event rethrows (it stays owed).
+    await expect(handler(testEvent())).rejects.toThrow(/no dead-letter sink/);
 
     expect(warnSpy).toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalled();

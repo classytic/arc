@@ -21,6 +21,7 @@
  * });
  * ```
  */
+import { ARC_ERROR_CODES } from "@classytic/repo-core/errors";
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { createError, ForbiddenError, NotFoundError } from "../utils/errors.js";
@@ -197,6 +198,16 @@ export interface StreamlinePluginOptions {
     pause?: (request: unknown) => boolean | Promise<boolean>;
     rewind?: (request: unknown) => boolean | Promise<boolean>;
   };
+  /**
+   * Operations whose call requires an idempotency key (400 `arc.idempotency_key_required`
+   * when absent; a keyed retry replays). `workflows` narrows it to those ids (default: all).
+   * On `start` the header key IS the run's `idempotencyKey`; a different body key is refused.
+   * Needs `idempotencyPlugin` enabled.
+   */
+  idempotency?: {
+    readonly required: readonly ("start" | "execute" | "resume" | "rewind")[];
+    readonly workflows?: readonly string[];
+  };
 }
 
 // ============================================================================
@@ -313,6 +324,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     tenantResolver,
     bypassTenantResolver,
     permissions: perms,
+    idempotency,
   } = options;
 
   // fp-wrapped, so Fastify does not apply `prefix` itself — routes add it here.
@@ -365,6 +377,37 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     return check(request);
   };
 
+  type FencedOp = "start" | "execute" | "resume" | "rewind";
+  const fencedOps = new Set<string>(idempotency?.required ?? []);
+  if (fencedOps.size > 0 && !fastify.hasDecorator("idempotency")) {
+    throw new Error(
+      "[Arc/Streamline] `idempotency.required` is declared, but idempotencyPlugin is not " +
+        "registered — register it (enabled) before streamlinePlugin, or drop the declaration.",
+    );
+  }
+  for (const wfId of idempotency?.workflows ?? []) {
+    if (!workflows.some((wf) => wf.definition.id === wfId)) {
+      throw new Error(`[Arc/Streamline] idempotency.workflows names unknown workflow '${wfId}'.`);
+    }
+  }
+
+  /**
+   * Route options for a mutating op: a fenced op gets `config.idempotency.required` and
+   * runs auth → permission → idempotency, so a refused caller never reaches the key check.
+   */
+  const routeOpts = (wfId: string, op: FencedOp, permOp: PermOp = op) => {
+    const fenced =
+      fencedOps.has(op) && (!idempotency?.workflows || idempotency.workflows.includes(wfId));
+    if (!fenced) return { preHandler: authPreHandler };
+    const permGate = async (request: FastifyRequest): Promise<void> => {
+      if (!(await checkPerm(permOp, request))) throw new ForbiddenError();
+    };
+    return {
+      config: { idempotency: { required: true } },
+      preHandler: [...authPreHandler, permGate, fastify.idempotency.middleware],
+    };
+  };
+
   // No plugin-scoped setErrorHandler: streamline's HttpError-shaped errors map
   // through arc's global handler; a local one would ship a second response shape.
 
@@ -389,7 +432,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     };
 
     // POST /:workflowId/start — Start a new workflow run
-    fastify.post(`${routePrefix}/start`, { preHandler: authPreHandler }, async (request, reply) => {
+    fastify.post(`${routePrefix}/start`, routeOpts(id, "start"), async (request, reply) => {
       if (!(await checkPerm("start", request))) {
         throw new ForbiddenError();
       }
@@ -438,12 +481,28 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
         );
       }
 
-      const { input, meta, idempotencyKey, priority } = bodyRecord as {
+      const {
+        input,
+        meta,
+        idempotencyKey: bodyKey,
+        priority,
+      } = bodyRecord as {
         input?: unknown;
         meta?: Record<string, unknown>;
         idempotencyKey?: string;
         priority?: number;
       };
+      // One operation, one key: the header key and a body `idempotencyKey` must agree.
+      const headerKey = request.idempotencyKey;
+      if (headerKey !== undefined && bodyKey !== undefined && bodyKey !== headerKey) {
+        throw createError(
+          422,
+          `[Arc/Streamline] '/${id}/start' got an idempotency-key header and a different body ` +
+            "`idempotencyKey` — send one key, or the same key in both.",
+          { code: ARC_ERROR_CODES.IDEMPOTENCY_KEY_REUSED, workflowId: id },
+        );
+      }
+      const idempotencyKey = bodyKey ?? headerKey;
       const tenantOpts = resolveTenantOpts(request);
       const run = await wf.start(input, {
         meta,
@@ -535,7 +594,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     // resume is POST /hooks/:token (enableHookEndpoint).
     fastify.post(
       `${routePrefix}/runs/:runId/resume`,
-      { preHandler: authPreHandler },
+      routeOpts(id, "resume"),
       async (request, _reply) => {
         if (!(await checkPerm("resume", request))) {
           throw new ForbiddenError();
@@ -596,7 +655,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     // POST /:workflowId/runs/:runId/execute — Execute (resume from start) a workflow run
     fastify.post(
       `${routePrefix}/runs/:runId/execute`,
-      { preHandler: authPreHandler },
+      routeOpts(id, "execute"),
       async (request, _reply) => {
         if (!(await checkPerm("execute", request))) {
           throw new ForbiddenError();
@@ -697,7 +756,7 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     if (wf.engine.rewindTo) {
       fastify.post(
         `${routePrefix}/runs/:runId/rewind`,
-        { preHandler: authPreHandler },
+        routeOpts(id, "rewind"),
         async (request, _reply) => {
           if (!(await checkPerm("rewind", request))) {
             throw new ForbiddenError();

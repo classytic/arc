@@ -35,18 +35,27 @@ import {
   InvalidOutboxEventError,
   type OutboxAcknowledgeOptions,
   type OutboxClaimOptions,
+  OutboxConflictError,
   type OutboxErrorInfo,
   type OutboxFailOptions,
   OutboxOwnershipError,
   type OutboxStatus,
   type OutboxStore,
   type OutboxWriteOptions,
+  outboxPayloadFingerprint,
 } from "@classytic/primitives/outbox";
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { and, anyOf, eq as eqFilter, lte, ne, or } from "@classytic/repo-core/filter";
 import { update } from "@classytic/repo-core/update";
 import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-helpers.js";
 import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
+
+/** A row read back from the repository that carries its event. */
+function isStoredRow(value: unknown): value is { type: string; event: DomainEvent } {
+  if (typeof value !== "object" || value === null) return false;
+  const row: { type?: unknown; event?: unknown } = value;
+  return typeof row.type === "string" && typeof row.event === "object" && row.event !== null;
+}
 
 /**
  * Outbox row shape. The PK field is determined by the kit's
@@ -317,7 +326,8 @@ export function repositoryAsOutboxStore(
         firstFailedAt: null,
         lastFailedAt: null,
         lastError: null,
-        dedupeKey: options?.dedupeKey ?? null,
+        // Scoped by type: two event types sharing a key are two occurrences, not a duplicate.
+        dedupeKey: options?.dedupeKey ? `${event.type}:${options.dedupeKey}` : null,
         partitionKey: options?.partitionKey ?? null,
         headers: options?.headers ? { ...options.headers } : null,
         createdAt: now,
@@ -325,8 +335,22 @@ export function repositoryAsOutboxStore(
       try {
         await r.create(doc, options?.session ? { session: options.session } : undefined);
       } catch (err) {
-        if (isDuplicateKeyError(err)) return; // idempotent save on dup `_id` / `dedupeKey`
-        throw err;
+        if (!isDuplicateKeyError(err)) throw err;
+        // Same occurrence, same payload: idempotent. A different payload is two occurrences on
+        // one id or key — refuse it. Read outside the session: a write error aborts a transaction.
+        const existing = await safeGetOne(
+          doc.dedupeKey === null
+            ? eqFilter(idField, event.meta.id)
+            : or(eqFilter(idField, event.meta.id), eqFilter("dedupeKey", doc.dedupeKey)),
+        );
+        if (!isStoredRow(existing)) throw err;
+        if (
+          existing.type === event.type &&
+          outboxPayloadFingerprint(existing.event) === outboxPayloadFingerprint(event)
+        ) {
+          return;
+        }
+        throw new OutboxConflictError(event.meta.id, event.type);
       }
     },
 

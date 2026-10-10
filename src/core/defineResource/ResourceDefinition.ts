@@ -38,6 +38,7 @@ import type {
   ResourceCacheConfig,
   ResourceConfig,
   ResourceExtensions,
+  ResourceIdempotencyConfig,
   ResourceMetadata,
   ResourcePermissions,
   RouteDefinition,
@@ -104,6 +105,8 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
   // ── Cross-cutting ──
   readonly rateLimit?: RateLimitConfig | false;
+  readonly idempotency?: ResourceIdempotencyConfig;
+  readonly lookupFields?: readonly string[];
   readonly audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
   readonly updateMethod?: "PUT" | "PATCH" | "both";
   readonly pipe?: import("../../pipeline/types.js").PipelineConfig;
@@ -300,6 +303,8 @@ export class ResourceDefinition<TDoc = AnyRecord> {
     this.aggregations = config.aggregations;
 
     this.rateLimit = config.rateLimit;
+    this.idempotency = config.idempotency;
+    this.lookupFields = config.lookupFields;
     this.audit = config.audit;
     this.updateMethod = config.updateMethod;
     this.pipe = config.pipe;

@@ -4,6 +4,7 @@
  * cannot diverge on which concerns they forward.
  */
 
+import type { RouteIdempotencyConfig } from "../../idempotency/requirement.js";
 import type { RateLimitConfig, ResourceExtensions } from "../../types/index.js";
 
 /**
@@ -35,6 +36,7 @@ export type RouteCorsConfig = Record<string, unknown> | false;
  *   - `config.cors`          — read by `@fastify/cors` as a per-route override.
  *   - `config.arcExtensions` — read by arc plugins (encryption, …) at request
  *     time, sourced from `defineResource({ extensions })`.
+ *   - `config.idempotency`   — read by `idempotencyPlugin` (the key fence).
  *
  * Returns `{}` (no `config` key) when neither is present, so routes without
  * either stay config-free and the spread is a genuine no-op. Both fields are
@@ -44,22 +46,25 @@ export function buildRouteConfig(
   rateLimitConfig: RouteRateLimitConfig | undefined,
   extensions: ResourceExtensions | undefined,
   cors?: RouteCorsConfig,
+  idempotency?: RouteIdempotencyConfig,
 ): {
   config?: {
     rateLimit?: RouteRateLimitConfig["rateLimit"];
     cors?: RouteCorsConfig;
     arcExtensions?: ResourceExtensions;
+    idempotency?: RouteIdempotencyConfig;
   };
 } {
   // `cors: false` is meaningful (disable for this route), so test for presence
   // rather than truthiness — `!cors` would silently drop the disable.
   const hasCors = cors !== undefined;
-  if (!rateLimitConfig && !extensions && !hasCors) return {};
+  if (!rateLimitConfig && !extensions && !hasCors && !idempotency) return {};
   return {
     config: {
       ...(rateLimitConfig ?? {}),
       ...(hasCors ? { cors } : {}),
       ...(extensions ? { arcExtensions: extensions } : {}),
+      ...(idempotency ? { idempotency } : {}),
     },
   };
 }

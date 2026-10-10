@@ -150,6 +150,9 @@ export interface RouteDefinition {
    * Accepts a controller-method NAME as well, same as {@link handler} — the
    * lookup is identical and only the calling convention differs, so a
    * Fastify-native controller method stays reachable by name.
+   *
+   * An async raw handler that calls `reply.send()` must `return reply` (as `handleRaw`
+   * does): resolving `undefined` while an async `preSerialization` hook runs sends an empty body.
    */
   readonly rawHandler?: string | RawRouteHandler;
   /** Logical operation name (pipeline keys, MCP tool naming). */

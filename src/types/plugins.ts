@@ -87,6 +87,8 @@ export interface CrudRouterOptions {
    * registered. Set to `false` to disable for this resource.
    */
   rateLimit?: RateLimitConfig | false;
+  /** Idempotency-key fence for the built-in write routes. */
+  idempotency?: import("./resource/index.js").ResourceIdempotencyConfig;
   /** PreHandler guards applied to every route (CRUD + custom + preset). */
   routeGuards?: RouteHandlerMethod[];
   /**

@@ -20,6 +20,7 @@ import {
   buildPermissionContext,
   buildRateLimitConfig,
   buildRouteHooks,
+  isValidationGate,
   requiresAuthentication,
   resolvePipelineSteps,
   resolveRoutePreHandlers,
@@ -241,7 +242,7 @@ describe("buildRouteHooks — canonical hook placement", () => {
   const custom1 = vi.fn();
   const preAuth1 = vi.fn();
 
-  it("splits canonically: onRequest = preAuth → arc → auth; preHandler = perm → plugin → guards → custom", () => {
+  it("splits canonically: onRequest = preAuth → arc → auth; preHandler = perm → gate → plugin → guards → custom", () => {
     const hooks = buildRouteHooks({
       preAuth: [preAuth1],
       arcDecorator,
@@ -254,7 +255,20 @@ describe("buildRouteHooks — canonical hook placement", () => {
     // Auth at onRequest: 401 BEFORE body parse + AJV — cost and
     // schema-probing surface. Everything body-aware stays preHandler.
     expect(hooks.onRequest).toEqual([preAuth1, arcDecorator, authMw]);
-    expect(hooks.preHandler).toEqual([permissionMw, pluginMw, guard1, guard2, custom1]);
+    // The validation gate sits right after the permission gate: refused callers never see a 400.
+    const [perm, gate, ...rest] = hooks.preHandler;
+    expect(perm).toBe(permissionMw);
+    expect(isValidationGate(gate)).toBe(true);
+    expect(rest).toEqual([pluginMw, guard1, guard2, custom1]);
+    expect(hooks.attachValidation).toBe(true);
+    expect(routeHookOptions(hooks).attachValidation).toBe(true);
+  });
+
+  it("no permission gate: no validation gate, no attachValidation (Fastify rejects at preValidation)", () => {
+    const hooks = buildRouteHooks({ arcDecorator, authMw, pluginMw });
+    expect(hooks.preHandler).toEqual([pluginMw]);
+    expect(hooks.attachValidation).toBe(false);
+    expect(routeHookOptions(hooks)).not.toHaveProperty("attachValidation");
   });
 
   it("drops null and undefined slots (no stray slots in either chain)", () => {

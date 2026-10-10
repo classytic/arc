@@ -46,6 +46,8 @@ export interface DefineActionConfig<
   id?: boolean;
   /** MCP tool generation flag — `false` to skip, object for explicit overrides. */
   mcp?: boolean | RouteMcpConfig;
+  /** `{ required: true }`: a call of this action needs an idempotency key. See `ActionDefinition`. */
+  idempotency?: ActionDefinition["idempotency"];
   /**
    * Typed handler. `data` is inferred from `schema` — declare both and
    * the compiler catches `data.stagId` typos at the use site.
@@ -77,5 +79,6 @@ export function defineAction<TSchema extends z.ZodTypeAny | undefined = undefine
     description: config.description,
     id: config.id,
     mcp: config.mcp,
+    ...(config.idempotency ? { idempotency: config.idempotency } : {}),
   };
 }

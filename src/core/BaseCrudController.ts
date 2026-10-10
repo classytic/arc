@@ -44,7 +44,6 @@ import { requireSingleHeaderValue } from "../utils/headers.js";
 import { scheduleBackground } from "../utils/runtime.js";
 import { getUserId } from "../utils/userHelpers.js";
 import { AccessControl, type FetchDenialReason } from "./AccessControl.js";
-import { resolveTenancy } from "./tenancy.js";
 import { BodySanitizer, type FieldWriteDenialPolicy } from "./BodySanitizer.js";
 import {
   buildCacheEnvelope,
@@ -67,6 +66,7 @@ import {
   runExistsVerb,
 } from "./crud/resourceVerbs.js";
 import { collectReadBlockedFields, pathTouchesBlocked } from "./fieldRulePredicates.js";
+import { resolveTenancy } from "./tenancy.js";
 
 // Types live in `controllerTypes.ts`; re-exported for existing importers of this path.
 export type {
@@ -203,6 +203,24 @@ export class BaseCrudController<
     this.create = markArcBoundWrite(this.create.bind(this));
     this.update = markArcBoundWrite(this.update.bind(this));
     this.delete = markArcBoundWrite(this.delete.bind(this));
+  }
+
+  /**
+   * Bind the resource this controller serves — hooks, audit, events and cache key on it.
+   * `defineResource` calls it for a supplied controller; an unset name is assigned, a
+   * different one throws (the controller would run another resource's hooks).
+   */
+  bindResourceName(name: string): void {
+    if (this.resourceName === undefined) {
+      this.resourceName = name;
+      return;
+    }
+    if (this.resourceName !== name) {
+      throw new Error(
+        `Resource "${name}": its controller is bound to resourceName "${this.resourceName}", ` +
+          "so hooks, audit and events would key on the wrong resource.",
+      );
+    }
   }
 
   /**
@@ -395,7 +413,14 @@ export class BaseCrudController<
   private buildLookupAccess(fields: readonly string[] | undefined): AccessControl[] {
     return (fields ?? [])
       .filter((field) => field !== this.idField)
-      .map((idField) => new AccessControl({ tenantField: this.tenantField, idField, matchesFilter: this._matchesFilter }));
+      .map(
+        (idField) =>
+          new AccessControl({
+            tenantField: this.tenantField,
+            idField,
+            matchesFilter: this._matchesFilter,
+          }),
+      );
   }
 
   /**
