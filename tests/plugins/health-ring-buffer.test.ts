@@ -9,7 +9,7 @@
  * Scenarios:
  * - Duration tracking records every request
  * - `_count` is exact regardless of request volume (no sample cap)
- * - Metrics endpoint reports quantile bounds derived from buckets
+ * - Metrics endpoint exports cumulative buckets for fleet aggregation
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
@@ -111,8 +111,8 @@ describe("Health Metrics Duration Histogram", () => {
   // Percentile reporting
   // --------------------------------------------------------------------------
 
-  describe("percentile reporting", () => {
-    it("should report p50, p95, p99 percentiles", async () => {
+  describe("histogram reporting", () => {
+    it("exports cumulative buckets instead of per-process quantiles", async () => {
       await createApp();
 
       for (let i = 0; i < 20; i++) {
@@ -120,9 +120,9 @@ describe("Health Metrics Duration Histogram", () => {
       }
 
       const res = await app.inject({ method: "GET", url: "/_health/metrics" });
-      expect(res.body).toContain('quantile="0.5"');
-      expect(res.body).toContain('quantile="0.95"');
-      expect(res.body).toContain('quantile="0.99"');
+      expect(res.body).toContain("# TYPE http_request_duration_milliseconds histogram");
+      expect(res.body).toContain('http_request_duration_milliseconds_bucket{le="+Inf"} 20');
+      expect(res.body).not.toContain("quantile=");
     });
 
     it("should report duration sum", async () => {

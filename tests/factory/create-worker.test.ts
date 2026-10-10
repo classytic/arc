@@ -249,12 +249,14 @@ describe("createWorker — the headless role", () => {
   });
 
   it("fails when a worker probe check collides with a module check", async () => {
+    const dispose = vi.fn();
     await expect(
       createWorker(
         baseOptions({
           modules: [
             defineModule({
               name: "engine",
+              onClose: dispose,
               healthChecks: [{ name: "database", check: () => true }],
             }),
           ],
@@ -268,6 +270,7 @@ describe("createWorker — the headless role", () => {
         },
       ),
     ).rejects.toThrow(/duplicate health-check name "database"/);
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("teardown: module onClose runs, close() is idempotent", async () => {

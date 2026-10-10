@@ -53,19 +53,20 @@ export function createCrudHandler(
   fields?: FieldPermissionMap,
   extras?: {
     wiring?: McpExecutionWiring;
+    tenantMiddlewares?: readonly unknown[];
     schemaOptions?: unknown;
     idField?: string;
     /** The route declares `idempotency.required` for this op: a keyless call is refused. */
     keyRequired?: boolean;
     /** The resource's HTTP rate limit, per caller. */
-    allow?: (session: McpAuthResult | null) => boolean;
+    allow?: (session: McpAuthResult | null) => boolean | Promise<boolean>;
     toolName?: string;
   },
 ): ToolDefinition["handler"] {
   const permission = permissions?.[op as keyof ResourcePermissions];
   const toolName = extras?.toolName ?? `${op}_${resourceName}`;
   return async (input, ctx) => {
-    if (extras?.allow && !extras.allow(ctx.session)) return rateLimitedResult(toolName);
+    if (extras?.allow && !(await extras.allow(ctx.session))) return rateLimitedResult(toolName);
     if (
       extras?.keyRequired &&
       (typeof input._idempotencyKey !== "string" || input._idempotencyKey === "")
@@ -89,6 +90,7 @@ export function createCrudHandler(
       permissions: permission,
       fields,
       wiring: extras?.wiring,
+      tenantMiddlewares: extras?.tenantMiddlewares,
       schemaOptions: extras?.schemaOptions,
       idField: extras?.idField,
       idempotencyKey,

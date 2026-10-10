@@ -469,3 +469,27 @@ describe("multiTenantPreset({ tenantFields, allowPublic }) — flexible filter",
     });
   });
 });
+
+it("conjoins an existing permission policy instead of overwriting its branch restriction", async () => {
+  const preset = multiTenantPreset({
+    tenantFields: [
+      { field: "organizationId", type: "org" },
+      { field: "branchId", contextKey: "branchId" },
+    ],
+  });
+  const request = makeRequest({
+    kind: "member",
+    userId: "u1",
+    userRoles: [],
+    organizationId: "org-a",
+    orgRoles: [],
+    context: { branchId: "branch-a" },
+  });
+  request._policyFilters = { branchId: "branch-b" };
+  const { reply } = makeReply();
+  await run(preset.middlewares?.list?.[0] as RouteHandler, request, reply);
+  expect(request._policyFilters).toEqual({
+    organizationId: "org-a",
+    $and: [{ branchId: "branch-b" }, { branchId: "branch-a" }],
+  });
+});

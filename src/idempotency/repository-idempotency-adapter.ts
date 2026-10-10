@@ -83,6 +83,7 @@ interface IdempotencyDoc extends Record<string, unknown> {
     statusCode: number;
     headers: Record<string, string>;
     body: unknown;
+    bodyEncoding?: "base64";
     requestFingerprint?: string;
   };
   lock?: { requestId: string; expiresAt: Date };
@@ -146,6 +147,7 @@ export function repositoryAsIdempotencyStore(
         statusCode: doc.result.statusCode,
         headers: doc.result.headers,
         body: doc.result.body,
+        ...(doc.result.bodyEncoding ? { bodyEncoding: doc.result.bodyEncoding } : {}),
         createdAt: new Date(doc.createdAt),
         expiresAt: new Date(doc.expiresAt),
       };
@@ -160,6 +162,7 @@ export function repositoryAsIdempotencyStore(
               statusCode: result.statusCode,
               headers: result.headers,
               body: result.body,
+              ...(result.bodyEncoding ? { bodyEncoding: result.bodyEncoding } : {}),
               ...(result.requestFingerprint
                 ? { requestFingerprint: result.requestFingerprint }
                 : {}),

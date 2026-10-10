@@ -100,4 +100,47 @@ describe("withInbox — one run per (handler, event id)", () => {
       /name/,
     );
   });
+
+  it("rolls back a business effect when inbox completion fails in the shared transaction", async () => {
+    let committed = 0;
+    let failCompletion = true;
+    const session = { effect: 0 };
+    const store = createMemoryIdempotencyStore();
+    const swap = store.swap.bind(store);
+    store.swap = async (identity, token, next, options) => {
+      expect(options?.session).toBe(session);
+      if (failCompletion && next.state === "succeeded") throw new Error("commit unavailable");
+      return swap(identity, token, next, options);
+    };
+    const handler = withInbox(
+      "atomic-ledger",
+      async (_event, context) => {
+        expect(context.session).toBe(session);
+        session.effect++;
+      },
+      {
+        store,
+        transaction: async (work) => {
+          session.effect = committed;
+          try {
+            const value = await work(session);
+            committed = session.effect;
+            return value;
+          } catch (error) {
+            // The fake database discards this transaction's effect and inserted claim.
+            const claim = store.claims()[0];
+            if (claim) await store.release(claim.identity, claim.leaseToken);
+            throw error;
+          }
+        },
+      },
+    );
+    const event = createEvent("ledger:post", {}, { id: "atomic-1" });
+    await expect(handler(event)).rejects.toThrow("commit unavailable");
+    expect(committed).toBe(0);
+    failCompletion = false;
+    await handler(event);
+    await handler(event);
+    expect(committed).toBe(1);
+  });
 });

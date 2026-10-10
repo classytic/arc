@@ -4,43 +4,25 @@
  * key-required refusal, the per-caller rate limit and the action audit record.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { fingerprintRequest, IdempotencyError } from "@classytic/repo-core/idempotency";
 import type { IdempotencyStore } from "../../idempotency/stores/interface.js";
 import { createIdempotencyResult } from "../../idempotency/stores/interface.js";
+import type { RequestScope } from "../../scope/types.js";
 import type { RateLimitConfig } from "../../types/index.js";
+import { operationIdentity } from "../../utils/operationIdentity.js";
+import {
+  createMemoryResourceRateLimiter,
+  type ResourceRateLimiter,
+  resourceRateLimitWindowMs,
+} from "../../utils/resourceRateLimit.js";
+import { buildScope } from "./buildRequestContext.js";
 import { toCallToolError } from "./tool-helpers.js";
 import type { CallToolResult, McpAuthResult } from "./types.js";
 
 /** TTLs matching the HTTP idempotency plugin's defaults. */
 const MCP_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MCP_IDEMPOTENCY_LOCK_MS = 10_000;
-
-/** Key scoped to (resource, operation, input, caller): the same key with other input re-executes. */
-function invocationFingerprint(
-  resourceName: string,
-  operation: string,
-  input: Record<string, unknown>,
-  session: McpAuthResult | null,
-): string {
-  const sortKeys = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(sortKeys);
-    if (value !== null && typeof value === "object") {
-      const record: Record<string, unknown> = { ...value };
-      return Object.fromEntries(
-        Object.keys(record)
-          .sort()
-          .map((k) => [k, sortKeys(record[k])]),
-      );
-    }
-    return value;
-  };
-  const inputHash = createHash("sha256")
-    .update(JSON.stringify(sortKeys(input)))
-    .digest("hex")
-    .substring(0, 16);
-  const caller = session?.userId ?? session?.clientId ?? "anon";
-  return `mcp:${resourceName}:${operation}:${inputHash}:u=${caller}`;
-}
 
 function isIdempotencyStore(value: unknown): value is IdempotencyStore {
   if (typeof value !== "object" || value === null) return false;
@@ -66,12 +48,40 @@ export async function runIdempotentTool(args: {
   readonly operation: string;
   readonly input: Record<string, unknown>;
   readonly session: McpAuthResult | null;
+  readonly scope?: RequestScope;
   readonly dispatch: () => Promise<CallToolResult>;
 }): Promise<CallToolResult> {
   const { store, dispatch } = args;
-  const fullKey = `${args.key}:${invocationFingerprint(args.resourceName, args.operation, args.input, args.session)}`;
-  const cached = await store.get(fullKey);
-  if (cached) return cached.body as CallToolResult;
+  const fullKey = `${args.key}:${operationIdentity(`${args.resourceName}:${args.operation}`, args.scope ?? buildScope(args.session), undefined, "mcp")}`;
+  let fingerprint: string;
+  try {
+    fingerprint = fingerprintRequest(args.input);
+  } catch (error) {
+    if (error instanceof IdempotencyError)
+      return toCallToolError({
+        code: "arc.idempotency_body_unfingerprintable",
+        message: error.message,
+        status: 400,
+      });
+    throw error;
+  }
+  const replay = (
+    cached: Awaited<ReturnType<IdempotencyStore["get"]>>,
+  ): CallToolResult | undefined => {
+    if (cached) {
+      if (cached.requestFingerprint && cached.requestFingerprint !== fingerprint)
+        return toCallToolError({
+          code: "arc.idempotency_body_mismatch",
+          message:
+            "Idempotency key was already used for a different request body. Use a new key for a new request.",
+          status: 422,
+        });
+      return cached.body as CallToolResult;
+    }
+    return undefined;
+  };
+  const cachedResult = replay(await store.get(fullKey));
+  if (cachedResult) return cachedResult;
   const lockId = randomUUID();
   if (!(await store.tryLock(fullKey, lockId, MCP_IDEMPOTENCY_LOCK_MS))) {
     return toCallToolError({
@@ -81,9 +91,14 @@ export async function runIdempotentTool(args: {
     });
   }
   try {
+    const completed = replay(await store.get(fullKey));
+    if (completed) return completed;
     const result = await dispatch();
     if (!result.isError) {
-      await store.set(fullKey, createIdempotencyResult(200, result, {}, MCP_IDEMPOTENCY_TTL_MS));
+      await store.set(
+        fullKey,
+        createIdempotencyResult(200, result, {}, MCP_IDEMPOTENCY_TTL_MS, fingerprint),
+      );
     }
     return result;
   } finally {
@@ -100,47 +115,17 @@ export function idempotencyKeyRequiredResult(toolName: string): CallToolResult {
   });
 }
 
-const UNIT_MS: Readonly<Record<string, number>> = {
-  ms: 1,
-  millisecond: 1,
-  second: 1_000,
-  minute: 60_000,
-  hour: 3_600_000,
-  day: 86_400_000,
-};
+/** Shared parser used by standalone and HTTP-backed resource limiters. */
+export const timeWindowMs = resourceRateLimitWindowMs;
 
-/** `'1 minute'`, `'15 seconds'`, `'500 ms'` → milliseconds. An unreadable window refuses boot. */
-export function timeWindowMs(window: string): number {
-  const match = /^\s*(\d+)\s*([a-z]+?)s?\s*$/i.exec(window);
-  const unit = match ? UNIT_MS[match[2]?.toLowerCase() ?? ""] : undefined;
-  if (!match || unit === undefined) {
-    throw new Error(`[Arc/MCP] rateLimit.timeWindow '${window}' is not '<n> <unit>'.`);
-  }
-  return Number(match[1]) * unit;
-}
-
-/**
- * The resource's HTTP rate limit, applied per caller per tool (fixed window, in process).
- * `undefined` or `false` = no limit, as on the route.
- */
 export function createToolRateLimiter(
   config: RateLimitConfig | false | undefined,
-): ((session: McpAuthResult | null) => boolean) | undefined {
+  resourceName: string,
+  limiter: ResourceRateLimiter = createMemoryResourceRateLimiter(),
+): ((session: McpAuthResult | null) => Promise<boolean>) | undefined {
   if (!config) return undefined;
-  const windowMs = timeWindowMs(config.timeWindow);
-  const hits = new Map<string, { start: number; count: number }>();
-  return (session) => {
-    const caller = session?.userId ?? session?.clientId ?? "anon";
-    const now = Date.now();
-    const slot = hits.get(caller);
-    if (!slot || now - slot.start >= windowMs) {
-      if (hits.size > 10_000) hits.clear();
-      hits.set(caller, { start: now, count: 1 });
-      return true;
-    }
-    slot.count += 1;
-    return slot.count <= config.max;
-  };
+  resourceRateLimitWindowMs(config.timeWindow);
+  return (session) => limiter.consume(resourceName, config, { scope: buildScope(session) });
 }
 
 export function rateLimitedResult(toolName: string): CallToolResult {

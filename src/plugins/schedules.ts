@@ -47,6 +47,7 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { runWorkScope } from "../context/workScope.js";
 import { type RenewingLease, startRenewingLease } from "../lock/renewingLease.js";
+import { registerShutdownParticipant, runAdmittedWork, runShutdown } from "../utils/shutdown.js";
 
 export interface ScheduleDefinition {
   /** Unique name — also the lock key (`arc:schedule:<name>`). */
@@ -245,7 +246,9 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
       stat.lastRunAt = new Date().toISOString();
       // A run is a unit of work: its own scope, so per-request mechanisms
       // (`requestScopedCache`, correlation) work inside a job too.
-      await runWorkScope({ kind: "job", id: s.name }, () => s.handler(fastify));
+      await runAdmittedWork(() =>
+        runWorkScope({ kind: "job", id: s.name }, () => s.handler(fastify)),
+      );
       stat.lastError = null;
     } catch (err) {
       stat.failures++;
@@ -291,45 +294,52 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
     }
   });
 
+  registerShutdownParticipant(fastify, {
+    name: "schedules",
+    stop: () => {
+      closing = true;
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+    },
+    drain: async () => {
+      /**
+       * Let in-flight runs settle so shutdown never truncates a sweep mid-write —
+       * but BOUNDED, because a tick has no cancellation contract and its duration
+       * is not this plugin's to predict. An outbox relay whose subscriber retries
+       * on a backoff ladder holds one tick for minutes, and an unbounded await
+       * here contradicts the `unref` two functions up: pending scheduled work is
+       * already declared as something that must not hold the process.
+       *
+       * Waiting longer than the orchestrator's grace period buys nothing anyway —
+       * SIGKILL truncates the same write, without the log line naming what was
+       * still running.
+       */
+      const pending = [...inFlight.entries()];
+      if (pending.length === 0) return;
+
+      let timeout: NodeJS.Timeout | undefined;
+      const expired = Symbol("drain-timeout");
+      const budget = new Promise<typeof expired>((resolve) => {
+        timeout = setTimeout(() => resolve(expired), drainTimeoutMs);
+        timeout.unref?.();
+      });
+
+      const settled = Promise.allSettled(pending.map(([, run]) => run)).then(() => undefined);
+      const outcome = await Promise.race([settled, budget]);
+      if (timeout) clearTimeout(timeout);
+
+      if (outcome === expired) {
+        fastify.log.warn(
+          { schedules: pending.map(([name]) => name), drainTimeoutMs },
+          "[arc-schedules] shutdown drain budget exceeded — abandoning in-flight run(s). " +
+            "Durable work (outbox rows, leased sweeps) is retried on the next boot; raise " +
+            "`drainTimeoutMs` only if a listed job is genuinely non-resumable.",
+        );
+      }
+    },
+  });
   fastify.addHook("onClose", async () => {
-    closing = true;
-    for (const timer of timers.values()) clearTimeout(timer);
-    timers.clear();
-
-    /**
-     * Let in-flight runs settle so shutdown never truncates a sweep mid-write —
-     * but BOUNDED, because a tick has no cancellation contract and its duration
-     * is not this plugin's to predict. An outbox relay whose subscriber retries
-     * on a backoff ladder holds one tick for minutes, and an unbounded await
-     * here contradicts the `unref` two functions up: pending scheduled work is
-     * already declared as something that must not hold the process.
-     *
-     * Waiting longer than the orchestrator's grace period buys nothing anyway —
-     * SIGKILL truncates the same write, without the log line naming what was
-     * still running.
-     */
-    const pending = [...inFlight.entries()];
-    if (pending.length === 0) return;
-
-    let timeout: NodeJS.Timeout | undefined;
-    const expired = Symbol("drain-timeout");
-    const budget = new Promise<typeof expired>((resolve) => {
-      timeout = setTimeout(() => resolve(expired), drainTimeoutMs);
-      timeout.unref?.();
-    });
-
-    const settled = Promise.allSettled(pending.map(([, run]) => run)).then(() => undefined);
-    const outcome = await Promise.race([settled, budget]);
-    if (timeout) clearTimeout(timeout);
-
-    if (outcome === expired) {
-      fastify.log.warn(
-        { schedules: pending.map(([name]) => name), drainTimeoutMs },
-        "[arc-schedules] shutdown drain budget exceeded — abandoning in-flight run(s). " +
-          "Durable work (outbox rows, leased sweeps) is retried on the next boot; raise " +
-          "`drainTimeoutMs` only if a listed job is genuinely non-resumable.",
-      );
-    }
+    await runShutdown(fastify);
   });
 };
 

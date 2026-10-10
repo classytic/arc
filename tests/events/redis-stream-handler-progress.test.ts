@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { DomainEvent } from "../../src/events/EventTransport.js";
+import { withSubscriberId } from "../../src/events/subscriberIdentity.js";
 import { RedisStreamTransport } from "../../src/events/transports/redis-stream.js";
 
 const silent = { info: () => {}, warn: vi.fn(), error: () => {}, debug: () => {} };
@@ -55,7 +56,7 @@ function replica(
 ) {
   const t = new RedisStreamTransport(redis as never, { logger: silent });
   // Register as subscribe() would, without starting the poll loop.
-    void (t as unknown as { subscribe(p: string, h: unknown): Promise<unknown> }).subscribe;
+  void (t as unknown as { subscribe(p: string, h: unknown): Promise<unknown> }).subscribe;
   const internals = t as unknown as Internals;
   for (const h of handlers) {
     internals.handlerKeys.set(h, `order:*#${h.name}`);
@@ -65,6 +66,59 @@ function replica(
 }
 
 describe("RedisStreamTransport — per-handler progress across a retry", () => {
+  it("reordered anonymous subscribers retain their own completion records across replicas", async () => {
+    const redis = sharedRedis();
+    const calls: string[] = [];
+    const first = new RedisStreamTransport(redis as never, { logger: silent });
+    first.hold();
+    await first.subscribe(
+      "order:*",
+      withSubscriberId("ledger", async () => {
+        calls.push("ledger:A");
+      }),
+    );
+    await first.subscribe(
+      "order:*",
+      withSubscriberId("notify", async () => {
+        calls.push("notify:A");
+        throw new Error("offline");
+      }),
+    );
+    await (first as unknown as Internals).processEntry("1-0", fields("order:created"));
+    const second = new RedisStreamTransport(redis as never, { logger: silent });
+    second.hold();
+    await second.subscribe(
+      "order:*",
+      withSubscriberId("notify", async () => {
+        calls.push("notify:B");
+      }),
+    );
+    await second.subscribe(
+      "order:*",
+      withSubscriberId("ledger", async () => {
+        calls.push("ledger:B");
+      }),
+    );
+    await (second as unknown as Internals).processEntry("1-0", fields("order:created"), true);
+    expect(calls).toEqual(["ledger:A", "notify:A", "notify:B"]);
+    expect(redis.xack).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a subscriber identity to be reinstalled after its last subscription is removed", async () => {
+    const t = new RedisStreamTransport(sharedRedis() as never, { logger: silent });
+    t.hold();
+    const unsubscribe = await t.subscribe(
+      "order:*",
+      withSubscriberId("ledger", async () => {}),
+    );
+    unsubscribe();
+    await expect(
+      t.subscribe(
+        "order:*",
+        withSubscriberId("ledger", async () => {}),
+      ),
+    ).resolves.toBeTypeOf("function");
+  });
   it("a retry on another replica runs only the handler that failed; success clears the record", async () => {
     const redis = sharedRedis();
     const calls: string[] = [];
@@ -116,7 +170,7 @@ describe("RedisStreamTransport — per-handler progress across a retry", () => {
     );
   });
 
-  it("handler keys are stable and distinct for same-named handlers on one pattern", async () => {
+  it("refuses ambiguous implicit handler identities rather than assigning registration indexes", async () => {
     const t = new RedisStreamTransport(sharedRedis() as never, { logger: silent });
     const internals = t as unknown as Internals & { running: boolean };
     const a = async function h() {};
@@ -124,10 +178,6 @@ describe("RedisStreamTransport — per-handler progress across a retry", () => {
     // subscribe() assigns keys; stop the poll loop it would start.
     internals.running = true;
     await t.subscribe("order:*", a);
-    await t.subscribe("order:*", b);
-    expect([internals.handlerKeys.get(a), internals.handlerKeys.get(b)]).toEqual([
-      "order:*#h",
-      "order:*#h#1",
-    ]);
+    await expect(t.subscribe("order:*", b)).rejects.toThrow(/withSubscriberId/);
   });
 });

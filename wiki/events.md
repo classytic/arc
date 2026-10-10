@@ -23,7 +23,7 @@ import { EventMeta, DomainEvent, createEvent, createChildEvent } from '@classyti
 
 - `@classytic/primitives/events` is the source of truth for event types (`EventMeta`, `DomainEvent`, `EventHandler`, `EventLogger`, `EventTransport`, `DeadLetteredEvent`, `PublishManyResult`, `createEvent`, `createChildEvent`, `matchEventPattern`). Arc re-exports the runtime `MemoryEventTransport` only.
 - Domain packages narrow `aggregate.type` to a closed union via interface extension.
-- `createChildEvent(parent, type, payload)` auto-chains causation + inherits `correlation`, `source`, `idempotencyKey`. `aggregate` is **not** inherited.
+- `createChildEvent(parent, type, payload)` auto-chains causation + inherits `correlation` and `source`. `aggregate` and occurrence-specific `idempotencyKey` are **not** inherited; set the child's key explicitly when needed.
 
 ## Transports
 
@@ -34,6 +34,10 @@ import { EventMeta, DomainEvent, createEvent, createChildEvent } from '@classyti
 | Redis Streams | at-least-once | durable; consumer groups track offsets |
 
 Redis Streams does **not** dedupe — handlers must be idempotent. See [[gotchas]] #3.
+
+Partial failures record completed subscriber identities in Redis. Use `withSubscriberId('ledger-post', handler)` with an explicit deployment-stable id for anonymous or same-named subscribers. Duplicate implicit pattern/name identities refuse registration; registration indexes are never identities. Module subscribers receive identities from their module and declared handler name (or a unique pattern set). Changing identities during a rollout can replay previously completed handlers, so effects still need idempotency.
+
+`withInbox(name, handler, { store })` records completion per `(name, event id)` and automatically supplies a stable subscriber identity. Its completion follows the handler: a crash or store error can repeat an already applied effect. Use `context.eventId` to dedupe nontransactional or external effects. For DB effects, pass `transaction: work => repository.withTransaction(session => work(session))` and use `context.session` for every handler write; the claim store must honor that session on the same database connection. Claim, effect and completion then commit or roll back together. Size `leaseMs` above the handler's worst-case runtime; this wrapper does not renew leases.
 
 `DeadLetteredEvent<T>` + optional `transport.deadLetter()` added for native-DLQ transports (Kafka/SQS).
 

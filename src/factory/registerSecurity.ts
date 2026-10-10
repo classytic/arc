@@ -1,3 +1,4 @@
+import { resolveResourceRateLimiter } from "../utils/resourceRateLimit.js";
 /**
  * Security & performance plugin registration for createApp — the
  * ORCHESTRATOR. Decides which plugins register, in which order, and how
@@ -85,6 +86,7 @@ export async function registerSecurityPlugins(
     const hasStore =
       rateLimitRecord !== undefined &&
       (rateLimitRecord.store != null || rateLimitRecord.redis != null);
+    resolveResourceRateLimiter(fastify, hasStore ? "shared" : "memory");
     if (!hasStore) {
       if (config.runtime === "distributed") {
         throw new Error(

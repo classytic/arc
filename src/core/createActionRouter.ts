@@ -160,6 +160,8 @@ export interface ActionRouterConfig {
 
   /** Route guards (applied to the action endpoint — after auth, before handler) */
   readonly routeGuards?: RouteHandlerMethod[];
+  /** Preset tenant preparation runs before loading an action target. */
+  readonly tenantMiddlewares?: RouteHandlerMethod[];
 
   /** Pipeline config — steps keyed by action name run around the handler */
   readonly pipeline?: PipelineConfig;
@@ -273,6 +275,7 @@ export function createActionRouter(
     idField = DEFAULT_ID_FIELD,
     permissions: resourcePermissions,
     routeGuards = [],
+    tenantMiddlewares = [],
     pipeline,
     rateLimit,
     idLessActionNames = [],
@@ -512,6 +515,7 @@ export function createActionRouter(
       validationFormatter: actionValidationFormatter,
       pluginMw: selectPluginMw("POST", pluginMw),
       routeGuards,
+      customMws: tenantMiddlewares,
     });
 
     tryRegisterRoute(

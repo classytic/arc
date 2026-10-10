@@ -101,7 +101,9 @@ export function buildTenantRepoOptions(
   } else {
     if (tenancy.mode === "scoped") out[tenancy.field] = tenancy.orgId;
 
-    const presetFields = (req as IRequestContext & { _tenantFields?: AnyRecord })._tenantFields;
+    const presetFields =
+      arcContext?._tenantFields ??
+      (req as IRequestContext & { _tenantFields?: AnyRecord })._tenantFields;
     if (presetFields && typeof presetFields === "object") {
       for (const [key, value] of Object.entries(presetFields)) {
         if (value != null && out[key] == null) out[key] = value;

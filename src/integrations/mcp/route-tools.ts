@@ -103,6 +103,7 @@ export interface CustomRouteToolOptions {
    * with full HTTP parity.
    */
   readonly wiring?: McpExecutionWiring;
+  readonly tenantMiddlewares?: readonly unknown[];
   /** Resource `schemaOptions` — rides on `metadata.arc` like HTTP. */
   readonly schemaOptions?: unknown;
   /** Resource `idField` — rides on `metadata.arc` for `getEntityIdField()`. */
@@ -141,6 +142,7 @@ export function createCustomRouteHandler(
   // route handlers that dispatch to controller methods.
   const contextExtras: McpContextExtras | undefined = wiring
     ? {
+        tenantMiddlewares: options.tenantMiddlewares,
         arc: {
           resourceName,
           schemaOptions: options.schemaOptions,
@@ -156,7 +158,7 @@ export function createCustomRouteHandler(
           log: wiring.log as ServerAccessor["log"],
         },
       }
-    : undefined;
+    : { tenantMiddlewares: options.tenantMiddlewares };
 
   return async (input, _ctx) => {
     const session = _ctx.session;

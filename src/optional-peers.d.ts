@@ -28,6 +28,7 @@ declare module "bullmq" {
   // event handler takes `never[]` for the same reason — bullmq emits a
   // mix of (job, error) tuples and concrete shapes vary per event name.
   export class Worker {
+    pause(doNotWaitActive?: boolean): Promise<void>;
     constructor(
       name: string,
       processor: (job: never) => Promise<unknown>,

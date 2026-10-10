@@ -106,3 +106,9 @@ Errors thrown from `adapter.generateSchemas()` / `convertOpenApiSchemas()` / the
 - [[factory]] — how resources are registered into an app
 - [[adapters]] — what `model` must satisfy
 - [[testing]] — `tests/core/` + `tests/e2e/` cover this module
+
+## Trusted tenant write fields
+
+`createRequestContext` forwards resolved preset `_tenantFields` into metadata.
+Single create/update and bulk create restore these trusted dimensions after body
+sanitization. This preserves multi-field stamping while discarding wire values.

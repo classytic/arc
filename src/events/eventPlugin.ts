@@ -21,6 +21,7 @@ import fp from "fastify-plugin";
 import { requestContext } from "../context/requestContext.js";
 import { arcLog } from "../logger/index.js";
 import { createDomainError } from "../utils/errors.js";
+import { isAdmittedWork, registerShutdownParticipant, runAdmittedWork } from "../utils/shutdown.js";
 import type { EventRegistry } from "./defineEvent.js";
 import {
   ARC_EVENT_TRANSPORT,
@@ -32,6 +33,7 @@ import {
   type MemoryEventTransportOptions,
 } from "./EventTransport.js";
 import { createDeadLetterPublisher, type RetryOptions, withRetry } from "./retry.js";
+import { getSubscriberId, withSubscriberId } from "./subscriberIdentity.js";
 
 export interface EventPluginOptions {
   /** Event transport (default: MemoryEventTransport) */
@@ -303,6 +305,18 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
 
   // Decorate fastify with event utilities
   const observers = new Set<(event: DomainEvent) => void>();
+  const activeHandlers = new Set<Promise<void>>();
+  let stopping = false;
+  registerShutdownParticipant(fastify, {
+    name: "events.handlers",
+    kind: "consumer",
+    stop: () => {
+      stopping = true;
+    },
+    drain: async () => {
+      while (activeHandlers.size) await Promise.allSettled([...activeHandlers]);
+    },
+  });
   fastify.decorate("events", {
     [OBSERVERS]: observers,
     observe: (listener: (event: DomainEvent) => void) => {
@@ -473,7 +487,18 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
         );
       }
       try {
-        return await transport.subscribe(pattern, wrappedHandler);
+        const dispatch = wrappedHandler;
+        const tracked: EventHandler = (event) => {
+          if (stopping && !isAdmittedWork())
+            return Promise.reject(new Error("[Arc Events] consumer is shutting down"));
+          const pending = runAdmittedWork(() => dispatch(event));
+          activeHandlers.add(pending);
+          return pending.finally(() => {
+            activeHandlers.delete(pending);
+          });
+        };
+        const id = getSubscriberId(handler);
+        return await transport.subscribe(pattern, id ? withSubscriberId(id, tracked) : tracked);
       } catch (error) {
         fastify.log?.error?.(
           { transport: transport.name, pattern, error },

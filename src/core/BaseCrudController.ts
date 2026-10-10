@@ -975,6 +975,7 @@ export class BaseCrudController<
       arcContext,
     );
 
+    Object.assign(data, arcContext?._tenantFields);
     const scope = arcContext?._scope;
     const createOrgId = scope ? getOrgIdFromScope(scope) : undefined;
     if (this.tenantField && createOrgId) {
@@ -1035,6 +1036,7 @@ export class BaseCrudController<
       req,
       arcContext,
     );
+    Object.assign(data, arcContext?._tenantFields);
     const user = req.user as UserLike | undefined;
 
     const userId = getUserId(user);

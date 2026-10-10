@@ -6,6 +6,7 @@
 import type { FastifyInstance } from "fastify";
 import type { EventHandler } from "../../events/EventTransport.js";
 import { wrapWithAttribution, wrapWithBoundary } from "../../events/subscribe-helpers.js";
+import { withSubscriberId } from "../../events/subscriberIdentity.js";
 import type { HandlerDurabilityFact } from "./graph.js";
 import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule, EventHandlerDefinition } from "./types.js";
@@ -64,7 +65,26 @@ export async function subscribeModuleEventHandlers(
           );
         }
         const label = handlerLabel(def, m.name, patterns, index);
-        const handler = applyBoundary(def, m.name, label, fastify);
+        const identity = def.name ?? [...patterns].sort().join(",");
+        if (
+          !def.name &&
+          handlers.some(
+            (other) =>
+              other !== def &&
+              !other.name &&
+              (Array.isArray(other.event) ? [...other.event] : [other.event as string])
+                .sort()
+                .join(",") === identity,
+          )
+        ) {
+          throw new Error(
+            `[arc] module "${m.name}" has ambiguous unnamed event handlers for "${identity}" — give each handler a stable name.`,
+          );
+        }
+        const handler = withSubscriberId(
+          `${m.name}:${identity}`,
+          applyBoundary(def, m.name, label, fastify),
+        );
         handlersByModule?.set(m.name, [
           ...(handlersByModule.get(m.name) ?? []),
           {

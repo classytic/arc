@@ -8,9 +8,9 @@
  * `preHandler: [fastify.authenticate, fastify.idempotency.middleware]`.
  *
  * GUARANTEE — best-effort effectively-once, NOT exactly-once. A distributed
- * lock makes concurrent same-key requests 409, the key includes a body+caller
- * fingerprint (a different body under one key is its own operation), and a
- * completed result replays. The business effect is not exactly-once, because
+ * lock makes concurrent same-key requests 409, the key includes the caller's
+ * scope, a different body under one key is refused, and a completed result
+ * replays. The business effect is not exactly-once, because
  * the domain write and the idempotency record are different systems:
  * - a crash after the DB write but before the record (preSerialization) lets a
  *   retry re-execute;
@@ -30,6 +30,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest 
 import fp from "fastify-plugin";
 import { createDomainError } from "../utils/errors.js";
 import { requireSingleHeaderValue } from "../utils/headers.js";
+import { operationIdentity as scopedOperationIdentity } from "../utils/operationIdentity.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import {
   declaresIdempotencyFence,
@@ -38,7 +39,7 @@ import {
   requestDedupedByHandler,
   requestRequiresIdempotencyKey,
 } from "./requirement.js";
-import type { IdempotencyStore } from "./stores/interface.js";
+import type { IdempotencyResult, IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";
 import { MemoryIdempotencyStore } from "./stores/memory.js";
 
@@ -150,7 +151,10 @@ declare module "fastify" {
        * }, handler);
        * ```
        */
-      middleware: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+      middleware: (
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => Promise<undefined | FastifyReply>;
       /**
        * The resolved backing store. Exposed so non-HTTP executors (MCP
        * tools via `mcpPlugin`'s execution wiring, jobs, workflows) can run
@@ -383,9 +387,12 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    */
   function operationIdentity(request: FastifyRequest): string {
     const user = request.user as { id?: string; _id?: string } | undefined;
-    const userId = user?.id ?? user?._id ?? "anon";
-    const namespacePart = namespace ? `n=${namespace}:` : "";
-    return `${namespacePart}${request.method}:${request.url}:u=${userId}`;
+    return scopedOperationIdentity(
+      `${request.method}:${request.url}`,
+      request.scope,
+      user?.id ?? user?._id,
+      namespace,
+    );
   }
 
   /**
@@ -407,11 +414,39 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     }
   }
 
+  function replay(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    cached: IdempotencyResult,
+    fingerprint: string,
+  ): void {
+    if (cached.requestFingerprint && cached.requestFingerprint !== fingerprint) {
+      throw createDomainError(
+        ARC_ERROR_CODES.IDEMPOTENCY_KEY_REUSED,
+        `Idempotency key '${request.idempotencyKey}' was already used for a different request body. Use a new key for a new request.`,
+        422,
+      );
+    }
+    request.idempotencyReplayed = true;
+    reply.header(HEADER_IDEMPOTENCY_REPLAYED, "true");
+    reply.header(HEADER_IDEMPOTENCY_KEY, request.idempotencyKey);
+    for (const [key, value] of Object.entries(cached.headers)) {
+      if (!key.startsWith("x-idempotency")) reply.header(key, value);
+    }
+    reply
+      .code(cached.statusCode)
+      .send(
+        cached.bodyEncoding === "base64" && typeof cached.body === "string"
+          ? Buffer.from(cached.body, "base64")
+          : cached.body,
+      );
+  }
+
   // ---- Route-level middleware: check + lock (AFTER auth) ----
   const idempotencyMiddleware = async (
     request: FastifyRequest,
     reply: FastifyReply,
-  ): Promise<void> => {
+  ): Promise<undefined | FastifyReply> => {
     // Get idempotency key from header
     const keyHeader = requireSingleHeaderValue(request.headers, headerName);
     const idempotencyKey = keyHeader?.trim();
@@ -450,29 +485,8 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Check for cached result
     const cached = await store.get(fullKey);
     if (cached) {
-      if (cached.requestFingerprint && cached.requestFingerprint !== requestFingerprint) {
-        throw createDomainError(
-          ARC_ERROR_CODES.IDEMPOTENCY_KEY_REUSED,
-          `Idempotency key '${idempotencyKey}' was already used for a different request body. Use a new key for a new request.`,
-          422,
-        );
-      }
-      // Replay cached response
-      request.idempotencyReplayed = true;
-
-      // Set response headers
-      reply.header(HEADER_IDEMPOTENCY_REPLAYED, "true");
-      reply.header(HEADER_IDEMPOTENCY_KEY, idempotencyKey);
-
-      // Replay original headers
-      for (const [key, value] of Object.entries(cached.headers)) {
-        if (!key.startsWith("x-idempotency")) {
-          reply.header(key, value);
-        }
-      }
-
-      reply.code(cached.statusCode).send(cached.body);
-      return;
+      replay(request, reply, cached, requestFingerprint);
+      return reply;
     }
 
     // Try to acquire lock
@@ -488,12 +502,28 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
           status: 409,
           meta: { retryAfter: retryAfterSeconds },
         } satisfies ErrorContract);
-      return;
+      return reply;
     }
 
     // Store full key for preSerialization (body cache) + onResponse (unlock)
     request._idempotencyFullKey = fullKey;
     request._idempotencyFingerprint = requestFingerprint;
+
+    // A previous holder can finish between our first read and acquiring the lock.
+    // Recheck under ownership before allowing either an execution or a changed-body retry.
+    try {
+      const completed = await store.get(fullKey);
+      if (completed) {
+        await store.unlock(fullKey, request.id);
+        request._idempotencyFullKey = undefined;
+        replay(request, reply, completed, requestFingerprint);
+        return reply;
+      }
+    } catch (err) {
+      await store.unlock(fullKey, request.id);
+      request._idempotencyFullKey = undefined;
+      throw err;
+    }
 
     // Echo the idempotency key on the response. Set here in the middleware —
     // NOT in a later hook — so it survives empty 2xx responses (204,
@@ -539,30 +569,25 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     store,
   });
 
-  // Cache the response body on 2xx via preSerialization.
-  //
-  // Hook choice rationale:
-  // - NOT onSend — async onSend races with Fastify's onSendEnd →
-  //   safeWriteHead flush path and yields ERR_HTTP_HEADERS_SENT unhandled
-  //   rejections on slow responses.
-  // - preSerialization — runs before headers/body commit, safe for
-  //   `reply.header(...)` if we needed it (we don't, header is set in
-  //   the middleware). IMPORTANT: Fastify skips preSerialization when
-  //   the payload is `null` / `undefined` — so lock release can NOT
-  //   live here, or empty-body responses (204, `reply.send()` with no
-  //   arg, status-only replies) would leak the lock until TTL. The
-  //   onResponse hook below handles unlock universally.
-  fastify.addHook("preSerialization", async (request, reply, payload) => {
+  // Object responses record before serialization; skipped response shapes record in onSend.
+  // Header writes stay in the middleware. Completion precedes flush; onResponse releases locks.
+  const recordedResponses = new WeakSet<FastifyRequest>();
+  async function recordResponse(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    payload: unknown,
+    binary = false,
+  ): Promise<void> {
     // Replayed responses don't hold a lock and don't need re-caching.
-    if (request.idempotencyReplayed) return payload;
+    if (request.idempotencyReplayed || recordedResponses.has(request)) return;
 
     const fullKey = request._idempotencyFullKey;
-    if (!fullKey) return payload;
+    if (!fullKey) return;
 
     // Only cache successful responses (2xx). Non-2xx still unlocks —
     // handled by onResponse below.
     const statusCode = reply.statusCode;
-    if (statusCode < 200 || statusCode >= 300) return payload;
+    if (statusCode < 200 || statusCode >= 300) return;
 
     // Extract headers to cache (exclude connection / per-hop / date / cookies)
     const headersToCache: Record<string, string> = {};
@@ -582,14 +607,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       }
     }
 
-    // Parse body if a handler pre-serialized with `reply.send(JSON.stringify(...))`.
-    // Normal preSerialization path gives us the raw object.
-    let body: unknown;
-    try {
-      body = typeof payload === "string" ? JSON.parse(payload) : payload;
-    } catch {
-      body = payload;
-    }
+    const body = binary && Buffer.isBuffer(payload) ? payload.toString("base64") : payload;
 
     const result = createIdempotencyResult(
       statusCode,
@@ -598,8 +616,36 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       ttlMs,
       request._idempotencyFingerprint,
     );
-    await store.set(fullKey, result);
+    await store.set(fullKey, { ...result, ...(binary ? { bodyEncoding: "base64" as const } : {}) });
+    recordedResponses.add(request);
+  }
+  fastify.addHook("preSerialization", async (request, reply, payload) => {
+    await recordResponse(request, reply, payload);
+    return payload;
+  });
 
+  // Fastify skips preSerialization for empty, string and binary responses. No headers are
+  // changed here: completion must be persisted before the response flush and lock release.
+  fastify.addHook("onSend", async (request, reply, payload) => {
+    if (
+      !request._idempotencyFullKey ||
+      request.idempotencyReplayed ||
+      recordedResponses.has(request) ||
+      reply.statusCode < 200 ||
+      reply.statusCode >= 300
+    )
+      return payload;
+    if (
+      payload !== null &&
+      payload !== undefined &&
+      typeof payload !== "string" &&
+      !Buffer.isBuffer(payload)
+    ) {
+      throw new Error(
+        "[arc idempotency] Streaming responses require config.idempotency.dedup: 'handler' and a domain-owned completion record.",
+      );
+    }
+    await recordResponse(request, reply, payload, Buffer.isBuffer(payload));
     return payload;
   });
 

@@ -68,6 +68,26 @@ describe("Metrics Plugin", () => {
   // ==========================================================================
 
   describe("HTTP request metrics", () => {
+    it("bounds unmatched URL labels and keeps parameterized routes grouped", async () => {
+      const { metricsPlugin } = await import("../../src/plugins/metrics.js");
+      app = Fastify({ logger: false });
+      await app.register(metricsPlugin);
+      app.get("/items/:id", async () => ({ ok: true }));
+      await app.ready();
+      for (let i = 0; i < 30; i++) {
+        await app.inject(`/missing-${i}?secret=${i}`);
+        await app.inject(`/items/${i}`);
+      }
+      await app.inject("/_metrics?format=text");
+      const total = app.metrics.collect().find((m) => m.name === "arc_http_requests_total");
+      expect(total?.values).toHaveLength(2);
+      expect(total?.values).toEqual(
+        expect.arrayContaining([
+          { labels: { method: "GET", route: "__unmatched__", status: "404" }, value: 30 },
+          { labels: { method: "GET", route: "/items/:id", status: "200" }, value: 30 },
+        ]),
+      );
+    });
     it("should track request count and duration", async () => {
       const { metricsPlugin } = await import("../../src/plugins/metrics.js");
       app = Fastify({ logger: false });
@@ -255,6 +275,42 @@ describe("Metrics Plugin", () => {
   // ==========================================================================
 
   describe("Prometheus text format", () => {
+    it("exports cumulative histogram buckets, sum and count with escaped labels", async () => {
+      const { metricsPlugin } = await import("../../src/plugins/metrics.js");
+      app = Fastify({ logger: false });
+      await app.register(metricsPlugin);
+      await app.ready();
+      app.metrics.recordOperation("product", "create", 201, 5);
+      app.metrics.recordOperation("product", "create", 201, 20);
+      app.metrics.recordEventPublish('event"\\\n');
+      const res = await app.inject("/_metrics");
+      expect(res.body).toContain(
+        'arc_crud_operation_duration_seconds_bucket{resource="product",operation="create",le="0.01"} 1',
+      );
+      expect(res.body).toContain(
+        'arc_crud_operation_duration_seconds_bucket{resource="product",operation="create",le="+Inf"} 2',
+      );
+      expect(res.body).toContain(
+        'arc_crud_operation_duration_seconds_sum{resource="product",operation="create"} 0.025',
+      );
+      expect(res.body).toContain(
+        'arc_crud_operation_duration_seconds_count{resource="product",operation="create"} 2',
+      );
+      expect(res.body).not.toMatch(/le="(?:sum|count)"/);
+      expect(res.body).toContain('event_type="event\\"\\\\\\n"');
+    });
+
+    it("caps dynamic metric labels without discarding accumulated totals", async () => {
+      const { metricsPlugin } = await import("../../src/plugins/metrics.js");
+      app = Fastify({ logger: false });
+      await app.register(metricsPlugin, { maxSeries: 2 });
+      await app.ready();
+      for (let i = 0; i < 10; i++) app.metrics.recordEventPublish(`event-${i}`);
+      const events = app.metrics.collect().find((m) => m.name === "arc_events_published_total");
+      expect(events?.values).toHaveLength(3);
+      expect(events?.values.find((v) => v.labels.overflow === "true")?.value).toBe(8);
+      expect(events?.values.reduce((sum, v) => sum + v.value, 0)).toBe(10);
+    });
     it("should render metrics in Prometheus exposition format", async () => {
       const { metricsPlugin } = await import("../../src/plugins/metrics.js");
       app = Fastify({ logger: false });

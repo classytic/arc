@@ -8,6 +8,7 @@ import {
   idempotencyConfigProblem,
 } from "../../idempotency/requirement.js";
 import type { FastifyWithDecorators } from "../../types/index.js";
+import { resolveResourceRateLimiter } from "../../utils/resourceRateLimit.js";
 import { arcRouteValidatorCompiler } from "../routeValidator.js";
 import { isValidationGate } from "./chain.js";
 
@@ -27,6 +28,45 @@ export function tryRegisterRoute(
   opts: Parameters<FastifyWithDecorators["route"]>[0],
   context: { resourceName: string; op?: string },
 ): void {
+  const ratePolicy = opts.config?.rateLimit;
+  if (
+    ratePolicy &&
+    typeof ratePolicy === "object" &&
+    typeof ratePolicy.max === "number" &&
+    typeof ratePolicy.timeWindow === "string"
+  ) {
+    const limiter = resolveResourceRateLimiter(fastify);
+    if (limiter) {
+      const handlers = Array.isArray(opts.preHandler)
+        ? opts.preHandler
+        : opts.preHandler
+          ? [opts.preHandler]
+          : [];
+      opts = {
+        ...opts,
+        config: { ...opts.config, rateLimit: false },
+        preHandler: [
+          ...handlers,
+          async (req, reply) => {
+            if (
+              !(await limiter.consume(context.resourceName, ratePolicy, {
+                scope: req.scope,
+                ip: req.ip,
+              }))
+            ) {
+              reply
+                .code(429)
+                .send({
+                  code: "arc.rate_limited",
+                  message: "Too many calls to this resource — retry later.",
+                  status: 429,
+                });
+            }
+          },
+        ],
+      };
+    }
+  }
   const problem = idempotencyConfigProblem(opts.config);
   if (problem) {
     throw new Error(

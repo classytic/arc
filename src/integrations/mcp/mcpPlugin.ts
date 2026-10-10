@@ -33,6 +33,11 @@ import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { requireSingleHeaderValue } from "../../utils/headers.js";
 import {
+  createMemoryResourceRateLimiter,
+  resolveResourceRateLimiter,
+} from "../../utils/resourceRateLimit.js";
+import { declareRuntimeCapability } from "../../utils/runtimeCapabilities.js";
+import {
   isBetterAuth,
   McpAuthCache,
   registerOAuthDiscovery,
@@ -126,7 +131,16 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     audit?: unknown;
     idempotency?: { store?: unknown };
   };
+  const rateLimiter = resolveResourceRateLimiter(fastify) ?? createMemoryResourceRateLimiter();
+  if (enabledResources.some((resource) => resource.rateLimit)) {
+    declareRuntimeCapability(fastify, {
+      subsystem: "mcp.resource-rate-limit",
+      durability: rateLimiter.durability,
+      detail: "REST and MCP resource budgets require a shared rate-limit backend across replicas.",
+    });
+  }
   const wiring = {
+    rateLimiter,
     get hooks() {
       return fastifyAny.arc?.hooks;
     },

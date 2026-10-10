@@ -113,25 +113,34 @@ export async function createWorker(
     arcPlugins: workerArcPlugins,
   });
 
-  if (workerOptions.health) {
-    const { port, host = "0.0.0.0", checks = [] } = workerOptions.health;
-    // The worker preset disables the MAIN health plugin, so this probe is the
-    // single registration — feed it the SAME module-contributed checks the API
-    // role gets (collected + frozen by createApp on `arc.healthChecks`),
-    // modules-first then the worker's own probe checks.
-    const moduleChecks = app.arc?.healthChecks ?? [];
-    const mergedChecks = mergeHealthChecks([
-      { owner: "the module graph", checks: moduleChecks },
-      { owner: "shared arcPlugins.health", checks: sharedHealth.checks },
-      { owner: "the worker probe", checks },
-    ]);
-    await app.register(healthPlugin, {
-      ...sharedHealth,
-      checks: mergedChecks,
-    });
-    await app.listen({ port, host });
-  } else {
-    await app.ready();
+  try {
+    if (workerOptions.health) {
+      const { port, host = "0.0.0.0", checks = [] } = workerOptions.health;
+      // The worker preset disables the MAIN health plugin, so this probe is the
+      // single registration — feed it the SAME module-contributed checks the API
+      // role gets (collected + frozen by createApp on `arc.healthChecks`),
+      // modules-first then the worker's own probe checks.
+      const moduleChecks = app.arc?.healthChecks ?? [];
+      const mergedChecks = mergeHealthChecks([
+        { owner: "the module graph", checks: moduleChecks },
+        { owner: "shared arcPlugins.health", checks: sharedHealth.checks },
+        { owner: "the worker probe", checks },
+      ]);
+      await app.register(healthPlugin, {
+        ...sharedHealth,
+        checks: mergedChecks,
+      });
+      await app.listen({ port, host });
+    } else {
+      await app.ready();
+    }
+  } catch (err) {
+    try {
+      await app.close();
+    } catch (closeErr) {
+      app.log.error({ err: closeErr }, "[arc] failed worker startup cleanup failed");
+    }
+    throw err;
   }
 
   let closed = false;

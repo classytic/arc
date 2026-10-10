@@ -162,7 +162,7 @@ describe("createChildEvent — causation chain", () => {
     expect(child.meta.correlationId).toBe(parent.meta.id);
   });
 
-  it("child inherits source + idempotencyKey from parent", () => {
+  it("child inherits source but requires its own occurrence-specific idempotency key", () => {
     const parent = createEvent(
       "order.placed",
       { orderId: "o1" },
@@ -171,10 +171,10 @@ describe("createChildEvent — causation chain", () => {
     const child = createChildEvent(parent, "inventory.reserved", { sku: "a" });
 
     expect(child.meta.source).toBe("commerce");
-    expect(child.meta.idempotencyKey).toBe("order:o1:placed");
+    expect(child.meta.idempotencyKey).toBeUndefined();
   });
 
-  it("child can override inherited source + idempotencyKey", () => {
+  it("child can override source and supply its own idempotency key", () => {
     const parent = createEvent(
       "order.placed",
       { orderId: "o1" },

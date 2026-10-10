@@ -8,7 +8,7 @@
  * Schema-synthesis helpers are exported so unit tests can pin their invariants.
  */
 
-import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
 import { idempotencyConfigProblem } from "../../idempotency/requirement.js";
 import type {
   ActionDefinition,
@@ -577,6 +577,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             idField: resource.idField,
             permissions: resource.permissions as Record<string, PermissionCheck> | undefined,
             routeGuards: resource.routeGuards,
+            tenantMiddlewares: resource.middlewares?.tenantScope,
             pipeline: resource.pipe,
             rateLimit: resource.rateLimit,
             extensions: resource.extensions,

@@ -18,7 +18,11 @@ import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { ServerAccessor } from "../../types/handlers.js";
-import type { IRequestContext, ResourcePermissions } from "../../types/index.js";
+import type {
+  ArcInternalMetadata,
+  IRequestContext,
+  ResourcePermissions,
+} from "../../types/index.js";
 import { NotFoundError } from "../../utils/errors.js";
 import { buildRequestContext, type McpContextExtras } from "./buildRequestContext.js";
 import {
@@ -35,12 +39,7 @@ import {
   toCallToolError,
   toCallToolSuccess,
 } from "./tool-helpers.js";
-import type {
-  CallToolResult,
-  McpAuthResult,
-  McpExecutionWiring,
-  ToolDefinition,
-} from "./types.js";
+import type { CallToolResult, McpAuthResult, McpExecutionWiring, ToolDefinition } from "./types.js";
 
 /** What the action's HTTP route enforces, resolved once at tool generation. */
 export interface ActionToolParity {
@@ -54,7 +53,7 @@ export interface ActionToolParity {
   /** The resource is audited: record the action like the route does. */
   readonly audit: boolean;
   /** The resource's rate limit, per caller. */
-  readonly allow?: (session: McpAuthResult | null) => boolean;
+  readonly allow?: (session: McpAuthResult | null) => boolean | Promise<boolean>;
 }
 
 /**
@@ -116,6 +115,7 @@ export function createActionToolHandler(
    */
   extras?: {
     wiring?: McpExecutionWiring;
+    tenantMiddlewares?: readonly unknown[];
     schemaOptions?: unknown;
     idField?: string;
     /** HTTP parity gates; see `http-parity.ts`. */
@@ -127,6 +127,7 @@ export function createActionToolHandler(
   const toolName = parity?.toolName ?? `${actionName}_${resourceName}`;
   const contextExtras: McpContextExtras | undefined = wiring
     ? {
+        tenantMiddlewares: extras?.tenantMiddlewares,
         arc: {
           resourceName,
           schemaOptions: extras?.schemaOptions,
@@ -142,7 +143,7 @@ export function createActionToolHandler(
           log: wiring.log as ServerAccessor["log"],
         },
       }
-    : undefined;
+    : { tenantMiddlewares: extras?.tenantMiddlewares };
   const ir = rawSchema ? normalizeSchemaIR(rawSchema) : undefined;
   const strict = ir ? shouldRejectAdditionalProperties(ir) : false;
   // Pre-compute the allowed key set ONCE — every action call re-reads it to
@@ -162,7 +163,7 @@ export function createActionToolHandler(
 
   return async (rawInput, ctx) => {
     const session = ctx.session;
-    if (parity?.allow && !parity.allow(session)) return rateLimitedResult(toolName);
+    if (parity?.allow && !(await parity.allow(session))) return rateLimitedResult(toolName);
 
     const { _idempotencyKey: rawKey, ...input } = rawInput;
     const idempotencyKey = typeof rawKey === "string" && rawKey !== "" ? rawKey : undefined;
@@ -206,30 +207,29 @@ export function createActionToolHandler(
 
     // The "action" operation kind puts id in params, everything else in body,
     // with correct kind-discriminated scope from session + permission override.
-    const inputWithAction = { ...input, action: actionName };
-    const reqCtx = buildRequestContext(
-      inputWithAction,
-      session,
-      "action",
-      permResult?.policy,
-      permResult?.scope,
-      contextExtras,
-    );
-
-    // Id-less actions don't carry an entity handle — pass `""` to the
-    // handler. Id-bound actions read `input.id` (the MCP tool advertises
-    // an `id` field for those).
-    const id = idLess ? "" : typeof input.id === "string" ? input.id : "";
-    const { id: _discardId, ...data } = input;
-
     try {
+      const inputWithAction = { ...input, action: actionName };
+      const reqCtx = buildRequestContext(
+        inputWithAction,
+        session,
+        "action",
+        permResult?.policy,
+        permResult?.scope,
+        contextExtras,
+      );
+
+      // Id-less actions don't carry an entity handle — pass `""` to the
+      // handler. Id-bound actions read `input.id` (the MCP tool advertises
+      // an `id` field for those).
+      const id = idLess ? "" : typeof input.id === "string" ? input.id : "";
+      const { id: _discardId, ...data } = input;
+
       if (!idLess && parity?.fence && !(await parity.fence(id, reqCtx))) {
         throw new NotFoundError(resourceName);
       }
       const run = async (): Promise<CallToolResult> => {
         // The handler deduplicating itself reads the key where HTTP puts it.
-        const req =
-          idempotencyKey === undefined ? reqCtx : { ...reqCtx, idempotencyKey };
+        const req = idempotencyKey === undefined ? reqCtx : { ...reqCtx, idempotencyKey };
         // Pass the full IRequestContext as `req` so action handlers see user,
         // scope, metadata, and filters in the same shape as the HTTP path.
         const result = await handler(id, data, req);
@@ -257,6 +257,7 @@ export function createActionToolHandler(
           operation: `action.${actionName}`,
           input,
           session,
+          scope: (reqCtx.metadata as ArcInternalMetadata)._scope,
           dispatch: run,
         });
       }

@@ -242,7 +242,7 @@ describe("MCP execution parity — idempotency", () => {
     expect(parse(second)).toEqual(parse(first)); // byte-identical replay
   });
 
-  it("treats the same key with DIFFERENT input as a fresh execution", async () => {
+  it("refuses different input under the same operation key", async () => {
     const repo = makeRepo();
     const store = new MemoryIdempotencyStore({ ttlMs: 60_000 });
     const tools = resourceToTools(makeResource(repo), {
@@ -250,8 +250,10 @@ describe("MCP execution parity — idempotency", () => {
     });
 
     await call(tools, "create_task", { name: "a", _idempotencyKey: "k1" });
-    await call(tools, "create_task", { name: "b", _idempotencyKey: "k1" });
-    expect(repo.create).toHaveBeenCalledTimes(2);
+    const result = await call(tools, "create_task", { name: "b", _idempotencyKey: "k1" });
+    expect(result.isError).toBe(true);
+    expect(parse(result)).toMatchObject({ status: 422, code: "arc.idempotency_body_mismatch" });
+    expect(repo.create).toHaveBeenCalledTimes(1);
   });
 
   it("scopes replay to caller identity", async () => {

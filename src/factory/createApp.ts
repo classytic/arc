@@ -36,6 +36,7 @@ import {
   auditRuntimeCapabilities,
   initRuntimeCapabilityRegistry,
 } from "../utils/runtimeCapabilities.js";
+import { initShutdownRegistry } from "../utils/shutdown.js";
 import { registerAssetRoots } from "./assets.js";
 import { collectModuleHealthChecks } from "./module/index.js";
 import { composeModules } from "./module/plan.js";
@@ -338,7 +339,11 @@ async function buildApp(
   // ── 1. Merge preset + create Fastify ──
 
   const presetConfig = options.preset ? getPreset(options.preset) : {};
-  const config: CreateAppOptions = { ...presetConfig, ...options };
+  const config: CreateAppOptions = {
+    ...presetConfig,
+    ...options,
+    ...(options.role === "relay" || options.role === "scheduler" ? { mountRoutes: false } : {}),
+  };
 
   // Production defaults `trustProxy: false` (fail closed). Behind an LB that
   // makes `request.ip` the LB's address, so warn when the host inherited the
@@ -413,6 +418,7 @@ async function buildApp(
   // Seed on the ROOT before anything declares: children read through the
   // prototype chain, so encapsulated declarations reach this audit.
   initRuntimeCapabilityRegistry(fastify);
+  initShutdownRegistry(fastify);
 
   // Route `arcLog` through the host's pino (transports, level, redaction),
   // on THIS APP's scope so co-resident apps keep their own writer.

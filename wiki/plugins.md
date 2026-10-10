@@ -25,6 +25,12 @@
 
 Also: `audit`, `idempotency`, `organization`, `mcp`, `jobs` (all in separate modules).
 
+## Idempotency completion
+
+HTTP and MCP identities use one canonical operation-scope helper: namespace, operation, principal kind/id, organization, team and custom scope dimensions. Body fingerprints are separate; reusing a key for a different body is refused. After acquiring a lock, reread completion before executing to close the read/lock handoff race.
+
+Successful object replies record in `preSerialization`; empty, string and Buffer replies record in `onSend` without setting headers. Buffers use base64 storage plus `bodyEncoding: 'base64'` so JSON-backed stores preserve bytes. The universal `onResponse` hook releases locks. Streaming mutations must use `dedup: 'handler'` with a domain completion record; buffering arbitrary streams is not a supported replay mode. HTTP completion and business effects still have a crash window unless the domain owns their shared transaction or intrinsic deduplication.
+
 ## `schedulesPlugin` (2.21) — recurring jobs without Redis
 
 Interval-based (`every` ms) job loop with optional multi-replica leader safety via any ecosystem `LockAdapter` (`@classytic/mongokit/lock`, sqlitekit, repo-core memory). No overlap by construction (timeout chain, next tick after run settles); fail-open per tick (throwing handler logged, loop survives); lease deliberately NOT released after a run so other replicas skip the same window; timers unref'd + cleared on close with in-flight runs awaited. `fastify.getScheduleStats()` exposes runs/failures/skippedByLock. Deliberately NOT cron-expression-based — calendar semantics belong to the BullMQ `jobs` integration. Replaces the hand-rolled cron registry + mongo lock layer production hosts grow.

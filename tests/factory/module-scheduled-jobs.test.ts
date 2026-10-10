@@ -13,6 +13,58 @@ afterEach(() => {
 });
 
 describe("defineModule — scheduledJobs", () => {
+  it("drains a running schedule before disposing the engine it uses", async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const order: string[] = [];
+    const app = await createApp({
+      auth: false,
+      logger: false,
+      arcPlugins: { gracefulShutdown: false },
+      modules: [
+        defineModule({
+          name: "engine",
+          scheduledJobs: [
+            {
+              name: "engine.sweep",
+              every: 60_000,
+              runOnStart: true,
+              handler: async (fastify) => {
+                order.push("start");
+                await pending;
+                await fastify.events.publish("engine:done", {});
+                order.push("finish");
+              },
+            },
+          ],
+          eventHandlers: [
+            {
+              name: "engine.done",
+              event: "engine:done",
+              handler: async () => {
+                order.push("event");
+              },
+            },
+          ],
+          onClose: () => {
+            order.push("dispose");
+          },
+        }),
+      ],
+    });
+    await app.ready();
+    await vi.advanceTimersByTimeAsync(0);
+    const closing = app.close();
+    await vi.advanceTimersByTimeAsync(0);
+    const beforeRelease = [...order];
+    release();
+    await closing;
+    expect(beforeRelease).toEqual(["start"]);
+    expect(order).toEqual(["start", "event", "finish", "dispose"]);
+  });
   it("executes schedules and exposes frozen definitions in dependency order", async () => {
     vi.useFakeTimers();
     const runs: string[] = [];

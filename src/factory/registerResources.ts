@@ -4,6 +4,7 @@ import { createEventRouter } from "@classytic/primitives/events";
 import type { FastifyInstance } from "fastify";
 import { defineEvent, type EventRegistry } from "../events/defineEvent.js";
 import { CRUD_EVENT_SCHEMA } from "../events/eventTypes.js";
+import { runShutdown } from "../utils/shutdown.js";
 import type { ResourceLike } from "./loadResources.js";
 import {
   analyzeModuleGraph,
@@ -593,16 +594,22 @@ export async function registerResources(
       }
       for (const issue of issues)
         fastify.log.warn({ issue }, `[arc] module graph: ${issue.message}`);
-      // Durability is REPORTED in every mode until each money event is declared.
+      // Strict applies to durability declarations too; warn remains migration-friendly.
       const outboxModules = new Set(
         modules
           .filter((m) => isTransactionalOutbox(getOptionalModuleExports(fastify, m.name)))
           .map((m) => m.name),
       );
-      for (const issue of verifyEventDurability(modules, {
+      const durabilityIssues = verifyEventDurability(modules, {
         outboxModules,
         handlers: handlersByModule,
-      }))
+      });
+      if (durabilityIssues.length && graphMode === "strict") {
+        throw new Error(
+          `[arc] module graph durability has ${durabilityIssues.length} issue(s):\n${durabilityIssues.map((i) => `  - ${i.message}`).join("\n")}`,
+        );
+      }
+      for (const issue of durabilityIssues)
         fastify.log.warn({ issue }, `[arc] module graph (${issue.code}): ${issue.message}`);
     }
     if (fastify.arc) fastify.arc.moduleGraph = moduleGraph;
@@ -646,6 +653,9 @@ export async function registerResources(
     // ── Boot rollback ── the §7b hook doesn't exist yet. Mirrors shutdown:
     // unsubscribe handlers, then close modules. Secondary failures are logged;
     // the ORIGINAL boot error is rethrown.
+    const shutdownErrors = await runShutdown(fastify);
+    for (const shutdownError of shutdownErrors)
+      fastify.log.error({ err: shutdownError }, "[arc] runtime rollback failed");
     const unsubscribeErrors = await unsubscribeModuleEventHandlers(eventUnsubscribes);
     for (const unsubscribeError of unsubscribeErrors) {
       fastify.log.error(
@@ -681,6 +691,7 @@ export async function registerResources(
   const appOnClose = config.onClose;
   if (teardown.hasComposedModules() || appOnClose || eventUnsubscribes.length) {
     fastify.addHook("onClose", async () => {
+      const shutdownErrors = await runShutdown(fastify);
       // Unsubscribe FIRST, while the engines handlers call are still live.
       const unsubscribeErrors = await unsubscribeModuleEventHandlers(eventUnsubscribes);
       for (const err of unsubscribeErrors) {
@@ -692,6 +703,7 @@ export async function registerResources(
       }
       if (appOnClose) await appOnClose(fastify);
       if (closeErrors.length > 0) throw closeErrors[0];
+      if (shutdownErrors.length > 0) throw shutdownErrors[0];
     });
   }
 }

@@ -10,7 +10,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { defineModule } from "../../src/factory/index.js";
-import { arcApp, arcAppRefuses } from "../_harness/index.js";
+import { aResource, arcApp, arcAppRefuses } from "../_harness/index.js";
 
 const armModule = () =>
   defineModule({
@@ -22,6 +22,18 @@ const armModule = () =>
   });
 
 describe("createApp({ role })", () => {
+  it.each(["relay", "scheduler"] as const)(
+    "%s registers module metadata without routes",
+    async (role) => {
+      const resource = aResource("billing");
+      const app = await arcApp({
+        role,
+        modules: [defineModule({ name: "billing", resources: [resource] })],
+      });
+      expect(app.arc?.registry.get("billing")).toBeDefined();
+      expect((await app.inject({ method: "GET", url: resource.prefix })).statusCode).toBe(404);
+    },
+  );
   it("relay + HTTP resources is BOOT-fatal", async () => {
     await arcAppRefuses({ role: "relay", resources: [] }, /must not serve routes/);
   });

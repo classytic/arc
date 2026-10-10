@@ -20,6 +20,13 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import {
+  DURATION_BUCKETS_SECONDS,
+  MetricHistogram,
+  type MetricSample,
+  MetricSeries,
+  renderMetricSample,
+} from "../utils/metricSeries.js";
 
 // ============================================================================
 // Types
@@ -28,6 +35,8 @@ import fp from "fastify-plugin";
 export interface MetricsOptions {
   /** Endpoint path (default: '/_metrics') */
   path?: string;
+  /** Maximum label sets per metric, plus one overflow series (default: 1000). */
+  maxSeries?: number;
   /** Prefix for all metric names (default: 'arc') */
   prefix?: string;
   /** Called after metrics are collected (for OTLP push, etc.) */
@@ -38,7 +47,7 @@ export interface MetricEntry {
   name: string;
   type: "counter" | "histogram" | "gauge";
   help: string;
-  values: Array<{ labels: Record<string, string>; value: number }>;
+  values: MetricSample[];
 }
 
 export interface MetricsCollector {
@@ -71,83 +80,47 @@ declare module "fastify" {
 // ============================================================================
 
 class Counter {
-  private data = new Map<string, { labels: Record<string, string>; value: number }>();
+  private readonly series: MetricSeries<{ value: number }>;
+
+  constructor(maxSeries: number) {
+    this.series = new MetricSeries(maxSeries);
+  }
 
   inc(labels: Record<string, string>, value = 1): void {
-    const key = labelKey(labels);
-    const existing = this.data.get(key);
-    if (existing) {
-      existing.value += value;
-    } else {
-      this.data.set(key, { labels: { ...labels }, value });
-    }
+    this.series.get(labels, () => ({ value: 0 })).value += value;
   }
 
-  values(): Array<{ labels: Record<string, string>; value: number }> {
-    return [...this.data.values()];
+  values(): MetricSample[] {
+    return this.series
+      .entries()
+      .map(({ labels, value }) => ({ labels: { ...labels }, value: value.value }));
   }
 
   reset(): void {
-    this.data.clear();
+    this.series.reset();
   }
 }
-
-// ============================================================================
-// Histogram — lightweight bucket-less histogram (sum + count)
-// ============================================================================
-
-class Histogram {
-  private data = new Map<string, { labels: Record<string, string>; sum: number; count: number }>();
-
-  observe(labels: Record<string, string>, value: number): void {
-    const key = labelKey(labels);
-    const existing = this.data.get(key);
-    if (existing) {
-      existing.sum += value;
-      existing.count += 1;
-    } else {
-      this.data.set(key, { labels: { ...labels }, sum: value, count: 1 });
-    }
-  }
-
-  values(): Array<{ labels: Record<string, string>; value: number }> {
-    return [...this.data.values()].flatMap(({ labels, sum, count }) => [
-      { labels: { ...labels, le: "sum" }, value: sum },
-      { labels: { ...labels, le: "count" }, value: count },
-    ]);
-  }
-
-  reset(): void {
-    this.data.clear();
-  }
-}
-
-// ============================================================================
-// Gauge — last-value metric
-// ============================================================================
 
 class Gauge {
-  private data = new Map<string, { labels: Record<string, string>; value: number }>();
+  private readonly series: MetricSeries<{ value: number }>;
 
-  set(labels: Record<string, string>, value: number): void {
-    const key = labelKey(labels);
-    this.data.set(key, { labels: { ...labels }, value });
+  constructor(maxSeries: number) {
+    this.series = new MetricSeries(maxSeries);
   }
 
-  values(): Array<{ labels: Record<string, string>; value: number }> {
-    return [...this.data.values()];
+  set(labels: Record<string, string>, value: number): void {
+    this.series.get(labels, () => ({ value: 0 })).value = value;
+  }
+
+  values(): MetricSample[] {
+    return this.series
+      .entries()
+      .map(({ labels, value }) => ({ labels: { ...labels }, value: value.value }));
   }
 
   reset(): void {
-    this.data.clear();
+    this.series.reset();
   }
-}
-
-function labelKey(labels: Record<string, string>): string {
-  return Object.entries(labels)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${v}`)
-    .join(",");
 }
 
 // ============================================================================
@@ -160,10 +133,7 @@ function toPrometheusText(metrics: MetricEntry[]): string {
     lines.push(`# HELP ${m.name} ${m.help}`);
     lines.push(`# TYPE ${m.name} ${m.type}`);
     for (const v of m.values) {
-      const labelStr = Object.entries(v.labels)
-        .map(([k, val]) => `${k}="${val}"`)
-        .join(",");
-      lines.push(`${m.name}{${labelStr}} ${v.value}`);
+      lines.push(renderMetricSample(m.name, v));
     }
   }
   return `${lines.join("\n")}\n`;
@@ -179,21 +149,25 @@ const metricsPlugin: FastifyPluginAsync<MetricsOptions> = async (
 ) => {
   const path = opts.path ?? "/_metrics";
   const prefix = opts.prefix ?? "arc";
+  const maxSeries = opts.maxSeries ?? 1000;
+  if (!/^[a-zA-Z_:][a-zA-Z0-9_:]*$/.test(prefix)) {
+    throw new Error("metrics.prefix must be a valid Prometheus metric prefix");
+  }
 
   // Counters
-  const httpRequestsTotal = new Counter();
-  const crudOpsTotal = new Counter();
-  const cacheHitsTotal = new Counter();
-  const cacheMissesTotal = new Counter();
-  const eventsPublishedTotal = new Counter();
-  const eventsConsumedTotal = new Counter();
+  const httpRequestsTotal = new Counter(maxSeries);
+  const crudOpsTotal = new Counter(maxSeries);
+  const cacheHitsTotal = new Counter(maxSeries);
+  const cacheMissesTotal = new Counter(maxSeries);
+  const eventsPublishedTotal = new Counter(maxSeries);
+  const eventsConsumedTotal = new Counter(maxSeries);
 
   // Histograms
-  const httpDuration = new Histogram();
-  const crudDuration = new Histogram();
+  const httpDuration = new MetricHistogram(DURATION_BUCKETS_SECONDS, maxSeries);
+  const crudDuration = new MetricHistogram(DURATION_BUCKETS_SECONDS, maxSeries);
 
   // Gauges
-  const circuitBreakerState = new Gauge();
+  const circuitBreakerState = new Gauge(maxSeries);
 
   const collector: MetricsCollector = {
     collect(): MetricEntry[] {
@@ -291,7 +265,8 @@ const metricsPlugin: FastifyPluginAsync<MetricsOptions> = async (
     },
 
     recordCircuitBreakerState(service: string, state: string): void {
-      const stateValue = state === "open" ? 1 : state === "half-open" ? 2 : 0;
+      const normalized = state.toLowerCase().replaceAll("_", "-");
+      const stateValue = normalized === "open" ? 1 : normalized === "half-open" ? 2 : 0;
       circuitBreakerState.set({ service }, stateValue);
     },
   };
@@ -301,12 +276,12 @@ const metricsPlugin: FastifyPluginAsync<MetricsOptions> = async (
   // Auto-track HTTP requests
   fastify.addHook("onResponse", async (request: FastifyRequest, reply: FastifyReply) => {
     // Skip metrics endpoint
-    if (request.url === path) return;
+    if (request.routeOptions.url === path) return;
 
     const duration = reply.elapsedTime / 1000; // ms → seconds
     const labels = {
       method: request.method,
-      route: request.routeOptions?.url ?? request.url,
+      route: request.routeOptions.url ?? "__unmatched__",
       status: String(reply.statusCode),
     };
 

@@ -35,17 +35,14 @@
 
 import type { FastifyReply } from "fastify";
 import { DEFAULT_TENANT_FIELD } from "../constants.js";
-import type { RequestScope } from "../scope/types.js";
 import {
-  getOrgId,
-  getRequestScope as getScope,
-  getScopeContext,
-  getTeamId,
-  hasOrgAccess,
-  isElevated,
-} from "../scope/types.js";
+  applyTenantPreparation,
+  type TenantFieldSpec,
+  type TenantPreparationMode,
+  tagTenantPreparation,
+} from "../core/tenantPreparation.js";
+import { getRequestScope as getScope } from "../scope/types.js";
 import type {
-  AnyRecord,
   CrudRouteKey,
   MiddlewareConfig,
   PresetResult,
@@ -53,6 +50,7 @@ import type {
   RouteHandler,
   RouteSchemaOptions,
 } from "../types/index.js";
+import { ArcError } from "../utils/errors.js";
 
 /**
  * One tenant dimension for multi-field filtering. Discriminated by source:
@@ -60,10 +58,7 @@ import type {
  * - `type: 'team'` → reads `getTeamId(scope)`
  * - `contextKey`   → reads `getScopeContext(scope, contextKey)` (any custom dimension)
  */
-export type TenantFieldSpec =
-  | { field: string; type: "org" }
-  | { field: string; type: "team" }
-  | { field: string; contextKey: string };
+export type { TenantFieldSpec } from "../core/tenantPreparation.js";
 
 export interface MultiTenantOptions {
   /**
@@ -155,191 +150,29 @@ export interface MultiTenantOptions {
   crossTenant?: readonly Extract<CrudRouteKey, "list" | "get">[];
 }
 
-/**
- * Resolve a single TenantFieldSpec against the current scope.
- * Returns `undefined` if the source value isn't present on the scope.
- */
-function resolveSpec(scope: RequestScope, spec: TenantFieldSpec): string | undefined {
-  if ("contextKey" in spec) return getScopeContext(scope, spec.contextKey);
-  if (spec.type === "org") return getOrgId(scope);
-  if (spec.type === "team") return getTeamId(scope);
-  return undefined;
-}
-
-/**
- * Stash the resolved tenant field map on the request so `BaseController`
- * can forward it to the repository layer as top-level options. Needed by
- * plugin-scoped repos (mongokit's `multiTenantPlugin`) that read tenant
- * from `context.<field>` rather than from filter/query/data stamping.
- */
-function stashTenantFields(request: RequestWithExtras, resolved: Record<string, string>): void {
-  if (Object.keys(resolved).length === 0) return;
-  request._tenantFields = { ...(request._tenantFields ?? {}), ...resolved };
-}
-
-/** Resolve every spec — returns the partial map of fields that have a value. */
-function resolveAll(
-  scope: RequestScope,
+function createTenantMiddleware(
   specs: readonly TenantFieldSpec[],
-): { resolved: Record<string, string>; missing: string[] } {
-  const resolved: Record<string, string> = {};
-  const missing: string[] = [];
-  for (const spec of specs) {
-    const value = resolveSpec(scope, spec);
-    if (value !== undefined) {
-      resolved[spec.field] = value;
-    } else {
-      missing.push(spec.field);
+  mode: TenantPreparationMode,
+): RouteHandler {
+  const preparation = { specs, mode };
+  const middleware: RouteHandler = async (
+    request: RequestWithExtras,
+    reply: FastifyReply,
+  ): Promise<void> => {
+    try {
+      applyTenantPreparation(request, request.body, getScope(request), preparation);
+    } catch (error) {
+      if (!(error instanceof ArcError)) throw error;
+      reply
+        .code(error.status)
+        .send({
+          success: false,
+          error: error.status === 401 ? "Unauthorized" : "Forbidden",
+          message: error.message,
+        });
     }
-  }
-  return { resolved, missing };
-}
-
-/**
- * Create tenant filter middleware (strict).
- * Walks the configured tenant fields and applies all of them in lockstep.
- * Fails closed if any non-elevated caller is missing a required dimension.
- */
-function createTenantFilter(specs: readonly TenantFieldSpec[]): RouteHandler {
-  return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
-    const scope = getScope(request);
-
-    // Elevated bypass — apply whatever resolves, skip whatever doesn't.
-    // Lets a platform admin act in a partial context (e.g. org-only without
-    // a specific branch) without being blocked by the multi-field policy.
-    if (isElevated(scope)) {
-      const { resolved } = resolveAll(scope, specs);
-      if (Object.keys(resolved).length > 0) {
-        request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
-        stashTenantFields(request, resolved);
-      }
-      return;
-    }
-
-    // Member or service (API key) bound to a tenant → must satisfy ALL
-    // configured dimensions. Fail closed on any missing dimension.
-    if (hasOrgAccess(scope)) {
-      const { resolved, missing } = resolveAll(scope, specs);
-      if (missing.length === 0) {
-        request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
-        stashTenantFields(request, resolved);
-        return;
-      }
-      // Some dimensions present, others missing → 403 with the specific
-      // missing field name(s) so the developer can fix the auth bridge.
-      reply.code(403).send({
-        success: false,
-        error: "Forbidden",
-        message: `Tenant context incomplete — missing: ${missing.join(", ")}`,
-      });
-      return;
-    }
-
-    // authenticated / public → 401/403 (multi-tenant requires org context)
-    if (scope.kind === "public") {
-      reply.code(401).send({
-        success: false,
-        error: "Unauthorized",
-        message: "Authentication required for multi-tenant resources",
-      });
-      return;
-    }
-
-    // authenticated but no org → 403
-    reply.code(403).send({
-      success: false,
-      error: "Forbidden",
-      message: "Organization context required for this operation",
-    });
   };
-}
-
-/**
- * Create flexible tenant filter middleware (allowPublic).
- * Same policy as the strict variant for authenticated callers, but
- * allows public/unauthenticated requests through without filtering.
- */
-function createFlexibleTenantFilter(specs: readonly TenantFieldSpec[]): RouteHandler {
-  return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
-    const scope = getScope(request);
-
-    if (isElevated(scope)) {
-      const { resolved } = resolveAll(scope, specs);
-      if (Object.keys(resolved).length > 0) {
-        request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
-        stashTenantFields(request, resolved);
-      }
-      return;
-    }
-
-    // Authenticated tenant caller — apply all dimensions or fail closed.
-    // We don't silently skip missing dimensions here because that would
-    // let an API key with partial context see data it shouldn't.
-    if (hasOrgAccess(scope)) {
-      const { resolved, missing } = resolveAll(scope, specs);
-      if (missing.length === 0) {
-        request._policyFilters = { ...(request._policyFilters ?? {}), ...resolved };
-        stashTenantFields(request, resolved);
-        return;
-      }
-      reply.code(403).send({
-        success: false,
-        error: "Forbidden",
-        message: `Tenant context incomplete — missing: ${missing.join(", ")}`,
-      });
-      return;
-    }
-
-    // authenticated / public with no tenant context → allow through (public data)
-    return;
-  };
-}
-
-/**
- * Create tenant injection middleware.
- * Walks the configured tenant fields and writes each into the request body.
- * Fails closed if any required dimension is missing for non-elevated callers.
- *
- * Also stashes the resolved fields on `request._tenantFields` so
- * `BaseController.tenantRepoOptions()` can forward them to the repo layer
- * as top-level options — needed by plugin-scoped repos like mongokit's
- * `multiTenantPlugin`, which reads tenant from `context.<field>` rather
- * than from `data.<field>`. Without this forwarding, multi-field preset
- * writes (update/delete) work only when the plugin's `allowDataInjection`
- * fallback covers the operation's policy key, which is write-only.
- */
-function createTenantInjection(specs: readonly TenantFieldSpec[]): RouteHandler {
-  return async (request: RequestWithExtras, reply: FastifyReply): Promise<void> => {
-    const scope = getScope(request);
-
-    // Elevated without org → skip injection (admin cross-tenant operation).
-    // We use `getOrgId` here as the canonical "is this elevated admin scoped
-    // to an org" check, mirroring the original single-field behavior.
-    if (isElevated(scope) && !getOrgId(scope)) {
-      return;
-    }
-
-    const { resolved, missing } = resolveAll(scope, specs);
-
-    // Fail-closed: every configured field must resolve. Prevents orphaned
-    // data and prevents partial-context API keys from creating cross-tenant rows.
-    if (missing.length > 0) {
-      reply.code(403).send({
-        success: false,
-        error: "Forbidden",
-        message: `Tenant context incomplete — missing: ${missing.join(", ")}`,
-      });
-      return;
-    }
-
-    if (request.body) {
-      Object.assign(request.body as AnyRecord, resolved);
-    }
-
-    // Forward to BaseController so reads/updates/deletes get tenant at the
-    // top of the repo context, not just on the create payload.
-    request._tenantFields = { ...(request._tenantFields ?? {}), ...resolved };
-  };
+  return tagTenantPreparation(middleware, preparation);
 }
 
 export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResult {
@@ -363,9 +196,9 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
   }
 
   // Create middleware variants
-  const strictTenantFilter = createTenantFilter(specs);
-  const flexibleTenantFilter = createFlexibleTenantFilter(specs);
-  const tenantInjection = createTenantInjection(specs);
+  const strictTenantFilter = createTenantMiddleware(specs, "strict");
+  const flexibleTenantFilter = createTenantMiddleware(specs, "flexible");
+  const tenantInjection = createTenantMiddleware(specs, "inject");
 
   // Helper to select appropriate filter based on allowPublic
   const getFilter = (route: CrudRouteKey): RouteHandler =>
@@ -385,9 +218,7 @@ export function multiTenantPreset(options: MultiTenantOptions = {}): PresetResul
    * repository layer needs no change of its own — kits already accept `bypassTenant`, which is the
    * same door elevated cross-tenant reads have always used.
    */
-  const markCrossTenantRead: RouteHandler = async (request: RequestWithExtras): Promise<void> => {
-    request._crossTenantRead = true;
-  };
+  const markCrossTenantRead = createTenantMiddleware(specs, "crossTenant");
   const readMiddleware = (route: Extract<CrudRouteKey, "list" | "get">): RouteHandler[] =>
     crossTenant.includes(route) ? [markCrossTenantRead] : [getFilter(route)];
 

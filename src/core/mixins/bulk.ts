@@ -64,9 +64,10 @@ export function BulkMixin<TBase extends MixinConstructor<BaseCrudController<obje
       // field via the bulk endpoint.
       const arcContext = this.meta(req);
       const user = req.user as UserLike | undefined;
-      const sanitizedItems = items.map((item) =>
-        this.bodySanitizer.sanitize((item ?? {}) as AnyRecord, "create", req, arcContext),
-      );
+      const sanitizedItems = items.map((item) => ({
+        ...this.bodySanitizer.sanitize((item ?? {}) as AnyRecord, "create", req, arcContext),
+        ...arcContext?._tenantFields,
+      }));
 
       // SECURITY: inject the tenant into every item, decided by
       // `resolveTenancy` — the same rule as reads and as single-doc create:

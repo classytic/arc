@@ -138,6 +138,7 @@ export function createRequestContext(req: FastifyRequest): IRequestContext {
       // A cross-tenant read decided by the preset; the layers below re-derive
       // tenancy from the scope and would otherwise each undo that decision.
       _crossTenantRead: reqWithExtras._crossTenantRead,
+      _tenantFields: reqWithExtras._tenantFields,
       // SECURITY: only from trusted middleware — never merge user-supplied query._policyFilters.
       _policyFilters: reqWithExtras._policyFilters ?? {},
       log: reqWithExtras.log,

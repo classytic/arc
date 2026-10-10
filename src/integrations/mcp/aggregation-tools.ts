@@ -33,7 +33,8 @@ import type { NormalizedAggregation } from "../../core/aggregation/validate.js";
 import { validateAggregations } from "../../core/aggregation/validate.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
-import type { AnyRecord, RouteSchemaOptions } from "../../types/index.js";
+import type { AnyRecord, ArcInternalMetadata, RouteSchemaOptions } from "../../types/index.js";
+import { buildRequestContext } from "./buildRequestContext.js";
 import {
   applyMcpReadMasking,
   evaluatePermission,
@@ -64,6 +65,7 @@ export function buildAggregationTools(args: {
    * extracts orgId / userId / requestId from the MCP session.
    */
   buildOptionsFromSession: (session: unknown) => AnyRecord;
+  tenantMiddlewares?: readonly unknown[];
   /** Optional tool name prefix (matches `prefix` in the action-tools path). */
   prefix?: string;
   /**
@@ -127,6 +129,7 @@ export function buildAggregationTools(args: {
         repo,
         buildOptionsFromSession,
         fields,
+        tenantMiddlewares: args.tenantMiddlewares,
       }),
     });
   }
@@ -247,6 +250,7 @@ interface CreateHandlerArgs {
   resourceName: string;
   repo: unknown;
   buildOptionsFromSession: (session: unknown) => AnyRecord;
+  tenantMiddlewares?: readonly unknown[];
   fields?: FieldPermissionMap;
 }
 
@@ -276,7 +280,21 @@ function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["
     // remainder into the AggRequest filter via shallow merge with
     // host base + tenant scope.
     const filterInput = (input.filter as Record<string, unknown> | undefined) ?? {};
-    const tenantOptions = buildOptionsFromSession(ctx.session);
+    let prepared: ReturnType<typeof buildRequestContext>;
+    try {
+      prepared = buildRequestContext(
+        filterInput,
+        ctx.session,
+        "list",
+        permResult?.policy,
+        permResult?.scope,
+        { tenantMiddlewares: args.tenantMiddlewares },
+      );
+    } catch (error) {
+      return toCallToolError(error instanceof Error ? error : new Error(String(error)));
+    }
+    const meta = prepared.metadata as ArcInternalMetadata;
+    const tenantOptions = { ...buildOptionsFromSession(ctx.session), ...meta._tenantFields };
 
     const result = await executeAggregation(
       normalized,
@@ -287,7 +305,7 @@ function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["
         // The decision's row-level policy is conjoined into the aggregation
         // filter by the shared executor — identical enforcement to the Fastify
         // route and to CRUD/actions.
-        policyFilter: permResult?.policy,
+        policyFilter: meta._policyFilters,
       },
     );
 

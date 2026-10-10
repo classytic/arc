@@ -193,6 +193,8 @@ export type CrudDescriptionOverride = string | ((meta: CrudDescriptionMeta) => s
  * omit it to keep the legacy dispatch-only behavior.
  */
 export interface McpExecutionWiring {
+  /** Same resource budget and backend used by REST routes. */
+  readonly rateLimiter?: import("../../utils/resourceRateLimit.js").ResourceRateLimiter;
   /** Shared `HookSystem` — `fastify.arc.hooks`. */
   readonly hooks?: unknown;
   /** Event bus decorator — `fastify.events`. */

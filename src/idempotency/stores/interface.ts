@@ -20,6 +20,8 @@ export interface IdempotencyResult {
   headers: Record<string, string>;
   /** Response body */
   body: unknown;
+  /** Binary responses are stored as base64 so JSON-backed stores preserve their bytes. */
+  bodyEncoding?: "base64";
   /** When this entry was created */
   createdAt: Date;
   /** When this entry expires */

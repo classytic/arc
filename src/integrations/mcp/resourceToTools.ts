@@ -1,3 +1,4 @@
+import { createMemoryResourceRateLimiter } from "../../utils/resourceRateLimit.js";
 /**
  * @classytic/arc — Resource → MCP Tools orchestrator.
  *
@@ -19,6 +20,10 @@
 
 import { z } from "zod";
 import { resolveActionPermission } from "../../core/actionPermissions.js";
+import {
+  normalizeActionsToRouterConfig,
+  resolveActionTargetFence,
+} from "../../core/defineResource/plugin.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import { getOrgId, getUserId } from "../../scope/types.js";
@@ -26,12 +31,7 @@ import type { ResourcePermissions, RouteDefinition } from "../../types/index.js"
 import { pluralize } from "../../utils/pluralize.js";
 import { convertActionSchemaToZod, createActionToolHandler } from "./action-tools.js";
 import { buildAggregationTools } from "./aggregation-tools.js";
-import {
-  normalizeActionsToRouterConfig,
-  resolveActionTargetFence,
-} from "../../core/defineResource/plugin.js";
 import { buildScope } from "./buildRequestContext.js";
-import { createToolRateLimiter, idempotencyStoreOf } from "./http-parity.js";
 import {
   ALL_CRUD_OPS,
   CRUD_ANNOTATIONS,
@@ -40,6 +40,7 @@ import {
   resolveCrudDescription,
 } from "./crud-tools.js";
 import type { FieldRuleEntry } from "./fieldRulesToZod.js";
+import { createToolRateLimiter, idempotencyStoreOf } from "./http-parity.js";
 import { buildInputSchema, deriveFieldRulesFromAdapter, getAdapterBodies } from "./input-schema.js";
 import { buildRouteInputSchema } from "./route-input-schema.js";
 import {
@@ -132,6 +133,7 @@ export function resourceToTools(
   const hasIdempotencyStore = idempotencyStoreOf(wiring?.idempotencyStore) !== undefined;
   const keyRequiredOps = new Set<CrudOperation>(resource.idempotency?.required ?? []);
   const rateLimit = resource.rateLimit;
+  const rateLimiter = config.wiring?.rateLimiter ?? createMemoryResourceRateLimiter();
 
   // ── CRUD tools ──
   if (controller) {
@@ -215,10 +217,11 @@ export function resourceToTools(
           resource.fields,
           {
             wiring,
+            tenantMiddlewares: resource.middlewares?.[op],
             schemaOptions: resource.schemaOptions,
             idField: resource.idField,
             keyRequired,
-            allow: createToolRateLimiter(rateLimit),
+            allow: createToolRateLimiter(rateLimit, resource.name, rateLimiter),
             toolName: name,
           },
         ),
@@ -340,6 +343,7 @@ export function resourceToTools(
               pipeline: resource.pipe,
               fields: resource.fields,
               wiring,
+              tenantMiddlewares: route.tenantScope ? resource.middlewares?.tenantScope : undefined,
               schemaOptions: resource.schemaOptions,
               idField: resource.idField,
             },
@@ -361,7 +365,7 @@ export function resourceToTools(
     const fence = resolveActionTargetFence(resource, actionConfig);
     const handlerScoped = new Set(actionConfig.handlerScopedActionNames);
     const keyRequiredActions = new Set(actionConfig.idempotentActionNames);
-    const allow = createToolRateLimiter(rateLimit);
+    const allow = createToolRateLimiter(rateLimit, resource.name, rateLimiter);
     for (const [actionName, entry] of Object.entries(resource.actions)) {
       const def = typeof entry === "function" ? { handler: entry } : entry;
       if (typeof def !== "function" && "mcp" in def && def.mcp === false) continue;
@@ -470,6 +474,7 @@ export function resourceToTools(
           // Hooks/events/server parity with the action's REST route.
           {
             wiring,
+            tenantMiddlewares: resource.middlewares?.tenantScope,
             schemaOptions: resource.schemaOptions,
             idField: resource.idField,
             parity: {
@@ -532,6 +537,7 @@ export function resourceToTools(
         schemaOptions: resource.schemaOptions,
         repo: repoForAgg,
         buildOptionsFromSession,
+        tenantMiddlewares: resource.middlewares?.aggregations,
         prefix,
         fields: resource.fields,
       }),

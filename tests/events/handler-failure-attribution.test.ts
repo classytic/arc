@@ -29,7 +29,11 @@ describe("handler failure attribution", () => {
               throw new Error("period closed");
             },
           },
-          { event: "invoice:posted", handler: async () => void healthy.push("ok") },
+          {
+            name: "accounting.healthy",
+            event: "invoice:posted",
+            handler: async () => void healthy.push("ok"),
+          },
           {
             // Unnamed: labelled module:pattern#index, still distinguishable.
             event: "invoice:posted",

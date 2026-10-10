@@ -13,6 +13,72 @@ import { MemoryEventTransport } from "../../src/events/EventTransport.js";
 import { createApp, defineModule, subscribeModuleEventHandlers } from "../../src/factory/index.js";
 
 describe("defineModule — eventHandlers", () => {
+  it("drains admitted callbacks before module disposal", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const admitted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const order: string[] = [];
+    const app = await createApp({
+      auth: false,
+      logger: false,
+      arcPlugins: { gracefulShutdown: false },
+      modules: [
+        defineModule({
+          name: "engine",
+          eventHandlers: [
+            {
+              name: "engine.work",
+              event: "work",
+              handler: async () => {
+                order.push("start");
+                started();
+                await gate;
+                order.push("finish");
+              },
+            },
+          ],
+          onClose: () => {
+            order.push("dispose");
+          },
+        }),
+      ],
+    });
+    await app.ready();
+    const publishing = app.events.publish("work", {});
+    await admitted;
+    const closing = app.close();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const beforeRelease = [...order];
+    release();
+    await Promise.all([publishing, closing]);
+    expect(beforeRelease).toEqual(["start"]);
+    expect(order).toEqual(["start", "finish", "dispose"]);
+  });
+
+  it("rejects ambiguous unnamed subscriptions rather than assigning unstable indexes", async () => {
+    await expect(
+      createApp({
+        auth: false,
+        logger: false,
+        modules: [
+          defineModule({
+            name: "engine",
+            eventHandlers: [
+              { event: "work", handler: async () => {} },
+              { event: "work", handler: async () => {} },
+            ],
+          }),
+        ],
+      }),
+    ).rejects.toThrow(/ambiguous unnamed.*stable name/);
+  });
   it("subscribes a module handler; publishing the event invokes it; close unsubscribes", async () => {
     const seen: string[] = [];
     const app = await createApp({

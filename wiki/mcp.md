@@ -49,7 +49,15 @@ Tool `source` strings: `crud:<resource>:<op>`, `action:<resource>:<name>`, `rout
 
 ## Permission parity
 
-MCP tools run through the same [[permissions]] pipeline as REST. Hidden fields do not leak in tool schemas. Row-level filters (ownership, multi-tenant) apply. `PermissionResult.filters` flow into MCP tools exactly like REST.
+MCP tools run through the same [[permissions]] pipeline as REST. Hidden fields do not leak in tool schemas. Row-level filters (ownership, multi-tenant) apply. `AuthorizationDecision.policy` filters flow into MCP tools exactly like REST.
+
+Tenant preset middleware carries a transport-neutral preparation descriptor.
+`core/tenantPreparation.ts` resolves all org/team/custom dimensions and conjoins
+policies for REST and MCP CRUD, actions, opted-in custom routes, and aggregations.
+Missing required dimensions fail before repository access; cross-tenant read
+markers and trusted write stamping follow the same declaration on both transports.
+Idempotency identities include principal kind, organization, team and custom scope;
+request fingerprints are checked separately, so changed input under one key is 422.
 
 When changing resource field rules, permissions, or routes → MCP tools change too. Always run `tests/integrations/mcp/`. See [[gotchas]] #16.
 

@@ -24,6 +24,8 @@ export interface RequestContext {
  * them without `as AnyRecord` casts.
  */
 export interface ArcInternalMetadata extends RequestContext {
+  /** Trusted resolved tenant dimensions forwarded across transports. */
+  _tenantFields?: Record<string, unknown>;
   /** Policy filters from permission middleware */
   _policyFilters?: Record<string, unknown>;
   /** Request scope from scope resolution */

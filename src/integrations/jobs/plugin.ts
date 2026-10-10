@@ -9,6 +9,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { evaluateAndApplyPermission } from "../../permissions/authorizationDecision.js";
+import { registerShutdownParticipant, runAdmittedWork } from "../../utils/shutdown.js";
 import { executeTimedHandler } from "./execution.js";
 import { type RepeatSpec, removeStaleRepeatSchedulers } from "./repeat.js";
 import type {
@@ -113,6 +114,7 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
   const queues = new Map<string, InstanceType<typeof Queue>>();
   const dlqQueues = new Map<string, InstanceType<typeof Queue>>();
   const workers = new Map<string, InstanceType<typeof Worker>>();
+  const activeHandlers = new Set<Promise<unknown>>();
   // Tracks which job IDs are currently held by a maxConcurrent semaphore (active but not yet executing).
   const throttledJobs = new Map<string, Set<string>>();
 
@@ -319,7 +321,11 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
                 timestamp: Date.now(),
                 signal,
               };
-              return job.handler(bullJob.data, meta);
+              const pending = runAdmittedWork(() => job.handler(bullJob.data, meta));
+              activeHandlers.add(pending);
+              return pending.finally(() => {
+                activeHandlers.delete(pending);
+              });
             },
           });
 
@@ -647,9 +653,15 @@ const jobsPluginImpl: FastifyPluginAsync<JobsPluginOptions> = async (
     });
   }
 
-  // Graceful shutdown
-  fastify.addHook("onClose", async () => {
-    await dispatcher.close();
+  registerShutdownParticipant(fastify, {
+    name: "jobs",
+    stop: async () => {
+      await Promise.all(Array.from(workers.values()).map((worker) => worker.pause(true)));
+    },
+    drain: async () => {
+      await dispatcher.close();
+      await Promise.allSettled([...activeHandlers]);
+    },
   });
 };
 

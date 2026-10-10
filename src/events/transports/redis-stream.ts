@@ -32,6 +32,7 @@ import type {
   EventLogger,
   EventTransport,
 } from "../EventTransport.js";
+import { getSubscriberId } from "../subscriberIdentity.js";
 
 // ---------------------------------------------------------------------------
 // Minimal Redis-like interface for Streams support
@@ -259,7 +260,8 @@ export class RedisStreamTransport implements EventTransport {
 
   /** Handler → a key stable across replicas: pattern, name, and order among same-named handlers. */
   private handlerKeys = new Map<EventHandler, string>();
-  private handlerKeyCounts = new Map<string, number>();
+  private handlerKeyOwners = new Map<string, EventHandler>();
+  private handlerPatterns = new Map<EventHandler, Set<string>>();
   private handlerProgressTtlMs: number;
   private readonly tracksProgress: boolean;
 
@@ -329,16 +331,33 @@ export class RedisStreamTransport implements EventTransport {
 
   async subscribe(pattern: string, handler: EventHandler): Promise<() => void> {
     if (!this.handlerKeys.has(handler)) {
-      const base = `${pattern}#${handler.name || "anonymous"}`;
-      const n = this.handlerKeyCounts.get(base) ?? 0;
-      this.handlerKeyCounts.set(base, n + 1);
-      this.handlerKeys.set(handler, n === 0 ? base : `${base}#${n}`);
+      const id = getSubscriberId(handler);
+      const key =
+        id === undefined ? `${pattern}#${handler.name || "anonymous"}` : `subscriber:${id}`;
+      const owner = this.handlerKeyOwners.get(key);
+      if (owner && owner !== handler) {
+        throw new Error(
+          `[RedisStreamTransport] Ambiguous subscriber identity '${key}' — wrap each handler withSubscriberId using a stable unique id.`,
+        );
+      }
+      this.handlerKeyOwners.set(key, handler);
+      this.handlerKeys.set(handler, key);
     }
+    const patterns = this.handlerPatterns.get(handler) ?? new Set<string>();
+    patterns.add(pattern);
+    this.handlerPatterns.set(handler, patterns);
     this.router.add(pattern, handler);
     if (!this.held) await this.startPolling();
 
     return () => {
       this.router.remove(pattern, handler);
+      patterns.delete(pattern);
+      if (patterns.size === 0) {
+        const key = this.handlerKeys.get(handler);
+        if (key) this.handlerKeyOwners.delete(key);
+        this.handlerKeys.delete(handler);
+        this.handlerPatterns.delete(handler);
+      }
       // No handlers left: stop polling; the generation bump ends the in-flight loop.
       if (this.router.size === 0 && this.running) {
         this.running = false;

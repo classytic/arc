@@ -21,6 +21,11 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import {
+  DURATION_BUCKETS_SECONDS,
+  MetricHistogram,
+  renderMetricSample,
+} from "../utils/metricSeries.js";
 
 export interface HealthCheck {
   /** Name of the dependency */
@@ -96,47 +101,16 @@ interface CheckResult {
   error?: string;
 }
 
-// Metrics storage (instance-scoped to avoid contamination between app instances)
-
-/**
- * Fixed histogram bucket upper bounds (ms). Recording is O(#buckets) per
- * request; the scrape derives quantile UPPER BOUNDS from cumulative counts
- * in O(#buckets) — no sample retention, no per-scrape sort (the previous
- * 10k-sample ring buffer copied + sorted on EVERY scrape), and bucket
- * counts aggregate correctly across instances.
- */
-const DURATION_BUCKETS_MS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000] as const;
-
 interface HttpMetrics {
   requestsTotal: Record<string, number>;
-  /** Count per DURATION_BUCKETS_MS bound, plus one overflow slot at the end. */
-  durationBuckets: number[];
-  durationCount: number;
-  durationSumMs: number;
-  startTime: number;
+  duration: MetricHistogram;
 }
 
 function createHttpMetrics(): HttpMetrics {
   return {
     requestsTotal: {},
-    durationBuckets: new Array(DURATION_BUCKETS_MS.length + 1).fill(0),
-    durationCount: 0,
-    durationSumMs: 0,
-    startTime: Date.now(),
+    duration: new MetricHistogram(DURATION_BUCKETS_SECONDS.map((seconds) => seconds * 1000)),
   };
-}
-
-/** Smallest bucket upper bound whose cumulative count reaches `q × total`. */
-function bucketQuantile(metrics: HttpMetrics, q: number): number {
-  const target = Math.ceil(metrics.durationCount * q);
-  let cumulative = 0;
-  for (let i = 0; i < metrics.durationBuckets.length; i++) {
-    cumulative += metrics.durationBuckets[i] ?? 0;
-    if (cumulative >= target) {
-      return DURATION_BUCKETS_MS[i] ?? DURATION_BUCKETS_MS[DURATION_BUCKETS_MS.length - 1] ?? 0;
-    }
-  }
-  return DURATION_BUCKETS_MS[DURATION_BUCKETS_MS.length - 1] ?? 0;
 }
 
 const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
@@ -350,23 +324,14 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
         }
         lines.push("");
 
-        // Request duration — bucketed histogram quantile bounds, O(#buckets)
-        // per scrape (see DURATION_BUCKETS_MS). Quantiles are the bucket
-        // UPPER BOUND containing the target rank — conservative, and
-        // aggregatable across instances unlike sorted-sample quantiles.
-        if (httpMetrics.durationCount > 0) {
-          const p50 = bucketQuantile(httpMetrics, 0.5);
-          const p95 = bucketQuantile(httpMetrics, 0.95);
-          const p99 = bucketQuantile(httpMetrics, 0.99);
-
+        const samples = httpMetrics.duration.values();
+        if (samples.length > 0) {
           lines.push(
-            "# HELP http_request_duration_milliseconds HTTP request duration (bucket upper bounds)",
-            "# TYPE http_request_duration_milliseconds summary",
-            `http_request_duration_milliseconds{quantile="0.5"} ${p50.toFixed(2)}`,
-            `http_request_duration_milliseconds{quantile="0.95"} ${p95.toFixed(2)}`,
-            `http_request_duration_milliseconds{quantile="0.99"} ${p99.toFixed(2)}`,
-            `http_request_duration_milliseconds_sum ${httpMetrics.durationSumMs.toFixed(2)}`,
-            `http_request_duration_milliseconds_count ${httpMetrics.durationCount}`,
+            "# HELP http_request_duration_milliseconds HTTP request duration in milliseconds",
+            "# TYPE http_request_duration_milliseconds histogram",
+            ...samples.map((sample) =>
+              renderMetricSample("http_request_duration_milliseconds", sample),
+            ),
             "",
           );
         }
@@ -388,18 +353,7 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
       const statusBucket = `${Math.floor(reply.statusCode / 100)}xx`;
       httpMetrics.requestsTotal[statusBucket] = (httpMetrics.requestsTotal[statusBucket] || 0) + 1;
 
-      // Bucketed recording — O(#buckets) worst case, no sample retention.
-      let bucket: number = DURATION_BUCKETS_MS.length; // overflow slot
-      for (let i = 0; i < DURATION_BUCKETS_MS.length; i++) {
-        const bound = DURATION_BUCKETS_MS[i];
-        if (bound !== undefined && duration <= bound) {
-          bucket = i;
-          break;
-        }
-      }
-      httpMetrics.durationBuckets[bucket] = (httpMetrics.durationBuckets[bucket] ?? 0) + 1;
-      httpMetrics.durationCount++;
-      httpMetrics.durationSumMs += duration;
+      httpMetrics.duration.observe({}, duration);
     });
   }
 

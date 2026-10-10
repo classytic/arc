@@ -18,6 +18,8 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { idempotencyPlugin } from "../../src/idempotency/idempotencyPlugin.js";
+import { MemoryIdempotencyStore } from "../../src/idempotency/stores/memory.js";
+import type { RequestScope } from "../../src/scope/types.js";
 
 async function buildApp(opts?: {
   /** Optional handler delay (ms) to widen the race window. */
@@ -55,6 +57,125 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
   afterEach(async () => {
     await app?.close().catch(() => {});
   });
+
+  it("isolates replay by organization, team, context and principal kind", async () => {
+    app = Fastify();
+    await app.register(idempotencyPlugin, { enabled: true });
+    let scope: RequestScope = {
+      kind: "member",
+      userId: "same",
+      userRoles: [],
+      orgRoles: [],
+      organizationId: "org-a",
+      teamId: "team-a",
+      context: { branch: "a" },
+    };
+    app.addHook("preHandler", async (request) => {
+      request.scope = scope;
+      request.user = { id: "same" };
+    });
+    let effects = 0;
+    app.post("/tenant", { preHandler: [app.idempotency.middleware] }, async () => ({
+      effects: ++effects,
+    }));
+    const request = {
+      method: "POST" as const,
+      url: "/tenant",
+      headers: { "idempotency-key": "same" },
+    };
+    await app.inject(request);
+    expect((await app.inject(request)).headers["x-idempotency-replayed"]).toBe("true");
+    scope = { ...scope, organizationId: "org-b" };
+    await app.inject(request);
+    scope = { ...scope, teamId: "team-b" };
+    await app.inject(request);
+    scope = { ...scope, context: { branch: "b" } };
+    await app.inject(request);
+    scope = {
+      kind: "service",
+      clientId: "same",
+      organizationId: "org-b",
+      context: { branch: "b" },
+    };
+    await app.inject(request);
+    scope = { ...scope, clientId: "different" };
+    await app.inject(request);
+    expect(effects).toBe(6);
+  });
+
+  it.each([false, true])(
+    "rechecks completion after acquiring a lock (changed body: %s)",
+    async (changedBody) => {
+      const store = new MemoryIdempotencyStore();
+      const read = store.get.bind(store);
+      let release = () => {};
+      let captured = () => {};
+      const held = new Promise<void>((resolve) => {
+        captured = resolve;
+      });
+      const resume = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reads = 0;
+      store.get = async (key) => {
+        const result = await read(key);
+        if (++reads === 1) {
+          captured();
+          await resume;
+        }
+        return result;
+      };
+      app = Fastify();
+      await app.register(idempotencyPlugin, { enabled: true, store, selfCheck: false });
+      let effects = 0;
+      app.post("/race", { preHandler: [app.idempotency.middleware] }, async () => ({
+        effects: ++effects,
+      }));
+      const request = {
+        method: "POST" as const,
+        url: "/race",
+        headers: { "idempotency-key": "same" },
+        payload: { value: 1 },
+      };
+      const delayed = app
+        .inject({ ...request, payload: { value: changedBody ? 2 : 1 } })
+        .then((response) => response);
+      await held;
+      const completed = await app.inject(request);
+      release();
+      const response = await delayed;
+      expect(effects).toBe(1);
+      expect(response.statusCode).toBe(changedBody ? 422 : 200);
+      if (!changedBody) expect(response.json()).toEqual(completed.json());
+      await store.close();
+    },
+  );
+
+  it.each(["empty", "text", "buffer"])(
+    "records successful %s replies before releasing the lock",
+    async (shape) => {
+      app = Fastify();
+      await app.register(idempotencyPlugin, { enabled: true });
+      let effects = 0;
+      app.post("/shape", { preHandler: [app.idempotency.middleware] }, async (_request, reply) => {
+        effects++;
+        if (shape === "empty") return reply.code(204).send();
+        if (shape === "text") return reply.type("text/plain").send("done");
+        return reply.type("application/octet-stream").send(Buffer.from([0, 255, 128]));
+      });
+      const request = {
+        method: "POST" as const,
+        url: "/shape",
+        headers: { "idempotency-key": "same" },
+      };
+      const first = await app.inject(request);
+      const second = await app.inject(request);
+      expect(effects).toBe(1);
+      expect(second.statusCode).toBe(first.statusCode);
+      expect(second.rawPayload).toEqual(first.rawPayload);
+      expect(second.headers["x-idempotency-replayed"]).toBe("true");
+    },
+  );
 
   it("serializes 10 parallel same-key requests: 1 writes, 9 get 409", async () => {
     const built = await buildApp({ handlerDelayMs: 30 });

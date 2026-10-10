@@ -68,13 +68,29 @@ describe("verifyEventDurability", () => {
   });
 });
 
-describe("createApp — durability is reported, never blocks (phase 1)", () => {
+describe("createApp — graph durability policy", () => {
+  it("refuses strict graphs with a durable publisher lacking a transactional outbox", async () => {
+    const error = await createApp({
+      auth: false,
+      logger: false,
+      moduleGraph: { events: "strict" },
+      modules: [defineModule({ name: "order", publishes: [GoodsIssued] })],
+    }).then(
+      async (app) => {
+        await app.close();
+        return undefined;
+      },
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/durable.*outbox/);
+  });
   async function bootLines(store: MemoryOutboxStore): Promise<string[]> {
     const lines: string[] = [];
     const app = await createApp({
       auth: false,
       logger: { level: "warn", stream: { write: (s: string) => void lines.push(s) } },
-      moduleGraph: { events: "strict" },
+      moduleGraph: { events: "warn" },
       modules: [
         createOutboxModule({ store, relayEveryMs: 60_000, runOnStart: false, health: false }),
         defineModule({ name: "order", dependsOn: ["outbox"], publishes: [GoodsIssued] }),
@@ -89,7 +105,7 @@ describe("createApp — durability is reported, never blocks (phase 1)", () => {
     return lines.filter((l) => l.includes("durab"));
   }
 
-  it("boots under strict, and warns about the undeclared consumer and a non-transactional outbox", async () => {
+  it("boots under warn, and reports the undeclared consumer and a non-transactional outbox", async () => {
     const lines = await bootLines(new MemoryOutboxStore());
     expect(lines.some((l) => l.includes("durable-without-outbox"))).toBe(true);
     expect(lines.some((l) => l.includes("accounting.cogs"))).toBe(true);

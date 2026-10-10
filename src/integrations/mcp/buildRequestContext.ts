@@ -6,6 +6,7 @@
  * as REST requests (AccessControl, BodySanitizer, QueryResolver, HookSystem).
  */
 
+import { prepareTenantContext } from "../../core/tenantPreparation.js";
 import { buildRequestScopeProjection } from "../../scope/projection.js";
 import type { RequestScope } from "../../scope/types.js";
 import type { ServerAccessor } from "../../types/handlers.js";
@@ -30,6 +31,7 @@ export type McpOperation = "list" | "get" | "create" | "update" | "delete" | "ac
  * `resourceToTools({ wiring })` to restore full HTTP ↔ MCP parity.
  */
 export interface McpContextExtras {
+  tenantMiddlewares?: readonly unknown[];
   /**
    * Resource wiring — becomes `metadata.arc`, the same frozen shape
    * `buildArcDecorator` stamps on HTTP requests (`ArcRouteMeta`).
@@ -106,9 +108,14 @@ export function buildRequestContext(
     ...(extras?.server ? { server: extras.server } : {}),
   };
 
+  const prepared = (ctx: IRequestContext): IRequestContext => {
+    prepareTenantContext(ctx, extras?.tenantMiddlewares);
+    return ctx;
+  };
+
   switch (operation) {
     case "list":
-      return { ...base, params: {}, query: expandOperatorKeys(input), body: undefined };
+      return prepared({ ...base, params: {}, query: expandOperatorKeys(input), body: undefined });
 
     case "get": {
       // CRUD `get` tools only ever pass `{ id }` — but a custom route
@@ -117,36 +124,41 @@ export function buildRequestContext(
       // route handlers that read `ctx.query.mode` keep working when
       // auto-bridged to MCP. Pre-2.15.5 the extras silently disappeared.
       const { id, ...rest } = input;
-      return {
+      return prepared({
         ...base,
         params: { id: String(id ?? "") },
         query: expandOperatorKeys(rest),
         body: undefined,
-      };
+      });
     }
 
     case "create": {
-      return { ...base, params: {}, query: {}, body: { ...input } };
+      return prepared({ ...base, params: {}, query: {}, body: { ...input } });
     }
 
     case "update": {
       const { id: _id, ...body } = input;
-      return { ...base, params: { id: String(_id ?? "") }, query: {}, body };
+      return prepared({ ...base, params: { id: String(_id ?? "") }, query: {}, body });
     }
 
     case "delete":
-      return { ...base, params: { id: String(input.id ?? "") }, query: {}, body: undefined };
+      return prepared({
+        ...base,
+        params: { id: String(input.id ?? "") },
+        query: {},
+        body: undefined,
+      });
 
     case "action": {
       // Action: id in params, everything else (minus id) in body.
       // The `action` field should already be in input if the caller added it.
       const { id: _actionId, ...actionBody } = input;
-      return {
+      return prepared({
         ...base,
         params: { id: String(_actionId ?? "") },
         query: {},
         body: actionBody,
-      };
+      });
     }
   }
 }

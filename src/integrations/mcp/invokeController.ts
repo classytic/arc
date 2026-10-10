@@ -32,7 +32,7 @@ import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { RequestScope } from "../../scope/types.js";
 import type { ServerAccessor } from "../../types/handlers.js";
-import type { IControllerResponse } from "../../types/index.js";
+import type { ArcInternalMetadata, IControllerResponse } from "../../types/index.js";
 import {
   buildRequestContext as buildRequestContextInternal,
   type McpContextExtras,
@@ -70,6 +70,7 @@ type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
 export interface InvokeControllerOptions {
   /** Resolved identity for this invocation — `null` runs as public scope. */
   readonly session: McpAuthResult | null;
+  readonly tenantMiddlewares?: readonly unknown[];
   /** Resource name surfaced into the permission context (`PermissionContext.resource`). */
   readonly resourceName: string;
   /**
@@ -128,8 +129,9 @@ export interface InvokeControllerOptions {
  */
 function buildContextExtras(options: InvokeControllerOptions): McpContextExtras | undefined {
   const { wiring, resourceName, permissions, fields, schemaOptions, idField } = options;
-  if (!wiring) return undefined;
+  if (!wiring) return { tenantMiddlewares: options.tenantMiddlewares };
   return {
+    tenantMiddlewares: options.tenantMiddlewares,
     arc: {
       resourceName,
       schemaOptions,
@@ -146,7 +148,6 @@ function buildContextExtras(options: InvokeControllerOptions): McpContextExtras 
     },
   };
 }
-
 
 /**
  * Invoke a controller method through the MCP synthetic-context path.
@@ -224,15 +225,15 @@ export async function invokeController(
       });
     }
 
+    const reqCtx = buildRequestContextInternal(
+      input,
+      session,
+      op,
+      permResult?.policy,
+      permResult?.scope as RequestScope | undefined,
+      buildContextExtras(options),
+    );
     const dispatch = async (): Promise<CallToolResult> => {
-      const reqCtx = buildRequestContextInternal(
-        input,
-        session,
-        op,
-        permResult?.policy,
-        permResult?.scope as RequestScope | undefined,
-        buildContextExtras(options),
-      );
       const response = await method(reqCtx);
       // Field-read masking — same policy step the HTTP adapter runs in
       // `sendControllerResponse`. Applied AFTER dispatch so hooks/pipeline
@@ -255,6 +256,7 @@ export async function invokeController(
         operation: actionName,
         input,
         session,
+        scope: (reqCtx.metadata as ArcInternalMetadata)._scope,
         dispatch,
       });
     }

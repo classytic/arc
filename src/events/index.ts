@@ -54,7 +54,13 @@ export {
   crudEventType,
 } from "./eventTypes.js";
 /** Per-handler inbox: a redelivery re-runs only the handler that failed. */
-export { EVENT_INBOX_OPERATION, type InboxOptions, withInbox } from "./inbox.js";
+export {
+  EVENT_INBOX_OPERATION,
+  type InboxHandler,
+  type InboxHandlerContext,
+  type InboxOptions,
+  withInbox,
+} from "./inbox.js";
 export type { OutboxHealth, OutboxHealthStore } from "./outbox/health.js";
 export { DEFAULT_RELAY_LAG_UNHEALTHY_MS, readOutboxHealth } from "./outbox/health.js";
 // Transactional Outbox — arc ships the RUNTIME only. The outbox CONTRACT
@@ -115,6 +121,7 @@ export {
   wrapWithBoundary,
   wrapWithSchema,
 } from "./subscribe-helpers.js";
+export { withSubscriberId } from "./subscriberIdentity.js";
 // Redis transports — use dedicated subpaths to avoid pulling ioredis:
 //   import { RedisEventTransport } from '@classytic/arc/events/redis';
 //   import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
