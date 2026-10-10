@@ -68,6 +68,12 @@ export interface EventHandlerDefinition {
    * boundary, so a throwing `onError` is caught and logged too.
    */
   boundary?: boolean | { onError?: (error: Error, event: DomainEvent) => void | Promise<void> };
+  /**
+   * What a failure means for a DURABLE event: `'retry'` rethrows to the relay (pair with
+   * `withInbox` so a redelivery re-runs only this handler); `'boundary'` may swallow and is
+   * the same as `boundary: true`. The module graph reports a durable event's handler without it.
+   */
+  durability?: "retry" | "boundary";
 }
 
 export interface ArcModule<

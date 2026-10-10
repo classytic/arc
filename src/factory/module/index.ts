@@ -35,8 +35,10 @@ export {
   type CrudSurface,
   crudEventsOf,
   type DerivedPublishes,
+  type DurabilityFacts,
   dependentsOf,
   eventTopology,
+  type HandlerDurabilityFact,
   type ModuleGraph,
   type ModuleGraphAnalysis,
   type ModuleGraphIssue,
@@ -46,6 +48,7 @@ export {
   type ModuleKind,
   renderModuleGraph,
   type SkippedBridge,
+  verifyEventDurability,
   verifyModuleGraph,
 } from "./graph.js";
 export { subscribeModuleEventHandlers, unsubscribeModuleEventHandlers } from "./lifecycle.js";

@@ -82,6 +82,7 @@ export {
   createRelayNudge,
   crudEventsOf,
   type DerivedPublishes,
+  type DurabilityFacts,
   defineModule,
   dependentsOf,
   type EventHandlerDefinition,
@@ -91,6 +92,7 @@ export {
   getModuleResources,
   getModuleState,
   getOptionalModuleExports,
+  type HandlerDurabilityFact,
   hasModule,
   hasModuleExports,
   type LazyBridge,
@@ -128,6 +130,7 @@ export {
   type SkippedBridge,
   subscribeModuleEventHandlers,
   toAsyncApi,
+  verifyEventDurability,
   verifyModuleGraph,
   withRelayNudge,
 } from "./module/index.js";

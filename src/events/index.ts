@@ -53,6 +53,8 @@ export {
   type CrudEventSuffix,
   crudEventType,
 } from "./eventTypes.js";
+/** Per-handler inbox: a redelivery re-runs only the handler that failed. */
+export { EVENT_INBOX_OPERATION, type InboxOptions, withInbox } from "./inbox.js";
 export type { OutboxHealth, OutboxHealthStore } from "./outbox/health.js";
 export { DEFAULT_RELAY_LAG_UNHEALTHY_MS, readOutboxHealth } from "./outbox/health.js";
 // Transactional Outbox — arc ships the RUNTIME only. The outbox CONTRACT

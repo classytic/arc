@@ -10,7 +10,9 @@ import {
   buildModuleGraph,
   crudEventsOf,
   type DerivedPublishes,
+  type HandlerDurabilityFact,
   type SkippedBridge,
+  verifyEventDurability,
   verifyModuleGraph,
 } from "./module/graph.js";
 import {
@@ -19,6 +21,7 @@ import {
   createDisposerRegistry,
   createModuleTeardown,
   describeResolvedModule,
+  getOptionalModuleExports,
   initModuleStates,
   setModuleState,
   subscribeModuleEventHandlers,
@@ -513,11 +516,13 @@ export async function registerResources(
     // failures after full activation.
     const subscriptionCounts = new Map<string, number>();
     const consumedByModule = new Map<string, string[]>();
+    const handlersByModule = new Map<string, HandlerDurabilityFact[]>();
     eventUnsubscribes = await subscribeModuleEventHandlers(
       fastify,
       modules,
       subscriptionCounts,
       consumedByModule,
+      handlersByModule,
     );
 
     // ── 6b'. The module graph — who owns which event, who consumes it — checked here, where
@@ -588,6 +593,17 @@ export async function registerResources(
       }
       for (const issue of issues)
         fastify.log.warn({ issue }, `[arc] module graph: ${issue.message}`);
+      // Durability is REPORTED in every mode until each money event is declared.
+      const outboxModules = new Set(
+        modules
+          .filter((m) => isTransactionalOutbox(getOptionalModuleExports(fastify, m.name)))
+          .map((m) => m.name),
+      );
+      for (const issue of verifyEventDurability(modules, {
+        outboxModules,
+        handlers: handlersByModule,
+      }))
+        fastify.log.warn({ issue }, `[arc] module graph (${issue.code}): ${issue.message}`);
     }
     if (fastify.arc) fastify.arc.moduleGraph = moduleGraph;
 
@@ -744,4 +760,16 @@ function watchUndeclaredEvents(
   });
   fastify.addHook("onClose", async () => stop());
   return undeclared;
+}
+
+/** A module export that is an outbox whose `save` enlists the caller's session. */
+function isTransactionalOutbox(exports: unknown): boolean {
+  if (typeof exports !== "object" || exports === null || !("store" in exports)) return false;
+  const store: unknown = exports.store;
+  return (
+    typeof store === "object" &&
+    store !== null &&
+    "transactionalSave" in store &&
+    store.transactionalSave === true
+  );
 }

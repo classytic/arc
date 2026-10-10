@@ -52,7 +52,12 @@ export interface ModuleGraph {
 }
 
 export interface ModuleGraphIssue {
-  readonly code: "duplicate-owner" | "outside-namespace" | "no-publisher";
+  readonly code:
+    | "duplicate-owner"
+    | "outside-namespace"
+    | "no-publisher"
+    | "durable-without-outbox"
+    | "durable-consumer-undeclared";
   readonly module: string;
   readonly event: string;
   readonly message: string;
@@ -241,6 +246,69 @@ export function verifyModuleGraph(
         event: pattern,
         message: `module "${m.name}" consumes "${pattern}", which no active module publishes — declare the owner's \`publishes\`, list it in \`moduleGraph.externalEvents\`, or make "${m.name}" a bridge of the module that owns it.`,
       });
+    }
+  }
+  return issues;
+}
+
+/** A subscribed handler as the durability check sees it. */
+export interface HandlerDurabilityFact {
+  readonly label: string;
+  readonly patterns: readonly string[];
+  readonly durability?: "retry" | "boundary";
+}
+
+export interface DurabilityFacts {
+  /** Modules whose export is an outbox with `transactionalSave === true`. */
+  readonly outboxModules: ReadonlySet<string>;
+  /** Module → the handlers it subscribed. */
+  readonly handlers: ReadonlyMap<string, readonly HandlerDurabilityFact[]>;
+}
+
+/** The events a module declares `durability: 'durable'` in its `publishes`. */
+export function durablePublishes(m: ArcModule): string[] {
+  return (m.publishes ?? []).flatMap((e) =>
+    typeof e !== "string" && "durability" in e && e.durability === "durable" ? [e.name] : [],
+  );
+}
+
+/**
+ * A durable event's publisher must `dependsOn` a transactional outbox, and each of its handlers
+ * must declare `durability` (`'retry'` rethrows to the relay; `'boundary'` may swallow).
+ */
+export function verifyEventDurability(
+  modules: readonly ArcModule[],
+  facts: DurabilityFacts,
+): ModuleGraphIssue[] {
+  const issues: ModuleGraphIssue[] = [];
+  const durable = new Set<string>();
+  for (const m of modules) {
+    const events = durablePublishes(m);
+    for (const event of events) durable.add(event);
+    if (events.length === 0 || (m.dependsOn ?? []).some((d) => facts.outboxModules.has(d)))
+      continue;
+    for (const event of events) {
+      issues.push({
+        code: "durable-without-outbox",
+        module: m.name,
+        event,
+        message: `module "${m.name}" publishes durable "${event}" but depends on no outbox with transactionalSave — its row cannot commit with the write.`,
+      });
+    }
+  }
+  if (durable.size === 0) return issues;
+  for (const [moduleName, handlers] of facts.handlers) {
+    for (const h of handlers) {
+      if (h.durability !== undefined) continue;
+      for (const event of durable) {
+        if (!h.patterns.some((p) => matchEventPattern(p, event))) continue;
+        issues.push({
+          code: "durable-consumer-undeclared",
+          module: moduleName,
+          event,
+          message: `handler "${h.label}" consumes durable "${event}" without declaring durability ('retry' or 'boundary').`,
+        });
+      }
     }
   }
   return issues;

@@ -6,6 +6,7 @@
 import type { FastifyInstance } from "fastify";
 import type { EventHandler } from "../../events/EventTransport.js";
 import { wrapWithAttribution, wrapWithBoundary } from "../../events/subscribe-helpers.js";
+import type { HandlerDurabilityFact } from "./graph.js";
 import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule, EventHandlerDefinition } from "./types.js";
 
@@ -30,6 +31,8 @@ export async function subscribeModuleEventHandlers(
   /** Per-module handler counts, so descriptors never re-resolve the factories. */
   countsByModule?: Map<string, number>,
   consumedByModule?: Map<string, string[]>,
+  /** Per-module handler facts for the durability check. */
+  handlersByModule?: Map<string, HandlerDurabilityFact[]>,
 ): Promise<Array<() => void | Promise<void>>> {
   const unsubscribes: Array<() => void | Promise<void>> = [];
   const owner = new Map<string, string>();
@@ -55,12 +58,21 @@ export async function subscribeModuleEventHandlers(
           owner.set(def.name, m.name);
         }
         const patterns = Array.isArray(def.event) ? def.event : [def.event as string];
-        const handler = applyBoundary(
-          def,
-          m.name,
-          handlerLabel(def, m.name, patterns, index),
-          fastify,
-        );
+        if (def.durability === "retry" && def.boundary) {
+          throw new Error(
+            `[arc] event handler "${def.name ?? patterns.join(",")}" in module "${m.name}" declares durability 'retry' and a boundary — a boundary swallows, so it is 'boundary'.`,
+          );
+        }
+        const label = handlerLabel(def, m.name, patterns, index);
+        const handler = applyBoundary(def, m.name, label, fastify);
+        handlersByModule?.set(m.name, [
+          ...(handlersByModule.get(m.name) ?? []),
+          {
+            label,
+            patterns,
+            ...(def.durability !== undefined ? { durability: def.durability } : {}),
+          },
+        ]);
         consumedByModule?.set(m.name, [...(consumedByModule.get(m.name) ?? []), ...patterns]);
         for (const pattern of patterns) {
           unsubscribes.push(await bus.subscribe(pattern, handler));
@@ -107,8 +119,9 @@ function applyBoundary(
   label: string,
   fastify: FastifyInstance,
 ): EventHandler {
-  if (!def.boundary) return wrapWithAttribution(def.handler, label);
-  const onError = typeof def.boundary === "object" ? def.boundary.onError : undefined;
+  const boundary = def.boundary ?? def.durability === "boundary";
+  if (!boundary) return wrapWithAttribution(def.handler, label);
+  const onError = typeof boundary === "object" ? boundary.onError : undefined;
   return wrapWithBoundary(def.handler, {
     logger: fastify.log,
     name: def.name ?? `${moduleName}.${String(def.event)}`,
