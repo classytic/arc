@@ -6,7 +6,7 @@
  * Canonical order (CRUD + Actions + Aggregations must agree):
  *
  *   onRequest:  preAuth → arcDecorator → authMw
- *   preHandler: prePermission → permissionMw → validationGate → pluginMw → routeGuards → customMws
+ *   preHandler: prePermission → permissionMw → validationGate → tenantPreparation → routeGuards → pluginMw → customMws
  *
  * Auth runs before body parse; the permission gate runs before a schema error is
  * surfaced, so a refused caller gets 401/403 and never a 400 that leaks the schema.
@@ -21,6 +21,7 @@ import type {
   RouteHandlerMethod,
 } from "fastify";
 
+import { isTenantPreparation } from "../../permissions/tenantPreparation.js";
 import type { FastifyWithDecorators } from "../../types/index.js";
 
 /**
@@ -34,13 +35,19 @@ export type PreHandlerHook = preHandlerHookHandler | RouteHandlerMethod;
 export interface RouteHookChains {
   /** `preAuth → arcDecorator → authMw` — headers/cookies/params only; body does not exist yet. */
   onRequest: PreHandlerHook[];
-  /** `prePermission → permissionMw → validationGate → pluginMw → routeGuards → customMws`. */
+  /** `prePermission → permissionMw → validationGate → tenantPreparation → routeGuards → pluginMw → customMws`. */
   preHandler: PreHandlerHook[];
   /** True iff `preHandler` carries a validation gate — the route must park AJV errors. */
   attachValidation: boolean;
 }
 
 const validationGates = new WeakSet<PreHandlerHook>();
+const replayBoundaries = new WeakSet<PreHandlerHook>();
+
+/** Rate limiting belongs before a response cache or idempotency replay can return. */
+export function isReplayBoundary(hook: unknown): boolean {
+  return typeof hook === "function" && replayBoundaries.has(hook as PreHandlerHook);
+}
 
 /** True iff `hook` is a validation gate built by `buildRouteHooks`. */
 export function isValidationGate(hook: unknown): boolean {
@@ -93,6 +100,10 @@ export function buildRouteHooks(parts: {
 }): RouteHookChains {
   // No permission gate = public route: Fastify rejects invalid input at preValidation as before.
   const gated = Boolean(parts.permissionMw);
+  const customMws = parts.customMws ?? [];
+  const tenancy = customMws.filter(isTenantPreparation);
+  const remaining = customMws.filter((middleware) => !isTenantPreparation(middleware));
+  if (parts.pluginMw) replayBoundaries.add(parts.pluginMw);
   return {
     onRequest: [...(parts.preAuth ?? []), parts.arcDecorator, parts.authMw ?? null].filter(
       Boolean,
@@ -101,9 +112,10 @@ export function buildRouteHooks(parts: {
       gated ? (parts.prePermission ?? null) : null,
       parts.permissionMw ?? null,
       gated ? buildValidationGate(parts.validationFormatter) : null,
-      parts.pluginMw ?? null,
+      ...tenancy,
       ...(parts.routeGuards ?? []),
-      ...(parts.customMws ?? []),
+      parts.pluginMw ?? null,
+      ...remaining,
     ].filter(Boolean) as PreHandlerHook[],
     attachValidation: gated,
   };

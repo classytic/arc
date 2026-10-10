@@ -144,11 +144,13 @@ export class ResourceRegistry {
           ? {
               idempotency: {
                 required: true,
-                ...((r.config?.idempotency as { dedup?: "handler"; owner?: string }).dedup ===
-                "handler"
+                ...((r.config?.idempotency as { dedup?: "handler"; owner?: string } | undefined)
+                  ?.dedup === "handler"
                   ? {
                       dedup: "handler" as const,
-                      owner: String((r.config?.idempotency as { owner?: string }).owner),
+                      owner: String(
+                        (r.config?.idempotency as { owner?: string } | undefined)?.owner,
+                      ),
                     }
                   : {}),
               },

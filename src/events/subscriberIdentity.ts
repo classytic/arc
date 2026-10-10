@@ -17,3 +17,14 @@ export function getSubscriberId(handler: EventHandler<never>): string | undefine
   const id: unknown = Reflect.get(handler, SUBSCRIBER_ID);
   return typeof id === "string" ? id : undefined;
 }
+
+/** Preserve explicit IDs and the implicit function name through framework wrappers. */
+export function preserveSubscriberIdentity<T>(
+  original: EventHandler<T>,
+  wrapper: EventHandler<T>,
+): EventHandler<T> {
+  const id = getSubscriberId(original);
+  if (id !== undefined) Object.defineProperty(wrapper, SUBSCRIBER_ID, { value: id });
+  Object.defineProperty(wrapper, "name", { value: original.name, configurable: true });
+  return wrapper;
+}

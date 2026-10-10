@@ -2,8 +2,11 @@
  * A partially failed stream message must not re-run the handlers that already completed it —
  * on retry, on ANY replica, only the handlers that have not finished run again.
  */
+import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import type { DomainEvent } from "../../src/events/EventTransport.js";
+import { eventPlugin } from "../../src/events/eventPlugin.js";
+import { withRetry } from "../../src/events/retry.js";
 import { withSubscriberId } from "../../src/events/subscriberIdentity.js";
 import { RedisStreamTransport } from "../../src/events/transports/redis-stream.js";
 
@@ -66,6 +69,43 @@ function replica(
 }
 
 describe("RedisStreamTransport — per-handler progress across a retry", () => {
+  it.each(["plain", "automatic retry", "explicit retry"])(
+    "preserves named subscriber identities through eventPlugin with %s",
+    async (mode) => {
+      const redis = sharedRedis();
+      const transport = new RedisStreamTransport(redis as never, {
+        logger: silent,
+        externalLifecycle: true,
+      });
+      const app = Fastify();
+      try {
+        await app.register(eventPlugin, {
+          transport,
+          retry: mode === "automatic retry" ? { maxRetries: 0 } : undefined,
+        });
+        const calls: string[] = [];
+        async function ledger() {
+          calls.push("ledger");
+        }
+        async function notify() {
+          calls.push("notify");
+        }
+        const wrap =
+          mode === "explicit retry"
+            ? (handler: typeof ledger) => withRetry(handler, { maxRetries: 0 })
+            : (handler: typeof ledger) => handler;
+        await app.events.subscribe("order:*", wrap(ledger));
+        await app.events.subscribe("order:*", wrap(notify));
+        const internals = transport as unknown as Internals;
+        expect([...internals.handlerKeys.values()]).toEqual(["order:*#ledger", "order:*#notify"]);
+        await internals.processEntry("1-0", fields("order:created"));
+        expect(calls).toEqual(["ledger", "notify"]);
+      } finally {
+        await app.close();
+      }
+    },
+  );
+
   it("reordered anonymous subscribers retain their own completion records across replicas", async () => {
     const redis = sharedRedis();
     const calls: string[] = [];
@@ -118,6 +158,30 @@ describe("RedisStreamTransport — per-handler progress across a retry", () => {
         withSubscriberId("ledger", async () => {}),
       ),
     ).resolves.toBeTypeOf("function");
+  });
+
+  it("releases subscriber identities on close and ignores a stale unsubscribe", async () => {
+    const redis = { ...sharedRedis(), quit: vi.fn(async () => "OK") };
+    const t = new RedisStreamTransport(redis as never, { logger: silent, externalLifecycle: true });
+    t.hold();
+    const old = await t.subscribe(
+      "order:*",
+      withSubscriberId("ledger", async () => {}),
+    );
+    await t.close();
+    await expect(
+      t.subscribe(
+        "order:*",
+        withSubscriberId("ledger", async () => {}),
+      ),
+    ).resolves.toBeTypeOf("function");
+    old();
+    await expect(
+      t.subscribe(
+        "order:*",
+        withSubscriberId("ledger", async () => {}),
+      ),
+    ).rejects.toThrow(/Ambiguous subscriber identity/);
   });
   it("a retry on another replica runs only the handler that failed; success clears the record", async () => {
     const redis = sharedRedis();

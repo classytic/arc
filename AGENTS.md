@@ -28,7 +28,7 @@ How to WORK on arc. One fact lives in one place:
 
 **Layering.** Modules form a DAG enforced by `npm run check:boundaries` (a release gate). Runtime imports may only point DOWN; type-only and lazy `await import()` are exempt (erased / deferred, so they cannot init-cycle). Adding an upward runtime import fails the build — that is the gate working, not an obstacle to route around.
 
-Roughly: `utils`/`types`/`logger` (L1) → `core`/`permissions`/`scope` (L2) → `events`/`cache`/`hooks` (L3) → `plugins`/`integrations` (L4) → `factory` (L5, composes everything). `factory` may import anything; nothing imports `factory` at runtime.
+The exact layer map lives in `scripts/check-boundaries.mjs`: shared identity/utilities → policy/request plumbing → resource execution → delivery plugins → composition roots. Keep cross-transport policies below the resource layer; `factory` composes the graph.
 
 **Boot order is fixed** — see the lifecycle table in CLAUDE.md. Do not reorder or skip slots.
 

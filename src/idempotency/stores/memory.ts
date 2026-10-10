@@ -60,12 +60,29 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
   }
 
   async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
+    this.writeResult(key, result);
+  }
+
+  private writeResult(key: string, result: Omit<IdempotencyResult, "key">): void {
     // Evict oldest if at capacity
     if (this.results.size >= this.maxEntries) {
       this.evictOldest();
     }
 
     this.results.set(key, { ...result, key });
+  }
+
+  async setIfLocked(
+    key: string,
+    requestId: string,
+    result: Omit<IdempotencyResult, "key">,
+  ): Promise<boolean> {
+    const lock = this.locks.get(key);
+    if (!lock || lock.requestId !== requestId || lock.expiresAt.getTime() <= Date.now())
+      return false;
+    // No await or overridable method between the ownership check and write.
+    this.writeResult(key, result);
+    return true;
   }
 
   async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {

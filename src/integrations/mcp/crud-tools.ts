@@ -14,13 +14,12 @@
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { ResourcePermissions } from "../../types/index.js";
 import { pluralize } from "../../utils/pluralize.js";
-import { idempotencyKeyRequiredResult, rateLimitedResult } from "./http-parity.js";
+import { idempotencyKeyRequiredResult, type ToolAdmission } from "./http-parity.js";
 import { invokeController } from "./invokeController.js";
 import type {
   CrudDescriptionMeta,
   CrudDescriptionOverride,
   CrudOperation,
-  McpAuthResult,
   McpExecutionWiring,
   ToolAnnotations,
   ToolDefinition,
@@ -59,14 +58,13 @@ export function createCrudHandler(
     /** The route declares `idempotency.required` for this op: a keyless call is refused. */
     keyRequired?: boolean;
     /** The resource's HTTP rate limit, per caller. */
-    allow?: (session: McpAuthResult | null) => boolean | Promise<boolean>;
+    allow?: ToolAdmission;
     toolName?: string;
   },
 ): ToolDefinition["handler"] {
   const permission = permissions?.[op as keyof ResourcePermissions];
   const toolName = extras?.toolName ?? `${op}_${resourceName}`;
   return async (input, ctx) => {
-    if (extras?.allow && !(await extras.allow(ctx.session))) return rateLimitedResult(toolName);
     if (
       extras?.keyRequired &&
       (typeof input._idempotencyKey !== "string" || input._idempotencyKey === "")
@@ -86,6 +84,7 @@ export function createCrudHandler(
     }
     return invokeController(controller, op, payload, {
       session: ctx.session,
+      allow: extras?.allow,
       resourceName,
       permissions: permission,
       fields,

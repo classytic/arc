@@ -259,7 +259,7 @@ describe("buildRouteHooks — canonical hook placement", () => {
     const [perm, gate, ...rest] = hooks.preHandler;
     expect(perm).toBe(permissionMw);
     expect(isValidationGate(gate)).toBe(true);
-    expect(rest).toEqual([pluginMw, guard1, guard2, custom1]);
+    expect(rest).toEqual([guard1, guard2, pluginMw, custom1]);
     expect(hooks.attachValidation).toBe(true);
     expect(routeHookOptions(hooks).attachValidation).toBe(true);
   });

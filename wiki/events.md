@@ -2,7 +2,7 @@
 
 **Summary**: `EventPlugin` publishes domain events via pluggable transports. Publishing is fire-and-forget by default. Use the outbox for guaranteed delivery.
 **Sources**: src/events/.
-**Last updated**: 2026-08-23 (duplicate-publish warn corrected — `eventStrategy` never existed).
+**Last updated**: 2026-10-10 (stable subscriber progress and transaction-aware inbox completion).
 
 ---
 
@@ -53,7 +53,7 @@ If publishing fails, the HTTP request still succeeds. For guaranteed delivery, u
 
 ## Outbox (v2.9+)
 
-Pattern for exactly-once-effective delivery with DB-level atomicity.
+Transactional enqueue with at-least-once relay; consumer effects need idempotency or atomic inbox completion.
 
 ```ts
 new EventOutbox({ repository, transport });  // repository is any RepositoryLike — see [[adapters]]

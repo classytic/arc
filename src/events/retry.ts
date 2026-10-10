@@ -36,6 +36,7 @@ import type {
   EventLogger,
   EventTransport,
 } from "./EventTransport.js";
+import { preserveSubscriberIdentity } from "./subscriberIdentity.js";
 
 export interface RetryOptions {
   /**
@@ -155,7 +156,7 @@ export function withRetry<T = unknown>(
 
   const label = name ?? handler.name ?? "anonymous";
 
-  return async (event: DomainEvent<T>): Promise<void> => {
+  return preserveSubscriberIdentity(handler, async (event: DomainEvent<T>): Promise<void> => {
     const errors: Error[] = [];
     let firstFailedAt: Date | undefined;
     let lastFailedAt: Date | undefined;
@@ -264,7 +265,7 @@ export function withRetry<T = unknown>(
         { cause: dlqPersistError },
       );
     }
-  };
+  });
 }
 
 /**

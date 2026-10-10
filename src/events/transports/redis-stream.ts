@@ -354,7 +354,7 @@ export class RedisStreamTransport implements EventTransport {
       patterns.delete(pattern);
       if (patterns.size === 0) {
         const key = this.handlerKeys.get(handler);
-        if (key) this.handlerKeyOwners.delete(key);
+        if (key && this.handlerKeyOwners.get(key) === handler) this.handlerKeyOwners.delete(key);
         this.handlerKeys.delete(handler);
         this.handlerPatterns.delete(handler);
       }
@@ -416,6 +416,9 @@ export class RedisStreamTransport implements EventTransport {
     this.generation++;
     this.router.clear();
     this.failureContext.clear();
+    this.handlerKeys.clear();
+    this.handlerKeyOwners.clear();
+    this.handlerPatterns.clear();
 
     if (this.pollPromise !== null) {
       const drained = await Promise.race([

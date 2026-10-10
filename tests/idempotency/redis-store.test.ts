@@ -87,6 +87,14 @@ function createMockRedis(): RedisClient & {
     },
 
     async eval(script: string, _numkeys: number, ...args: (string | number)[]): Promise<unknown> {
+      if (script.includes('redis.call("set"')) {
+        const lock = String(args[0]),
+          resultKey = String(args[1]),
+          owner = String(args[2]);
+        if (!isAlive(lock) || store.get(lock)?.value !== owner) return 0;
+        store.set(resultKey, { value: String(args[3]), expiresAt: Date.now() + Number(args[4]) });
+        return 1;
+      }
       // Minimal Lua interpreter for the unlock script:
       // if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0
       const key = String(args[0]);
@@ -117,6 +125,48 @@ describe("RedisIdempotencyStore", () => {
     store = new RedisIdempotencyStore({ client: redis, ttlMs: 60_000 });
   });
 
+  it("fences completion by live ownership and places lock and response in the same cluster slot", async () => {
+    const result = {
+      statusCode: 200,
+      headers: {},
+      body: "winner",
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60000),
+    };
+    await store.tryLock("fenced", "old", 30000);
+    const lockKey = [...redis._store.keys()][0] as string;
+    const expired = redis._store.get(lockKey);
+    if (expired) expired.expiresAt = Date.now() - 1;
+    expect(await store.setIfLocked("fenced", "old", result)).toBe(false);
+    await store.tryLock("fenced", "new", 30000);
+    expect(await store.setIfLocked("fenced", "new", result)).toBe(true);
+    expect(await store.setIfLocked("fenced", "old", { ...result, body: "stale" })).toBe(false);
+    expect((await store.get("fenced"))?.body).toBe("winner");
+    const keys = [...redis._store.keys()];
+    expect(keys).toHaveLength(2);
+    expect(keys[0]?.match(/\{([^}]+)\}/)?.[1]).toBe(keys[1]?.match(/\{([^}]+)\}/)?.[1]);
+  });
+
+  it("an expired cached response never deletes a new request's live lock", async () => {
+    await store.set("rounding", {
+      statusCode: 200,
+      headers: {},
+      body: {},
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60000),
+    });
+    const resultKey = [...redis._store.keys()][0] as string;
+    const entry = redis._store.get(resultKey);
+    if (entry)
+      entry.value = JSON.stringify({
+        ...JSON.parse(entry.value),
+        expiresAt: new Date(Date.now() - 1),
+      });
+    await store.tryLock("rounding", "new-owner", 30000);
+    expect(await store.get("rounding")).toBeUndefined();
+    expect(await store.isLocked("rounding")).toBe(true);
+  });
+
   // ── tryLock ────────────────────────────────────────────────────────────
 
   describe("tryLock", () => {
@@ -132,7 +182,9 @@ describe("RedisIdempotencyStore", () => {
     it("expired lock allows new acquisition", async () => {
       await store.tryLock("key-3", "req-A", 1); // 1ms TTL
       // Force expiry by manipulating mock
-      const lockKey = "idem:lock:key-3";
+      const lockKey = [...redis._store.keys()].find((key) =>
+        key.startsWith("idem:lock:key-3:"),
+      ) as string;
       const entry = redis._store.get(lockKey);
       if (entry) entry.expiresAt = Date.now() - 1;
 
@@ -160,7 +212,9 @@ describe("RedisIdempotencyStore", () => {
       await store.tryLock("key-6", "req-A", 60_000);
 
       // Simulate: Worker A's lock expires, Worker B acquires
-      const lockKey = "idem:lock:key-6";
+      const lockKey = [...redis._store.keys()].find((key) =>
+        key.startsWith("idem:lock:key-6:"),
+      ) as string;
       redis._store.set(lockKey, { value: "req-B", expiresAt: Date.now() + 60_000 });
 
       // Worker A tries to unlock — must NOT delete Worker B's lock
@@ -216,7 +270,9 @@ describe("RedisIdempotencyStore", () => {
         expiresAt: new Date(Date.now() + 1), // 1ms TTL
       });
       // Force expiry
-      const resultKey = "idem:exp-1";
+      const resultKey = [...redis._store.keys()].find((key) =>
+        key.startsWith("idem:exp-1:"),
+      ) as string;
       const entry = redis._store.get(resultKey);
       if (entry) entry.expiresAt = Date.now() - 1;
 

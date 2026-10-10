@@ -38,7 +38,12 @@ import {
   type McpContextExtras,
   type McpOperation,
 } from "./buildRequestContext.js";
-import { idempotencyStoreOf, runIdempotentTool } from "./http-parity.js";
+import {
+  idempotencyStoreOf,
+  rateLimitedResult,
+  runIdempotentTool,
+  type ToolAdmission,
+} from "./http-parity.js";
 import {
   applyMcpReadMasking,
   evaluatePermission,
@@ -68,6 +73,7 @@ type ControllerMethod = (ctx: unknown) => Promise<IControllerResponse>;
  * identity; everything else is optional and falls back to sensible defaults.
  */
 export interface InvokeControllerOptions {
+  readonly allow?: ToolAdmission;
   /** Resolved identity for this invocation — `null` runs as public scope. */
   readonly session: McpAuthResult | null;
   readonly tenantMiddlewares?: readonly unknown[];
@@ -233,6 +239,11 @@ export async function invokeController(
       permResult?.scope as RequestScope | undefined,
       buildContextExtras(options),
     );
+    if (
+      options.allow &&
+      !(await options.allow(session, (reqCtx.metadata as ArcInternalMetadata)._scope))
+    )
+      return rateLimitedResult(actionName);
     const dispatch = async (): Promise<CallToolResult> => {
       const response = await method(reqCtx);
       // Field-read masking — same policy step the HTTP adapter runs in
@@ -251,6 +262,9 @@ export async function invokeController(
     if (idempotencyKey && store) {
       return await runIdempotentTool({
         store,
+        allowUnfencedCompletion: wiring?.allowUnfencedCompletion,
+        idempotencyTtlMs: wiring?.idempotencyTtlMs,
+        idempotencyLockTimeoutMs: wiring?.idempotencyLockTimeoutMs,
         key: idempotencyKey,
         resourceName,
         operation: actionName,

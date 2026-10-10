@@ -24,6 +24,13 @@ export function tagTenantPreparation<T extends object>(
   return middleware;
 }
 
+export function isTenantPreparation(middleware: unknown): boolean {
+  return (
+    typeof middleware === "function" &&
+    (middleware as unknown as Record<symbol, unknown>)[PREPARATION] !== undefined
+  );
+}
+
 export function prepareTenancy(
   scope: RequestScope,
   preparation: TenantPreparation,

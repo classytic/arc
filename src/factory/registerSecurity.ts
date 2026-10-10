@@ -1,4 +1,4 @@
-import { resolveResourceRateLimiter } from "../utils/resourceRateLimit.js";
+import { resolveResourceRateLimiter } from "../permissions/resourceRateLimit.js";
 /**
  * Security & performance plugin registration for createApp — the
  * ORCHESTRATOR. Decides which plugins register, in which order, and how

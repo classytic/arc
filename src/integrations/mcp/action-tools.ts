@@ -31,6 +31,7 @@ import {
   idempotencyStoreOf,
   rateLimitedResult,
   runIdempotentTool,
+  type ToolAdmission,
 } from "./http-parity.js";
 import {
   applyMcpReadMasking,
@@ -39,7 +40,7 @@ import {
   toCallToolError,
   toCallToolSuccess,
 } from "./tool-helpers.js";
-import type { CallToolResult, McpAuthResult, McpExecutionWiring, ToolDefinition } from "./types.js";
+import type { CallToolResult, McpExecutionWiring, ToolDefinition } from "./types.js";
 
 /** What the action's HTTP route enforces, resolved once at tool generation. */
 export interface ActionToolParity {
@@ -53,7 +54,7 @@ export interface ActionToolParity {
   /** The resource is audited: record the action like the route does. */
   readonly audit: boolean;
   /** The resource's rate limit, per caller. */
-  readonly allow?: (session: McpAuthResult | null) => boolean | Promise<boolean>;
+  readonly allow?: ToolAdmission;
 }
 
 /**
@@ -163,7 +164,6 @@ export function createActionToolHandler(
 
   return async (rawInput, ctx) => {
     const session = ctx.session;
-    if (parity?.allow && !(await parity.allow(session))) return rateLimitedResult(toolName);
 
     const { _idempotencyKey: rawKey, ...input } = rawInput;
     const idempotencyKey = typeof rawKey === "string" && rawKey !== "" ? rawKey : undefined;
@@ -227,6 +227,11 @@ export function createActionToolHandler(
       if (!idLess && parity?.fence && !(await parity.fence(id, reqCtx))) {
         throw new NotFoundError(resourceName);
       }
+      if (
+        parity?.allow &&
+        !(await parity.allow(session, (reqCtx.metadata as ArcInternalMetadata)._scope))
+      )
+        return rateLimitedResult(toolName);
       const run = async (): Promise<CallToolResult> => {
         // The handler deduplicating itself reads the key where HTTP puts it.
         const req = idempotencyKey === undefined ? reqCtx : { ...reqCtx, idempotencyKey };
@@ -252,6 +257,9 @@ export function createActionToolHandler(
       if (idempotencyKey !== undefined && store && !parity?.handlerDedup) {
         return await runIdempotentTool({
           store,
+          allowUnfencedCompletion: wiring?.allowUnfencedCompletion,
+          idempotencyTtlMs: wiring?.idempotencyTtlMs,
+          idempotencyLockTimeoutMs: wiring?.idempotencyLockTimeoutMs,
           key: idempotencyKey,
           resourceName,
           operation: `action.${actionName}`,

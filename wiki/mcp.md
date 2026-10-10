@@ -2,7 +2,7 @@
 
 **Summary**: Model Context Protocol integration — auto-generates AI tool schemas from `defineResource()` configs. Tools enforce same permissions as REST.
 **Sources**: src/integrations/mcp/.
-**Last updated**: 2026-07-17 (execution wiring: hooks/events/masking/idempotency parity — 2.23).
+**Last updated**: 2026-10-10 (tenant preparation, scoped fenced replay and shared rate budgets).
 
 ---
 
@@ -52,7 +52,7 @@ Tool `source` strings: `crud:<resource>:<op>`, `action:<resource>:<name>`, `rout
 MCP tools run through the same [[permissions]] pipeline as REST. Hidden fields do not leak in tool schemas. Row-level filters (ownership, multi-tenant) apply. `AuthorizationDecision.policy` filters flow into MCP tools exactly like REST.
 
 Tenant preset middleware carries a transport-neutral preparation descriptor.
-`core/tenantPreparation.ts` resolves all org/team/custom dimensions and conjoins
+`permissions/tenantPreparation.ts` resolves all org/team/custom dimensions and conjoins
 policies for REST and MCP CRUD, actions, opted-in custom routes, and aggregations.
 Missing required dimensions fail before repository access; cross-tenant read
 markers and trusted write stamping follow the same declaration on both transports.
@@ -68,8 +68,11 @@ The controller pipeline reads its wiring off the REQUEST context (`metadata.arc.
 - **`mcpPlugin` wires automatically** (lazy getters over `fastify.arc.hooks` / `events` / `audit` / `log` / `idempotency.store`) — registration order doesn't matter for execution; register `idempotencyPlugin` before `mcpPlugin` only if you want `_idempotencyKey` advertised in tool schemas.
 - **Hooks + events**: resource hooks (before/around/after) now run on MCP calls, so the arcCorePlugin after-hook publishes `<resource>.<op>d` events — realtime feeds, webhooks, and subscribers see agent-originated mutations. Pre-2.23 they silently no-oped.
 - **Field-read masking** (`applyMcpReadMasking`): `fields.hidden()`/`visibleTo()`/`redactFor()` apply to every tool family's output — CRUD, custom routes, actions, aggregation rows — with HTTP-identical semantics (elevated bypass, user∪org roles).
-- **Idempotency**: mutating CRUD tools accept `_idempotencyKey` (advertised only when a store is wired); the executor runs the HTTP plugin's check → lock → execute → record → replay protocol against the SAME store, fingerprinted by tool + input + caller. Errors are never cached; same key + different input = fresh execution.
+- **Idempotency**: mutating CRUD tools accept `_idempotencyKey` when a store is wired. One operation/principal/tenant identity is separate from the body fingerprint: same key with changed input returns 422 `arc.idempotency_key_reused`. The executor rechecks completion after acquiring the lock and fences recording with `setIfLocked`; lease loss returns 409. Both transports refuse unfenced stores by default; `allowUnfencedCompletion: true` is the explicit warning-producing migration escape. Errors are never cached. See [[plugins]] for storage migration and effect-level limits.
+- **Rate limits**: resource budgets share the host store across REST and MCP; explicit custom-route overrides retain separate buckets. Permission and tenant refusals precede budget consumption; cached/idempotent successes still consume it. Standalone tools use bounded memory unless a limiter is wired.
 - **Standalone** `resourceToTools()` / `createTestMcpClient()` callers pass `{ wiring }` themselves, or omit it for legacy dispatch-only tools.
+
+Fastify lifecycle hooks remain HTTP-specific. Put cross-transport authorization in permission checks and tenant presets; synthetic execution restores the declared controller hooks, events, masking, audit and idempotency wiring.
 
 Pinned by `tests/integrations/mcp/mcp-execution-parity.test.ts` + `mcp-field-masking.test.ts`.
 

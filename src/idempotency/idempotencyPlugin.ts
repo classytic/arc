@@ -1,25 +1,11 @@
 /**
- * Idempotency — duplicate-request protection for mutations.
+ * Completion replay for mutations. Authentication, permission and tenant preparation must
+ * precede the middleware: principal/scope identity isolates keys; fingerprints reject reuse
+ * with changed input. Built-in stores fence completion against an expired/replaced lock.
  *
- * AUTH ORDER MATTERS: `idempotency.middleware` must run AFTER authentication
- * in the preHandler chain, so the fingerprint includes the real caller and a
- * key cannot replay another user's response. `createCrudRouter` wires this for
- * mutation routes; custom routes do it themselves:
- * `preHandler: [fastify.authenticate, fastify.idempotency.middleware]`.
- *
- * GUARANTEE — best-effort effectively-once, NOT exactly-once. A distributed
- * lock makes concurrent same-key requests 409, the key includes the caller's
- * scope, a different body under one key is refused, and a completed result
- * replays. The business effect is not exactly-once, because
- * the domain write and the idempotency record are different systems:
- * - a crash after the DB write but before the record (preSerialization) lets a
- *   retry re-execute;
- * - a handler outrunning `lockTimeoutMs` can overlap its own retry — size that
- *   above the slowest protected handler.
- *
- * Where re-execution is unacceptable: write the record in the SAME transaction
- * as the business write (the store contract is exported), or make the handler
- * naturally idempotent (upsert, compare-and-set).
+ * A crash between the business write and completion, or a handler outliving its lease, can
+ * repeat effects. Use domain idempotency (`dedup: 'handler'`) with a shared transaction or
+ * intrinsic uniqueness where replay protection alone is insufficient. See wiki/plugins.md.
  */
 
 import { createHash } from "node:crypto";
@@ -42,6 +28,7 @@ import {
 import type { IdempotencyResult, IdempotencyStore } from "./stores/interface.js";
 import { createIdempotencyResult } from "./stores/interface.js";
 import { MemoryIdempotencyStore } from "./stores/memory.js";
+import { resolveIdempotencyTiming } from "./timing.js";
 
 export interface IdempotencyPluginOptions {
   /** Enable idempotency (default: false) */
@@ -106,6 +93,8 @@ export interface IdempotencyPluginOptions {
    * remain as the runtime backstop.
    */
   selfCheck?: boolean;
+  /** Migration escape for legacy custom stores without atomic completion fencing; warns at boot. */
+  allowUnfencedCompletion?: boolean;
 }
 
 declare module "fastify" {
@@ -162,6 +151,10 @@ declare module "fastify" {
        * backend. `undefined` when the plugin is disabled.
        */
       store?: import("./stores/interface.js").IdempotencyStore;
+      /** Explicit migration escape shared with non-HTTP executors. */
+      readonly allowUnfencedCompletion?: boolean;
+      readonly ttlMs?: number;
+      readonly lockTimeoutMs?: number;
     };
   }
 }
@@ -176,8 +169,6 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   const {
     enabled = false,
     headerName = "idempotency-key",
-    ttlMs = 86400000, // 24 hours
-    lockTimeoutMs = 30000, // 30 seconds
     methods = ["POST", "PUT", "PATCH"],
     include,
     exclude,
@@ -187,6 +178,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     namespace,
     selfCheck = true,
   } = opts;
+  const { ttlMs, lockTimeoutMs } = resolveIdempotencyTiming(opts.ttlMs, opts.lockTimeoutMs);
 
   // Resolve the store:
   //   1. If `repository` is passed → consume it directly (inline adapter).
@@ -211,6 +203,19 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    * (host-owned) is never touched.
    */
   const ownsStore = !explicitStore;
+
+  if (
+    enabled &&
+    (typeof store.setIfLocked !== "function" || store.supportsFencedCompletion === false)
+  ) {
+    if (!opts.allowUnfencedCompletion)
+      throw new Error(
+        "[arc idempotency] Store must implement atomic setIfLocked completion fencing. Upgrade the store or explicitly allowUnfencedCompletion during migration.",
+      );
+    fastify.log.warn(
+      "Idempotency completion is unfenced: an expired request can overwrite another owner's response. Upgrade the custom store's setIfLocked implementation.",
+    );
+  }
 
   // ── Boot-time store self-check — falsify the store before it serves ──
   //
@@ -431,7 +436,11 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     reply.header(HEADER_IDEMPOTENCY_REPLAYED, "true");
     reply.header(HEADER_IDEMPOTENCY_KEY, request.idempotencyKey);
     for (const [key, value] of Object.entries(cached.headers)) {
-      if (!key.startsWith("x-idempotency")) reply.header(key, value);
+      const name = key.toLowerCase();
+      const liveBudget =
+        name.startsWith("x-ratelimit-") || name.startsWith("ratelimit-") || name === "retry-after";
+      if (!name.startsWith("x-idempotency") && !(liveBudget && reply.hasHeader(name)))
+        reply.header(key, value);
     }
     reply
       .code(cached.statusCode)
@@ -567,6 +576,9 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Shared backend for non-HTTP executors (MCP tools, jobs) — same
     // store, same TTL/lock semantics, different fingerprint namespace.
     store,
+    allowUnfencedCompletion: opts.allowUnfencedCompletion === true,
+    ttlMs,
+    lockTimeoutMs,
   });
 
   // Object responses record before serialization; skipped response shapes record in onSend.
@@ -616,7 +628,16 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       ttlMs,
       request._idempotencyFingerprint,
     );
-    await store.set(fullKey, { ...result, ...(binary ? { bodyEncoding: "base64" as const } : {}) });
+    const completion = { ...result, ...(binary ? { bodyEncoding: "base64" as const } : {}) };
+    if (store.setIfLocked && store.supportsFencedCompletion !== false) {
+      if (!(await store.setIfLocked(fullKey, request.id, completion))) {
+        throw createDomainError(
+          ARC_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+          "This request lost its idempotency lease before completion; its effect may have been applied. Retry the same key to retrieve the current owner's result.",
+          409,
+        );
+      }
+    } else await store.set(fullKey, completion);
     recordedResponses.add(request);
   }
   fastify.addHook("preSerialization", async (request, reply, payload) => {

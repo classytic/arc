@@ -69,15 +69,6 @@ export {
   ArcQueryParser,
   createQueryParser,
 } from "./queryParser.js";
-export type {
-  ResourceRateLimitContext,
-  ResourceRateLimiter,
-  ResourceRateLimitPolicy,
-} from "./resourceRateLimit.js";
-export {
-  createMemoryResourceRateLimiter,
-  resolveResourceRateLimiter,
-} from "./resourceRateLimit.js";
 export type { JsonSchema } from "./responseSchemas.js";
 // Response Schemas
 export {
@@ -109,11 +100,8 @@ export {
 } from "./schemaConverter.js";
 export type { ShutdownParticipant } from "./shutdown.js";
 export {
-  initShutdownRegistry,
-  isAdmittedWork,
   registerShutdownParticipant,
   runAdmittedWork,
-  runShutdown,
 } from "./shutdown.js";
 // Minimal flat-equality matcher for `DataAdapter.matchesFilter` on custom/minimal repos
 export { simpleEqualityMatcher } from "./simpleEqualityMatcher.js";

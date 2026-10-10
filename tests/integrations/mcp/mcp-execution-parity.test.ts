@@ -17,11 +17,7 @@ import type { ResourceDefinition } from "../../../src/core/defineResource.js";
 import { HookSystem } from "../../../src/hooks/HookSystem.js";
 import { MemoryIdempotencyStore } from "../../../src/idempotency/stores/index.js";
 import { resourceToTools } from "../../../src/integrations/mcp/resourceToTools.js";
-import type {
-  CallToolResult,
-  McpAuthResult,
-  McpExecutionWiring,
-} from "../../../src/integrations/mcp/types.js";
+import type { CallToolResult, McpAuthResult } from "../../../src/integrations/mcp/types.js";
 
 import { allowPublic } from "../../../src/permissions/index.js";
 
@@ -83,8 +79,7 @@ async function call(
 ): Promise<CallToolResult> {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new Error(`tool ${name} not generated (have: ${tools.map((t) => t.name)})`);
-  // biome-ignore lint/suspicious/noExplicitAny: minimal ToolContext for direct handler invocation
-  return tool.handler(input, { session: auth } as any);
+  return tool.handler(input, { session: auth, log: async () => {}, extra: {} });
 }
 
 function parse(result: CallToolResult): Record<string, unknown> {
@@ -252,7 +247,7 @@ describe("MCP execution parity — idempotency", () => {
     await call(tools, "create_task", { name: "a", _idempotencyKey: "k1" });
     const result = await call(tools, "create_task", { name: "b", _idempotencyKey: "k1" });
     expect(result.isError).toBe(true);
-    expect(parse(result)).toMatchObject({ status: 422, code: "arc.idempotency_body_mismatch" });
+    expect(parse(result)).toMatchObject({ status: 422, code: "arc.idempotency_key_reused" });
     expect(repo.create).toHaveBeenCalledTimes(1);
   });
 

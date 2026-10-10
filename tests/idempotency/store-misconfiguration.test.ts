@@ -151,6 +151,9 @@ describe("availability vs correctness (the two outcomes must not collapse)", () 
   it("an UNREACHABLE store warns and boots (availability is not a correctness verdict)", async () => {
     const unreachable = {
       name: "unreachable",
+      setIfLocked: async () => {
+        throw new Error("connection closed");
+      },
       get: async () => {
         throw new Error("connection closed");
       },
@@ -178,6 +181,7 @@ describe("availability vs correctness (the two outcomes must not collapse)", () 
     // has not actually proven.
     const amnesiac = {
       name: "amnesiac",
+      setIfLocked: async () => false,
       get: async () => undefined,
       set: async () => {},
       tryLock: async () => true,
@@ -199,6 +203,7 @@ describe("availability vs correctness (the two outcomes must not collapse)", () 
     // provable from the probe alone.
     const crossKey = {
       name: "cross-key",
+      setIfLocked: async () => false,
       get: async () => ({
         key: "whatever",
         statusCode: 299,

@@ -40,7 +40,7 @@ import {
   type TenantFieldSpec,
   type TenantPreparationMode,
   tagTenantPreparation,
-} from "../core/tenantPreparation.js";
+} from "../permissions/tenantPreparation.js";
 import { getRequestScope as getScope } from "../scope/types.js";
 import type {
   CrudRouteKey,
@@ -58,7 +58,7 @@ import { ArcError } from "../utils/errors.js";
  * - `type: 'team'` → reads `getTeamId(scope)`
  * - `contextKey`   → reads `getScopeContext(scope, contextKey)` (any custom dimension)
  */
-export type { TenantFieldSpec } from "../core/tenantPreparation.js";
+export type { TenantFieldSpec } from "../permissions/tenantPreparation.js";
 
 export interface MultiTenantOptions {
   /**
@@ -163,13 +163,11 @@ function createTenantMiddleware(
       applyTenantPreparation(request, request.body, getScope(request), preparation);
     } catch (error) {
       if (!(error instanceof ArcError)) throw error;
-      reply
-        .code(error.status)
-        .send({
-          success: false,
-          error: error.status === 401 ? "Unauthorized" : "Forbidden",
-          message: error.message,
-        });
+      reply.code(error.status).send({
+        success: false,
+        error: error.status === 401 ? "Unauthorized" : "Forbidden",
+        message: error.message,
+      });
     }
   };
   return tagTenantPreparation(middleware, preparation);

@@ -16,7 +16,7 @@
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { idempotencyPlugin } from "../../src/idempotency/idempotencyPlugin.js";
 import { MemoryIdempotencyStore } from "../../src/idempotency/stores/memory.js";
 import type { RequestScope } from "../../src/scope/types.js";
@@ -55,7 +55,71 @@ async function buildApp(opts?: {
 describe("idempotencyPlugin — concurrent requests with same key", () => {
   let app: FastifyInstance;
   afterEach(async () => {
+    vi.useRealTimers();
     await app?.close().catch(() => {});
+  });
+
+  it.each([false, true])(
+    "requires fenced custom completion unless explicitly migrated (%s)",
+    async (allowUnfencedCompletion) => {
+      const inner = new MemoryIdempotencyStore();
+      const legacy = new Proxy(inner, {
+        get(target, property) {
+          if (property === "setIfLocked") return undefined;
+          const value: unknown = Reflect.get(target, property);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      app = Fastify();
+      const warn = vi.spyOn(app.log, "warn");
+      const boot = app.register(idempotencyPlugin, {
+        enabled: true,
+        store: legacy,
+        allowUnfencedCompletion,
+      });
+      if (allowUnfencedCompletion) {
+        await boot;
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unfenced"));
+      } else await expect(boot).rejects.toThrow(/atomic setIfLocked/);
+      await inner.close();
+    },
+  );
+
+  it("does not let an expired owner overwrite the takeover's recorded response", async () => {
+    vi.useFakeTimers();
+    const store = new MemoryIdempotencyStore();
+    app = Fastify();
+    await app.register(idempotencyPlugin, { enabled: true, store, lockTimeoutMs: 30 });
+    let captured = () => {};
+    let release = () => {};
+    const entered = new Promise<void>((resolve) => {
+      captured = resolve;
+    });
+    const resume = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let effects = 0;
+    app.post("/lease", { preHandler: [app.idempotency.middleware] }, async () => {
+      const execution = ++effects;
+      if (execution === 1) {
+        captured();
+        await resume;
+      }
+      return { execution };
+    });
+    const request = {
+      method: "POST" as const,
+      url: "/lease",
+      headers: { "idempotency-key": "same" },
+    };
+    const old = app.inject(request).then((response) => response);
+    await entered;
+    vi.setSystemTime(Date.now() + 31);
+    const takeover = await app.inject(request);
+    release();
+    expect((await old).statusCode).toBe(409);
+    expect((await app.inject(request)).json()).toEqual(takeover.json());
+    await store.close();
   });
 
   it("isolates replay by organization, team, context and principal kind", async () => {
@@ -103,9 +167,13 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
     expect(effects).toBe(6);
   });
 
-  it.each([false, true])(
-    "rechecks completion after acquiring a lock (changed body: %s)",
-    async (changedBody) => {
+  it.each([
+    { changedBody: false, binary: false },
+    { changedBody: true, binary: false },
+    { changedBody: false, binary: true },
+  ])(
+    "rechecks completion after acquiring a lock ($changedBody, binary $binary)",
+    async ({ changedBody, binary }) => {
       const store = new MemoryIdempotencyStore();
       const read = store.get.bind(store);
       let release = () => {};
@@ -128,9 +196,12 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
       app = Fastify();
       await app.register(idempotencyPlugin, { enabled: true, store, selfCheck: false });
       let effects = 0;
-      app.post("/race", { preHandler: [app.idempotency.middleware] }, async () => ({
-        effects: ++effects,
-      }));
+      app.post("/race", { preHandler: [app.idempotency.middleware] }, async (_request, reply) => {
+        effects++;
+        return binary
+          ? reply.type("application/octet-stream").send(Buffer.from([0, 255]))
+          : { effects };
+      });
       const request = {
         method: "POST" as const,
         url: "/race",
@@ -146,7 +217,7 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
       const response = await delayed;
       expect(effects).toBe(1);
       expect(response.statusCode).toBe(changedBody ? 422 : 200);
-      if (!changedBody) expect(response.json()).toEqual(completed.json());
+      if (!changedBody) expect(response.rawPayload).toEqual(completed.rawPayload);
       await store.close();
     },
   );

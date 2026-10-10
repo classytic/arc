@@ -194,7 +194,7 @@ export type CrudDescriptionOverride = string | ((meta: CrudDescriptionMeta) => s
  */
 export interface McpExecutionWiring {
   /** Same resource budget and backend used by REST routes. */
-  readonly rateLimiter?: import("../../utils/resourceRateLimit.js").ResourceRateLimiter;
+  readonly rateLimiter?: import("../../permissions/resourceRateLimit.js").ResourceRateLimiter;
   /** Shared `HookSystem` — `fastify.arc.hooks`. */
   readonly hooks?: unknown;
   /** Event bus decorator — `fastify.events`. */
@@ -209,6 +209,12 @@ export interface McpExecutionWiring {
    * on mutating CRUD tools and enables executor-level check/lock/replay.
    */
   readonly idempotencyStore?: unknown;
+  /** Explicit migration escape matching the HTTP idempotency plugin. */
+  readonly allowUnfencedCompletion?: boolean;
+  /** Cached result lifetime shared with the HTTP plugin; defaults to 24 hours. */
+  readonly idempotencyTtlMs?: number;
+  /** Completion lease shared with the HTTP plugin; defaults to 30 seconds. */
+  readonly idempotencyLockTimeoutMs?: number;
 }
 
 /** Per-resource MCP configuration overrides */

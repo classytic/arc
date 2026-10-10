@@ -11,6 +11,16 @@ it("stops every runtime before draining any, across children, once despite failu
   initShutdownRegistry(app);
   const order: string[] = [];
   registerShutdownParticipant(app, {
+    name: "events",
+    kind: "consumer",
+    stop: () => {
+      order.push("stop-events");
+    },
+    drain: () => {
+      order.push("drain-events");
+    },
+  });
+  registerShutdownParticipant(app, {
     name: "a",
     stop: () => {
       order.push("stop-a");
@@ -32,10 +42,10 @@ it("stops every runtime before draining any, across children, once despite failu
     });
   });
   const [first, second] = await Promise.all([runShutdown(app), runShutdown(app)]);
-  expect(order).toEqual(["stop-a", "stop-b", "drain-a", "drain-b"]);
+  expect(order).toEqual(["stop-events", "stop-a", "stop-b", "drain-a", "drain-b", "drain-events"]);
   expect(first).toBe(second);
   expect(first).toHaveLength(1);
   expect((first[0] as Error).message).toContain("a shutdown stop failed");
   await app.close();
-  expect(order).toHaveLength(4);
+  expect(order).toHaveLength(6);
 });

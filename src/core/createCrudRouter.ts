@@ -344,7 +344,13 @@ function createCustomRoutes<TDoc = unknown>(
           ),
         ),
       },
-      { resourceName, op: opName },
+      {
+        resourceName,
+        op: opName,
+        ...(route.rateLimit && typeof route.rateLimit === "object"
+          ? { rateLimitBucket: `route:${route.method}:${route.path}` }
+          : {}),
+      },
     );
   }
 }

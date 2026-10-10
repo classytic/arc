@@ -17,12 +17,13 @@ import type { PermissionCheck } from "../../permissions/types.js";
 import { executePipeline } from "../../pipeline/pipe.js";
 import type { PipelineConfig, PipelineContext } from "../../pipeline/types.js";
 import type { ServerAccessor } from "../../types/handlers.js";
-import type { IControllerResponse } from "../../types/index.js";
+import type { ArcInternalMetadata, IControllerResponse } from "../../types/index.js";
 import {
   buildRequestContext,
   type McpContextExtras,
   type McpOperation,
 } from "./buildRequestContext.js";
+import { rateLimitedResult, type ToolAdmission } from "./http-parity.js";
 import {
   applyMcpReadMasking,
   evaluatePermission,
@@ -74,6 +75,7 @@ export function operationKindForRoute(method: string, hasId: boolean): McpOperat
  * surfaces.
  */
 export interface CustomRouteToolOptions {
+  readonly allow?: ToolAdmission;
   /** Resource name — used as the permission context's `resource` field. */
   readonly resourceName: string;
   /** Logical op name — keys into `pipeline` and appears in `PermissionContext.action`. */
@@ -198,6 +200,12 @@ export function createCustomRouteHandler(
         permResult?.scope,
         contextExtras,
       );
+
+      if (
+        options.allow &&
+        !(await options.allow(session, (reqCtx.metadata as ArcInternalMetadata)._scope))
+      )
+        return rateLimitedResult(operationName);
 
       // Field-read masking at the serialization boundary — same policy
       // step `sendControllerResponse` runs for this route's REST twin.

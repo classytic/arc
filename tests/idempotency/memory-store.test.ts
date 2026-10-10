@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIdempotencyResult } from "../../src/idempotency/stores/interface.js";
 import { MemoryIdempotencyStore } from "../../src/idempotency/stores/memory.js";
 
@@ -19,6 +19,7 @@ describe("MemoryIdempotencyStore", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     // `close()` is idempotent (guards on `cleanupInterval !== null`),
     // so the in-test close() in the "close" describe doesn't conflict.
     await store.close();
@@ -26,6 +27,23 @@ describe("MemoryIdempotencyStore", () => {
       const s = extraStores.pop();
       if (s) await s.close();
     }
+  });
+
+  it("refuses a stale completion after lease expiry and takeover", async () => {
+    vi.useFakeTimers();
+    await store.tryLock("fenced", "old", 30);
+    vi.advanceTimersByTime(31);
+    expect(
+      await store.setIfLocked("fenced", "old", createIdempotencyResult(200, "stale", {}, 60000)),
+    ).toBe(false);
+    await store.tryLock("fenced", "new", 30);
+    expect(
+      await store.setIfLocked("fenced", "new", createIdempotencyResult(200, "winner", {}, 60000)),
+    ).toBe(true);
+    expect(
+      await store.setIfLocked("fenced", "old", createIdempotencyResult(200, "stale", {}, 60000)),
+    ).toBe(false);
+    expect((await store.get("fenced"))?.body).toBe("winner");
   });
 
   describe("get/set", () => {

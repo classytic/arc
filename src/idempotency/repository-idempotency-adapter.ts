@@ -185,6 +185,39 @@ export function repositoryAsIdempotencyStore(
       if (doc) assertKeyIdentity("set", doc, key);
     },
 
+    async setIfLocked(
+      key: string,
+      requestId: string,
+      result: Omit<IdempotencyResult, "key">,
+    ): Promise<boolean> {
+      const doc = (await r.findOneAndUpdate(
+        and(
+          eqFilter(idField, key),
+          eqFilter("lock.requestId", requestId),
+          gt("lock.expiresAt", new Date()),
+        ),
+        update({
+          set: {
+            result: {
+              statusCode: result.statusCode,
+              headers: result.headers,
+              body: result.body,
+              ...(result.requestFingerprint
+                ? { requestFingerprint: result.requestFingerprint }
+                : {}),
+              ...(result.bodyEncoding ? { bodyEncoding: result.bodyEncoding } : {}),
+            },
+            createdAt: result.createdAt,
+            expiresAt: result.expiresAt,
+          },
+        }),
+        { returnDocument: "after" },
+      )) as IdempotencyDoc | null;
+      if (!doc) return false;
+      assertKeyIdentity("setIfLocked", doc, key);
+      return true;
+    },
+
     async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {
       const now = new Date();
       const lockExpiresAt = new Date(now.getTime() + ttlMs);

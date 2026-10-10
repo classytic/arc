@@ -40,7 +40,7 @@ module.bootstrap      → app bootstrap[]
 module.resources      → app resources         (module resources prepended)
 module.afterResources → app afterResources
 onReady
-close: module.onClose (REVERSE order) → app onClose   (ONE hook)
+close: HTTP drain → runtime stop/drain → module.onClose (REVERSE order) → app onClose
 ```
 
 **⚠ `plugins` is NOT itself a Fastify plugin** — arc CALLS it, never passes it to `fastify.register()`. So (a) you must `await fastify.register(x)` yourself; returning `x` is read as the disposer shorthand, which registers nothing and then invokes your plugin at shutdown, and (b) there is no encapsulation and no prefix — decorators land on the shared instance. Both failure modes are caught at boot: an `fp()`-marked return throws, a multi-argument return warns (disposers take zero arguments). v3 renames the slot to `setup` and removes `plugins` — no alias.
@@ -50,7 +50,7 @@ close: module.onClose (REVERSE order) → app onClose   (ONE hook)
 A failed boot unwinds what already initialised, in reverse dependency order, before the error propagates — a half-initialised process never serves.
 
 - **`defer(fn)`** registers teardown at the point of acquisition, so a resource acquired mid-`bootstrap` is released even if the next line throws. Disposers unwind LIFO.
-- **Ordering:** a module's `onClose` runs FIRST, then its disposers unwind.
+- **Ordering:** the shared coordinator stops new schedule/job/consumer admissions, drains producers then consumers, and only then runs module `onClose` and its LIFO disposers. Already admitted work may finish causal publications. Schedule drains are bounded by `drainTimeoutMs`; an over-budget callback can outlive disposal, so callbacks must be resumable or fit the shutdown budget.
 - Every closer runs **at most once** across rollback and shutdown. One throwing closer never blocks the others; the first close error is rethrown from `fastify.close()` after the rest have run.
 - **Write closers defensively** — rollback fires after a PARTIAL init: `client?.close()`, never `client.close()`.
 
@@ -101,9 +101,11 @@ Deps are a typed object, so the compiler is the container; "exports" are the pac
 
 `healthChecks` · `eventHandlers` · `workflows` · `scheduledJobs`. Arc collects them across the graph in `dependsOn` order, fails boot on a duplicate name (attributing both owners), and merges into the single health / schedule tables. Each is an array OR a factory `(fastify) => …` resolved AFTER bootstraps, so it can close over a booted engine.
 
-**Prefer `eventHandlers` over subscribing in `afterResources`:** arc retains every unsubscribe and runs them at shutdown BEFORE any module `onClose`, while the engines those handlers dispatch into are still alive. A module's own `onClose` cannot promise that — it races the modules it depends on.
+**Prefer `eventHandlers` over subscribing in `afterResources`:** arc owns their admission and drain, then unsubscribes before disposing module engines. Redis Streams identities derive from module owner and declared handler name (or an unambiguous pattern set); ambiguous unnamed subscribers refuse registration. Changing a subscriber identity can replay completed effects; see [[events]].
 
 **`boundary` (2.29)** wraps a handler so a throw is logged (`{ err, event, eventId, handler }`) and swallowed. **Off by default** — a throw reaching the transport is what leaves a Redis Streams message unacked so it redelivers and DLQs, and swallowing by default would downgrade every module handler to best-effort. Opt in for fire-and-forget work (projections, cache invalidation, fan-out). `{ onError }` swaps the log for a metrics sink, inside the boundary.
+
+Strict module graph verification rejects both structural and event-durability violations; warning mode reports them for migration. Relay and scheduler roles retain resource registry metadata but mount no resource HTTP routes.
 
 ## Dynamic modules
 

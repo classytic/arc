@@ -6,7 +6,7 @@
  * as REST requests (AccessControl, BodySanitizer, QueryResolver, HookSystem).
  */
 
-import { prepareTenantContext } from "../../core/tenantPreparation.js";
+import { prepareTenantContext } from "../../permissions/tenantPreparation.js";
 import { buildRequestScopeProjection } from "../../scope/projection.js";
 import type { RequestScope } from "../../scope/types.js";
 import type { ServerAccessor } from "../../types/handlers.js";

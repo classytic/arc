@@ -78,7 +78,7 @@ See [[removed]] for the list of public action-router APIs retired in v2.9.
 
 ## Per-route rate limit (2.20)
 
-`RouteDefinition.rateLimit?: RateLimitConfig | false` overrides the resource/app default for one custom endpoint (`{ max, timeWindow }` to tighten, `false` to never throttle, omit to inherit). Each custom route is its own Fastify route, so the override rides `config.rateLimit` cleanly — same primitive as aggregations. **Actions do NOT get a per-action limit**: they share one `POST /:id/action` mount, where Fastify's per-route limit can't distinguish them, so they inherit the resource limit — throttle a specific action by promoting it to a `routes:` entry (documented on `ActionDefinition`). Requires `@fastify/rate-limit` (arc's factory wires it).
+`RouteDefinition.rateLimit?: RateLimitConfig | false` overrides the resource/app default for one custom endpoint (`{ max, timeWindow }` to tighten, `false` to never throttle, omit to inherit). Explicit custom-route overrides have their own budget, matched by MCP route tools. Inherited resource limits share a budget across CRUD, actions, routes and REST/MCP transports, keyed by resource, policy and tenant (or user/client/IP). Enforcement runs after permission, validation and tenant guards and before cache/idempotency replay, so replays count too. **Actions do NOT get a per-action limit**: they share one `POST /:id/action` mount, where Fastify's per-route limit can't distinguish them, so they inherit the resource limit — throttle a specific action by promoting it to a `routes:` entry (documented on `ActionDefinition`). Requires `@fastify/rate-limit` (arc's factory wires it).
 
 ## `history: true` — per-record audit timeline (2.22)
 

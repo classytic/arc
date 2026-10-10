@@ -42,6 +42,8 @@ export interface IdempotencyLock {
 export interface IdempotencyStore {
   /** Store name for logging */
   readonly name: string;
+  /** false when a conditional completion method cannot be atomic with this backing client. */
+  readonly supportsFencedCompletion?: boolean;
 
   /**
    * Get a cached result for an idempotency key.
@@ -54,6 +56,12 @@ export interface IdempotencyStore {
    * TTL is handled by the store implementation.
    */
   set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void>;
+  /** Atomically record only while requestId owns an unexpired lock. false means ownership lost. */
+  setIfLocked?(
+    key: string,
+    requestId: string,
+    result: Omit<IdempotencyResult, "key">,
+  ): Promise<boolean>;
 
   /**
    * Try to acquire a lock for processing a key.

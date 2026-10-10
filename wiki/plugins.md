@@ -2,7 +2,7 @@
 
 **Summary**: Built-in Fastify plugins that augment arc apps. All opt-in via `createApp({ plugins })` except a few that auto-register.
 **Sources**: src/plugins/.
-**Last updated**: 2026-07-15 (Fastify best-practices hardening wave — 2.22).
+**Last updated**: 2026-10-10 (completion fencing, bounded metrics and coordinated runtime shutdown).
 
 ---
 
@@ -25,15 +25,27 @@
 
 Also: `audit`, `idempotency`, `organization`, `mcp`, `jobs` (all in separate modules).
 
+## Resource rate limits
+
+A declared HTTP limit refuses boot without `@fastify/rate-limit` registered before resources. Declared resource limits share the host rate-limit plugin store across REST and MCP; explicit custom-route overrides use separate policy buckets. REST returns limit/remaining/reset headers and `Retry-After` on 429. Standalone MCP tools use bounded memory by default and share the anonymous budget when no principal is available; supply a `ResourceRateLimiter` through execution wiring for shared deployments. Capacity pressure refuses new actors rather than clearing active budgets. The MCP runtime declares limiter durability, so a distributed deployment cannot silently use local budgets.
+
+## Metrics
+
+`metricsPlugin` and health duration metrics share a cumulative histogram primitive: `_bucket` (including `+Inf`), `_sum` and `_count`; use `histogram_quantile` for fleet percentiles. Metrics-plugin durations are seconds; health durations remain milliseconds. Route labels use registered templates, with `__unmatched__` for unknown URLs; the metrics endpoint is excluded even with a query string. `maxSeries` bounds each metrics-plugin metric (default 1000) plus one `{overflow="true"}` aggregate, preserving counts when the bound is reached. Labels escape quotes, backslashes and newlines.
+
 ## Idempotency completion
 
-HTTP and MCP identities use one canonical operation-scope helper: namespace, operation, principal kind/id, organization, team and custom scope dimensions. Body fingerprints are separate; reusing a key for a different body is refused. After acquiring a lock, reread completion before executing to close the read/lock handoff race.
+HTTP and MCP identities use one canonical operation-scope helper: namespace, operation, principal kind/id, organization, team and custom scope dimensions. Both transports share validated default durations, and MCP inherits the HTTP plugin's configured `ttlMs` and `lockTimeoutMs`. Body fingerprints are separate; reusing a key for a different body is refused. After acquiring a lock, reread completion before executing to close the read/lock handoff race.
+
+Built-in stores fence completion with atomic `setIfLocked(key, requestId, result)`: an expired or replaced owner cannot overwrite a winner's response. HTTP registration and MCP tool wiring refuse custom stores without that capability; `allowUnfencedCompletion: true` is an explicit migration escape that warns. Redis needs `eval`; its response/lock keys share a per-operation Cluster hash tag, and prefix deletion sends separate keys across slots. This protects completion ownership, not the domain effect: an overlong handler can still overlap a takeover, so size leases appropriately or use domain idempotency.
 
 Successful object replies record in `preSerialization`; empty, string and Buffer replies record in `onSend` without setting headers. Buffers use base64 storage plus `bodyEncoding: 'base64'` so JSON-backed stores preserve bytes. The universal `onResponse` hook releases locks. Streaming mutations must use `dedup: 'handler'` with a domain completion record; buffering arbitrary streams is not a supported replay mode. HTTP completion and business effects still have a crash window unless the domain owns their shared transaction or intrinsic deduplication.
 
+The scoped identity and Redis hash-tag key format change prior storage addresses. Deploy a coordinated drain/version transition rather than running old and new instances concurrently against the same mutation traffic. Preserve effect-level uniqueness or reconcile pending retry keys across the transition; blindly replaying legacy records cannot establish their tenant context.
+
 ## `schedulesPlugin` (2.21) — recurring jobs without Redis
 
-Interval-based (`every` ms) job loop with optional multi-replica leader safety via any ecosystem `LockAdapter` (`@classytic/mongokit/lock`, sqlitekit, repo-core memory). No overlap by construction (timeout chain, next tick after run settles); fail-open per tick (throwing handler logged, loop survives); lease deliberately NOT released after a run so other replicas skip the same window; timers unref'd + cleared on close with in-flight runs awaited. `fastify.getScheduleStats()` exposes runs/failures/skippedByLock. Deliberately NOT cron-expression-based — calendar semantics belong to the BullMQ `jobs` integration. Replaces the hand-rolled cron registry + mongo lock layer production hosts grow.
+Interval-based (`every` ms) job loop with optional multi-replica leader safety via any ecosystem `LockAdapter` (`@classytic/mongokit/lock`, sqlitekit, repo-core memory). No overlap by construction (timeout chain, next tick after run settles); fail-open per tick (throwing handler logged, loop survives); lease deliberately NOT released after a run so other replicas skip the same window; timers unref'd + cleared on close with in-flight runs awaited up to `drainTimeoutMs`. All runtime admissions stop before drains and module engine disposal; an over-budget schedule logs abandonment and can continue, so durable callbacks must tolerate restart/retry. `fastify.getScheduleStats()` exposes runs/failures/skippedByLock. Deliberately NOT cron-expression-based — calendar semantics belong to the BullMQ `jobs` integration. Replaces the hand-rolled cron registry + mongo lock layer production hosts grow.
 
 ## `usagePlugin` (2.22) — per-actor usage counters
 

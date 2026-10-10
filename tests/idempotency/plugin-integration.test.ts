@@ -28,6 +28,8 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose, { type Model, Schema } from "mongoose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { idempotencyPlugin } from "../../src/idempotency/idempotencyPlugin.js";
+import { repositoryAsIdempotencyStore } from "../../src/idempotency/repository-idempotency-adapter.js";
+import { createIdempotencyResult } from "../../src/idempotency/stores/interface.js";
 
 // ============================================================================
 // Test app factory — registers plugin + a simple POST /orders endpoint
@@ -199,6 +201,7 @@ describe("idempotencyPlugin + repository (mongokit) — e2e", () => {
   let mongod: MongoMemoryServer;
   let app: FastifyInstance;
   let IdempotencyModel: Model<Record<string, unknown>>;
+  let repo: Repository<Record<string, unknown>>;
 
   beforeAll(async () => {
     mongod = await MongoMemoryServer.create();
@@ -212,7 +215,7 @@ describe("idempotencyPlugin + repository (mongokit) — e2e", () => {
     // Pass the repository DIRECTLY to the plugin — no wrapper class.
     // mongokit 3.8+ implements findOneAndUpdate; the plugin uses it for
     // atomic tryLock / set semantics.
-    const repo = new Repository(IdempotencyModel, [
+    repo = new Repository(IdempotencyModel, [
       methodRegistryPlugin(),
       batchOperationsPlugin(),
       mongoOperationsPlugin(),
@@ -225,6 +228,17 @@ describe("idempotencyPlugin + repository (mongokit) — e2e", () => {
     await app?.close();
     await mongoose.disconnect();
     await mongod?.stop();
+  });
+
+  it("only records completion under the current unexpired database lease", async () => {
+    const store = repositoryAsIdempotencyStore(repo, 60000);
+    await store.tryLock("db-fence", "old", -1);
+    const result = createIdempotencyResult(200, "winner", {}, 60000);
+    expect(await store.setIfLocked?.("db-fence", "old", result)).toBe(false);
+    await store.tryLock("db-fence", "new", 60000);
+    expect(await store.setIfLocked?.("db-fence", "new", result)).toBe(true);
+    expect(await store.setIfLocked?.("db-fence", "old", { ...result, body: "stale" })).toBe(false);
+    expect((await store.get("db-fence"))?.body).toBe("winner");
   });
 
   it("first request with repository-backed idempotency succeeds (regression: was 409 before fix)", async () => {
@@ -290,6 +304,7 @@ describe("idempotencyPlugin — error handling", () => {
     await app.register(idempotencyPlugin, {
       enabled: true,
       store: brokenStore,
+      allowUnfencedCompletion: true,
       // This stub deliberately cannot round-trip a key (get always misses) —
       // the boot self-check would rightly refuse it. Opt out because THIS
       // test targets the runtime error path (tryLock infrastructure error →

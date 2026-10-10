@@ -17,8 +17,8 @@ unlabelled subpath fails CI) and by the public API surface gate:
 | `experimental` | No compatibility promise. May change or disappear in any release. | Labelled; excluded from breaking-gate failures. |
 
 The authoritative tier of any subpath is the label in `package.json`, not
-this table. Current experimental subpaths: `./sync`, `./usage`,
-`./integrations/event-gateway`.
+this table. Current experimental subpaths: `./usage`, `./integrations/event-gateway`,
+`./outbox-admin`.
 
 ## Versioning policy (pre-3.0)
 

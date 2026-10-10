@@ -2,7 +2,7 @@
 
 **Summary**: Map of the `src/` modules and where functionality lives.
 **Sources**: src/, AGENTS.md §2.
-**Last updated**: 2026-07-17 (dropped stale `adapters/` row + line-count table — 2.23 audit).
+**Last updated**: 2026-10-10 (shared policies, shutdown coordination and driver-free stores).
 
 ---
 
@@ -16,7 +16,7 @@ src/
   factory/       createApp — main entry point                                                      → [[factory]]
     types/       CreateAppOptions split (2.22) — app-options, auth, security, plugin-options; index barrel
   auth/          authPlugin (JWT), betterAuth adapter, sessionManager, redis-session              → [[auth]]
-  permissions/   core + scope + dynamic + fields + presets + roleHierarchy                        → [[permissions]]
+  permissions/   permissions + shared tenant preparation + resource limits + dynamic + fields + roleHierarchy                        → [[permissions]]
   scope/         RequestScope discriminated union + accessors                                     → [[request-scope]]
   events/        EventPlugin, transports (memory, redis pub/sub, redis streams), outbox           → [[events]]
   hooks/         HookSystem — before/after lifecycle                                              → [[hooks]]
@@ -28,7 +28,7 @@ src/
   cli/           arc init, generate, doctor, describe, introspect, docs
   testing/       HttpTestHarness, mock helpers, createJwtAuthProvider, dbHelpers                  → [[testing]]
   docs/          OpenAPI spec generator, Scalar UI, externalPaths
-  utils/         queryParser, stateMachine, compensate, retry, circuitBreaker, schemaConverter
+  utils/         queryParser, stateMachine, compensate, retry, circuitBreaker, schemaConverter, shutdown coordinator
   types/         shared type defs, Fastify declaration merges                                     → [[types]]
     resource/    ResourceConfig split (2.22) — config, routes, schemas, fields, hooks, actions, extensions, tenant, cache, presets, events, rate-limit; index barrel
   schemas/       JSON Schema generation from field rules
@@ -36,7 +36,7 @@ src/
   middleware/    request-level middleware, multipartBody (file upload)
   audit/         auditPlugin, store interface + memory + repository adapter
   usage/         usagePlugin (2.22) — per-actor per-period counters; UsageStore + MemoryUsageStore → [[plugins]]
-  idempotency/   idempotencyPlugin, MongoDB + Redis stores
+  idempotency/   idempotencyPlugin, memory/Redis stores + repository adapter
   context/       async request context (AsyncLocalStorage)
   registry/      resource registry, introspection plugin
   discovery/     filesystem auto-discovery (also factory/loadResources)
@@ -55,10 +55,10 @@ Exact line counts rot fast — run `find src -name "*.ts" | xargs wc -l | sort -
 - `src/core/BaseCrudController.ts` — CRUD orchestration; pure helpers extracted to `core/crud/`
 - `src/events/transports/redis-stream.ts` — Streams consumer (PEL reclaim, DLQ, jittered backoff)
 - `src/factory/types/app-options.ts` — CreateAppOptions surface
-- `src/auth/betterAuth.ts`, `src/integrations/jobs.ts`, `src/hooks/HookSystem.ts`
+- `src/auth/betterAuth.ts`, `src/integrations/jobs/plugin.ts`, `src/hooks/HookSystem.ts`
 - `src/cli/commands/init/` — scaffolding split across modules (was one ~3.4k-line file)
 
-`src/core/routerShared.ts` is a thin re-export shim over `core/middlewares/`; `aggregation/validate.ts` split into `validate.ts` (checks) + `normalize.ts` (pure IR); `defineResource` Phase-0 shorthands live in `defineResource/normalizeConfig.ts`. The two mega type files split in 2.22 with exact-parity `index.ts` barrels (public surface unchanged): `src/types/resource.ts` → `src/types/resource/`, `src/factory/types.ts` → `src/factory/types/` (trees above). `src/docs/openapi.ts` is a 17-line barrel over `docs/openapi/`.
+`src/core/routerShared.ts` is a thin re-export shim over `core/middlewares/`; `aggregation/validate.ts` split into `validate.ts` (checks) + `normalize.ts` (pure IR); `defineResource` Phase-0 shorthands live in `defineResource/normalizeConfig.ts`. The two mega type files split in 2.22 with exact-parity `index.ts` barrels (public surface unchanged): `src/types/resource.ts` → `src/types/resource/`, `src/factory/types.ts` → `src/factory/types/` (trees above). `src/docs/openapi.ts` is a barrel over `docs/openapi/`.
 
 ## Related
 - [[core]] — `defineResource` is the fundamental unit everything else composes onto

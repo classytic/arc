@@ -31,7 +31,6 @@ import type {
   IControllerResponse,
   IRequestContext,
   PaginationResult,
-  ParsedQuery,
   QueryParserInterface,
 } from "../types/index.js";
 import type { AccessControl } from "./AccessControl.js";
@@ -111,10 +110,6 @@ export interface BaseController<
   ): Promise<IControllerResponse<{ matchedCount: number; modifiedCount: number }>>;
   bulkDelete(req: IRequestContext): Promise<IControllerResponse<{ deletedCount: number }>>;
 }
-
-// Keeps the otherwise-unused `ParsedQuery` import referenced.
-const _ParsedQueryProbe: ParsedQuery | undefined = undefined;
-void _ParsedQueryProbe;
 
 /**
  * Fully-composed controller: `BaseCrudController` + SoftDelete + Tree +

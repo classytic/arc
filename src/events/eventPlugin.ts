@@ -33,7 +33,7 @@ import {
   type MemoryEventTransportOptions,
 } from "./EventTransport.js";
 import { createDeadLetterPublisher, type RetryOptions, withRetry } from "./retry.js";
-import { getSubscriberId, withSubscriberId } from "./subscriberIdentity.js";
+import { preserveSubscriberIdentity } from "./subscriberIdentity.js";
 
 export interface EventPluginOptions {
   /** Event transport (default: MemoryEventTransport) */
@@ -497,8 +497,7 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
             activeHandlers.delete(pending);
           });
         };
-        const id = getSubscriberId(handler);
-        return await transport.subscribe(pattern, id ? withSubscriberId(id, tracked) : tracked);
+        return await transport.subscribe(pattern, preserveSubscriberIdentity(handler, tracked));
       } catch (error) {
         fastify.log?.error?.(
           { transport: transport.name, pattern, error },

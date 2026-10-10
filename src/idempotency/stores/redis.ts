@@ -16,6 +16,7 @@
  * });
  */
 
+import { createHash } from "node:crypto";
 import type { IoredisKeyValueCommands, UpstashKeyValueCommands } from "../../utils/redisShapes.js";
 import type { IdempotencyResult, IdempotencyStore } from "./interface.js";
 
@@ -51,6 +52,7 @@ export interface RedisIdempotencyStoreOptions {
 
 export class RedisIdempotencyStore implements IdempotencyStore {
   readonly name = "redis";
+  readonly supportsFencedCompletion: boolean;
   private client: RedisClient;
   private prefix: string;
   private lockPrefix: string;
@@ -58,17 +60,24 @@ export class RedisIdempotencyStore implements IdempotencyStore {
 
   constructor(options: RedisIdempotencyStoreOptions) {
     this.client = options.client;
+    this.supportsFencedCompletion = typeof (options.client as RedisWithEval).eval === "function";
     this.prefix = options.prefix ?? "idem:";
     this.lockPrefix = options.lockPrefix ?? "idem:lock:";
+    const prefixTag = this.prefix.match(/\{([^}]+)\}/)?.[1];
+    const lockTag = this.lockPrefix.match(/\{([^}]+)\}/)?.[1];
+    if (prefixTag !== lockTag)
+      throw new Error(
+        "Redis idempotency prefixes must use the same Redis Cluster hash tag or neither may use one.",
+      );
     this.ttlMs = options.ttlMs ?? 86400000;
   }
 
   private resultKey(key: string): string {
-    return `${this.prefix}${key}`;
+    return `${this.prefix}${key}:{${createHash("sha256").update(key).digest("hex")}}`;
   }
 
   private lockKey(key: string): string {
-    return `${this.lockPrefix}${key}`;
+    return `${this.lockPrefix}${key}:{${createHash("sha256").update(key).digest("hex")}}`;
   }
 
   async get(key: string): Promise<IdempotencyResult | undefined> {
@@ -79,7 +88,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
       const result = JSON.parse(data) as IdempotencyResult;
       // Check if expired (Redis TTL should handle this, but double-check)
       if (new Date(result.expiresAt) < new Date()) {
-        await this.delete(key);
+        // Let Redis expire it: deleting here can erase a new lock or a newer completion.
         return undefined;
       }
       return {
@@ -110,6 +119,35 @@ export class RedisIdempotencyStore implements IdempotencyStore {
       NX: true,
     });
     return result === "OK";
+  }
+
+  async setIfLocked(
+    key: string,
+    requestId: string,
+    result: Omit<IdempotencyResult, "key">,
+  ): Promise<boolean> {
+    if (typeof (this.client as RedisWithEval).eval !== "function") {
+      throw new Error(
+        "Redis idempotency fenced completion requires eval; proxy eval through your Redis client adapter.",
+      );
+    }
+    const ttlMs = new Date(result.expiresAt).getTime() - Date.now();
+    if (ttlMs <= 0) return false;
+    // The per-operation hash tag keeps lock and response in one Redis Cluster slot.
+    const saved = await (this.client as RedisWithEval).eval(
+      `
+      if redis.call("get", KEYS[1]) ~= ARGV[1] then return 0 end
+      redis.call("set", KEYS[2], ARGV[2], "PX", ARGV[3])
+      return 1
+    `,
+      2,
+      this.lockKey(key),
+      this.resultKey(key),
+      requestId,
+      JSON.stringify({ key, ...result }),
+      ttlMs,
+    );
+    return Number(saved) === 1;
   }
 
   async unlock(key: string, requestId: string): Promise<void> {
@@ -145,15 +183,23 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 
   async deleteByPrefix(prefix: string): Promise<number> {
-    const resultKeys = await this.scanByPrefix(this.resultKey(prefix));
-    const lockKeys = await this.scanByPrefix(this.lockKey(prefix));
+    const resultKeys = await this.scanByPrefix(`${this.prefix}${prefix}`);
+    const lockKeys = await this.scanByPrefix(`${this.lockPrefix}${prefix}`);
     const allKeys = [...resultKeys, ...lockKeys];
     if (allKeys.length === 0) return 0;
-    return this.client.del(allKeys);
+    // Prefix matches span operation hash slots; one multi-key DEL would CROSSSLOT on Cluster.
+    let removed = 0;
+    for (let offset = 0; offset < allKeys.length; offset += 100) {
+      const counts = await Promise.all(
+        allKeys.slice(offset, offset + 100).map((key) => this.client.del(key)),
+      );
+      removed += counts.reduce((sum, count) => sum + count, 0);
+    }
+    return removed;
   }
 
   async findByPrefix(prefix: string): Promise<IdempotencyResult | undefined> {
-    const keys = await this.scanByPrefix(this.resultKey(prefix));
+    const keys = await this.scanByPrefix(`${this.prefix}${prefix}`);
     if (keys.length === 0) return undefined;
 
     // Fetch in concurrent batches with early termination. Sequential GETs

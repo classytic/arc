@@ -112,7 +112,7 @@ export function createMockModel(name: string): mongoose.Model<unknown> {
     },
     { timestamps: true },
   );
-  return mongoose.model(name, schema);
+  return mongoose.model<unknown>(name, schema);
 }
 
 /**

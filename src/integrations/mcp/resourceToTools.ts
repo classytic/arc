@@ -1,4 +1,4 @@
-import { createMemoryResourceRateLimiter } from "../../utils/resourceRateLimit.js";
+import { createMemoryResourceRateLimiter } from "../../permissions/resourceRateLimit.js";
 /**
  * @classytic/arc — Resource → MCP Tools orchestrator.
  *
@@ -40,7 +40,12 @@ import {
   resolveCrudDescription,
 } from "./crud-tools.js";
 import type { FieldRuleEntry } from "./fieldRulesToZod.js";
-import { createToolRateLimiter, idempotencyStoreOf } from "./http-parity.js";
+import {
+  assertMcpIdempotencyFencing,
+  createToolRateLimiter,
+  idempotencyStoreOf,
+  rateLimitedResult,
+} from "./http-parity.js";
 import { buildInputSchema, deriveFieldRulesFromAdapter, getAdapterBodies } from "./input-schema.js";
 import { buildRouteInputSchema } from "./route-input-schema.js";
 import {
@@ -130,6 +135,7 @@ export function resourceToTools(
   const tools: ToolDefinition[] = [];
   const prefix = config.toolNamePrefix;
   const wiring = config.wiring;
+  assertMcpIdempotencyFencing(wiring);
   const hasIdempotencyStore = idempotencyStoreOf(wiring?.idempotencyStore) !== undefined;
   const keyRequiredOps = new Set<CrudOperation>(resource.idempotency?.required ?? []);
   const rateLimit = resource.rateLimit;
@@ -316,14 +322,29 @@ export function resourceToTools(
       ? `preset:${route._presetSource}:${resource.name}:${opName}`
       : `route:${resource.name}:${route.method} ${route.path}`;
 
+    const routePolicy = route.rateLimit !== undefined ? route.rateLimit : rateLimit;
+    const allowRoute = createToolRateLimiter(
+      routePolicy && typeof routePolicy === "object"
+        ? {
+            ...routePolicy,
+            ...(route.rateLimit ? { bucket: `route:${route.method}:${route.path}` } : {}),
+          }
+        : routePolicy,
+      resource.name,
+      rateLimiter,
+    );
+    const passthrough = mcpHandler ? createMcpHandlerPassthrough(mcpHandler) : undefined;
     tools.push({
       name: toolName,
       description: toolDescription,
       annotations: toolAnnotations,
       inputSchema: inputShape,
       source: routeSource,
-      handler: mcpHandler
-        ? createMcpHandlerPassthrough(mcpHandler)
+      handler: passthrough
+        ? async (input, ctx) => {
+            if (allowRoute && !(await allowRoute(ctx.session))) return rateLimitedResult(toolName);
+            return passthrough(input, ctx);
+          }
         : createCustomRouteHandler(
             // Project the route into the narrow shape `createCustomRouteHandler`
             // expects. `handler` is guaranteed defined here (we either
@@ -339,6 +360,7 @@ export function resourceToTools(
             {
               resourceName: resource.name,
               operationName: opName,
+              allow: allowRoute,
               permissions: route.permissions,
               pipeline: resource.pipe,
               fields: resource.fields,

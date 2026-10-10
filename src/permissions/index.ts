@@ -166,6 +166,16 @@ export {
   publicReadAdminWrite,
   readOnly,
 } from "./presets.js";
+export type {
+  ResourceRateLimitContext,
+  ResourceRateLimitDecision,
+  ResourceRateLimiter,
+  ResourceRateLimitPolicy,
+} from "./resourceRateLimit.js";
+export {
+  createMemoryResourceRateLimiter,
+  resolveResourceRateLimiter,
+} from "./resourceRateLimit.js";
 /**
  * Namespace alias for all preset bundles. Use either form:
  *

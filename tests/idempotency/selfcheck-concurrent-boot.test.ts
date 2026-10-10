@@ -43,7 +43,8 @@ function stallFirstGet(inner: IdempotencyStore) {
     },
     set: (key, result) => inner.set(key, result),
     tryLock: (key, requestId, ttlMs) => inner.tryLock(key, requestId, ttlMs),
-    releaseLock: (key, requestId) => inner.releaseLock(key, requestId),
+    setIfLocked: (key, requestId, result) => inner.setIfLocked(key, requestId, result),
+    unlock: (key, requestId) => inner.unlock(key, requestId),
     deleteByPrefix: (prefix) => inner.deleteByPrefix(prefix),
     findByPrefix: (prefix) => inner.findByPrefix(prefix),
   } as IdempotencyStore;

@@ -31,11 +31,11 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
-import { requireSingleHeaderValue } from "../../utils/headers.js";
 import {
   createMemoryResourceRateLimiter,
   resolveResourceRateLimiter,
-} from "../../utils/resourceRateLimit.js";
+} from "../../permissions/resourceRateLimit.js";
+import { requireSingleHeaderValue } from "../../utils/headers.js";
 import { declareRuntimeCapability } from "../../utils/runtimeCapabilities.js";
 import {
   isBetterAuth,
@@ -129,7 +129,12 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     arc?: { hooks?: unknown };
     events?: unknown;
     audit?: unknown;
-    idempotency?: { store?: unknown };
+    idempotency?: {
+      store?: unknown;
+      allowUnfencedCompletion?: boolean;
+      ttlMs?: number;
+      lockTimeoutMs?: number;
+    };
   };
   const rateLimiter = resolveResourceRateLimiter(fastify) ?? createMemoryResourceRateLimiter();
   if (enabledResources.some((resource) => resource.rateLimit)) {
@@ -152,6 +157,15 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     },
     get log() {
       return fastify.log;
+    },
+    get allowUnfencedCompletion() {
+      return fastifyAny.idempotency?.allowUnfencedCompletion;
+    },
+    get idempotencyTtlMs() {
+      return fastifyAny.idempotency?.ttlMs;
+    },
+    get idempotencyLockTimeoutMs() {
+      return fastifyAny.idempotency?.lockTimeoutMs;
     },
     get idempotencyStore() {
       return fastifyAny.idempotency?.store;
