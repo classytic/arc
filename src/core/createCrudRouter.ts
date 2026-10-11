@@ -66,7 +66,7 @@ function mergeRouteConfig(
 
 /**
  * Wrap a raw handler so one that called `reply.send()` and resolved `undefined` returns the
- * reply: otherwise, while an async `preSerialization` hook (idempotency, encryption) is pending,
+ * reply: otherwise, while an async send hook (idempotency `onSend`, encryption `preSerialization`) is pending,
  * Fastify re-sends the `undefined` and the client gets an empty body.
  * Pinned by `tests/idempotency/raw-route-keyed-body.test.ts`.
  */

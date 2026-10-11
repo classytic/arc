@@ -122,7 +122,8 @@ describe("CRUD list — keyset mode", () => {
     async () => {
       const res = await list("mode=keyset&limit=5&sort=amount&after=not-a-cursor");
       expect(res.status).toBe(400);
-      expect(String(res.body.code)).toMatch(/^mongokit\.cursor\./);
+      // The closed code is repo-core's, shared by every kit.
+      expect(res.body.code).toBe("repo.cursor.invalid");
     },
   );
 

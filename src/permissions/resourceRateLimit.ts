@@ -78,6 +78,40 @@ export function resourceRateLimitKey(resource: string, context: ResourceRateLimi
   return JSON.stringify([resource, dimension, actor]);
 }
 
+const RATE_LIMITING_DISABLED = Symbol.for("arc.rateLimitingDisabled");
+
+/**
+ * The host said `rateLimit: false`. A resource's declared limit is then a recorded no-op, and
+ * the resources are named once at ready. Absent this mark, a declared limit with no limiter
+ * refuses to boot: nobody decided, so nothing would enforce it.
+ */
+export function markRateLimitingDisabled(app: FastifyInstance): void {
+  if (Reflect.get(app, RATE_LIMITING_DISABLED)) return;
+  const unenforced = new Set<string>();
+  Reflect.set(app, RATE_LIMITING_DISABLED, unenforced);
+  app.addHook("onReady", async () => {
+    if (unenforced.size === 0) return;
+    app.log.info(
+      { resources: [...unenforced] },
+      `[arc] rate limiting is disabled for this app: declared rateLimit not enforced on ${[...unenforced].join(", ")}`,
+    );
+  });
+}
+
+/** Record a resource whose declared limit the host disabled; `false` when the host never decided. */
+export function recordUnenforcedRateLimit(app: FastifyInstance, resource: string): boolean {
+  let owner: object | null = app;
+  while (owner) {
+    const unenforced: unknown = Reflect.get(owner, RATE_LIMITING_DISABLED);
+    if (unenforced instanceof Set) {
+      unenforced.add(resource);
+      return true;
+    }
+    owner = Object.getPrototypeOf(owner);
+  }
+  return false;
+}
+
 /** Uses createRateLimit's store factory, preserving Redis/custom-store configuration. */
 export function resolveResourceRateLimiter(
   app: FastifyInstance,

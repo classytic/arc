@@ -25,6 +25,7 @@ import {
   resolveActionTargetFence,
 } from "../../core/defineResource/plugin.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
+import { withoutTenantInjection } from "../../permissions/tenantPreparation.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import { getOrgId, getUserId } from "../../scope/types.js";
 import type { ResourcePermissions, RouteDefinition } from "../../types/index.js";
@@ -496,7 +497,7 @@ export function resourceToTools(
           // Hooks/events/server parity with the action's REST route.
           {
             wiring,
-            tenantMiddlewares: resource.middlewares?.tenantScope,
+            tenantMiddlewares: withoutTenantInjection(resource.middlewares?.tenantScope),
             schemaOptions: resource.schemaOptions,
             idField: resource.idField,
             parity: {

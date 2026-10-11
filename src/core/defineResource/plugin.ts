@@ -10,6 +10,7 @@
 
 import type { FastifyPluginAsync } from "fastify";
 import { idempotencyConfigProblem } from "../../idempotency/requirement.js";
+import { withoutTenantInjection } from "../../permissions/tenantPreparation.js";
 import type {
   ActionDefinition,
   ActionsMap,
@@ -589,7 +590,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             idField: resource.idField,
             permissions: resource.permissions as Record<string, PermissionCheck> | undefined,
             routeGuards: resource.routeGuards,
-            tenantMiddlewares: resource.middlewares?.tenantScope,
+            tenantMiddlewares: withoutTenantInjection(resource.middlewares?.tenantScope),
             pipeline: resource.pipe,
             rateLimit: resource.rateLimit,
             extensions: resource.extensions,

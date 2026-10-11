@@ -1,4 +1,7 @@
-import { resolveResourceRateLimiter } from "../permissions/resourceRateLimit.js";
+import {
+  markRateLimitingDisabled,
+  resolveResourceRateLimiter,
+} from "../permissions/resourceRateLimit.js";
 /**
  * Security & performance plugin registration for createApp — the
  * ORCHESTRATOR. Decides which plugins register, in which order, and how
@@ -104,6 +107,7 @@ export async function registerSecurityPlugins(
     fastify.log.debug("Rate limiting enabled");
   } else {
     fastify.log.warn("Rate limiting disabled");
+    markRateLimitingDisabled(fastify);
   }
 }
 

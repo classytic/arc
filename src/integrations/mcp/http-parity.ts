@@ -125,7 +125,9 @@ export async function runIdempotentTool(args: {
   try {
     const completed = replay(await store.get(fullKey));
     if (completed) return completed;
-    const result = await dispatch();
+    // One frozen JSON copy is both stored and returned: a tool's live object (structuredContent from
+    // an engine that keeps mutating it) cannot make the replay differ from the first answer.
+    const result = JSON.parse(JSON.stringify(await dispatch())) as CallToolResult;
     if (!result.isError) {
       const completion = createIdempotencyResult(200, result, {}, ttlMs, fingerprint);
       if (store.setIfLocked && store.supportsFencedCompletion !== false) {

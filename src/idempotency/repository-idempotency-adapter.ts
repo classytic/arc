@@ -137,7 +137,7 @@ export function repositoryAsIdempotencyStore(
       const doc = (await safeGetOne(eqFilter(idField, key))) as IdempotencyDoc | null;
       if (!doc) return undefined;
       assertKeyIdentity("get", doc, key);
-      if (!doc.result) return undefined;
+      if (!isCompleted(doc)) return undefined;
       if (new Date(doc.expiresAt) < new Date()) return undefined;
       return {
         key,
@@ -280,11 +280,11 @@ export function repositoryAsIdempotencyStore(
       const doc = (await safeGetOne(
         and(
           startsWith(idField, prefix, "sensitive"),
-          exists("result", true),
+          exists("result.statusCode", true),
           gt("expiresAt", new Date()),
         ),
       )) as IdempotencyDoc | null;
-      if (!doc?.result) return undefined;
+      if (!doc || !isCompleted(doc)) return undefined;
       // Prefix analog of assertKeyIdentity — a doc whose key does not start
       // with the requested prefix means the filter was dropped.
       if (!String(doc[idField] ?? "").startsWith(prefix)) {
@@ -309,4 +309,14 @@ export function repositoryAsIdempotencyStore(
       // Repository lifecycle is owned by the caller.
     },
   };
+}
+
+/**
+ * A row holds a completed response only when it has a status code. A lock-only row can read back
+ * with `result: {}` (a nested path in a mongoose schema); replaying that would answer nothing.
+ */
+function isCompleted(
+  doc: IdempotencyDoc,
+): doc is IdempotencyDoc & { result: NonNullable<IdempotencyDoc["result"]> } {
+  return typeof doc.result?.statusCode === "number";
 }

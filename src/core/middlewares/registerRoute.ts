@@ -7,7 +7,10 @@ import {
   declaresIdempotencyFence,
   idempotencyConfigProblem,
 } from "../../idempotency/requirement.js";
-import { resolveResourceRateLimiter } from "../../permissions/resourceRateLimit.js";
+import {
+  recordUnenforcedRateLimit,
+  resolveResourceRateLimiter,
+} from "../../permissions/resourceRateLimit.js";
 import type { FastifyWithDecorators } from "../../types/index.js";
 import { arcRouteValidatorCompiler } from "../routeValidator.js";
 import { isReplayBoundary, isValidationGate } from "./chain.js";
@@ -36,41 +39,45 @@ export function tryRegisterRoute(
     typeof ratePolicy.timeWindow === "string"
   ) {
     const limiter = resolveResourceRateLimiter(fastify);
-    if (!limiter)
+    if (!limiter && !recordUnenforcedRateLimit(fastify, context.resourceName))
       throw new Error(
-        `[arc] Resource "${context.resourceName}" declares rateLimit; register @fastify/rate-limit before mounting the resource.`,
+        `[arc] Resource "${context.resourceName}" declares rateLimit; register @fastify/rate-limit before mounting the resource, or disable rate limiting for the app (createApp({ rateLimit: false })).`,
       );
-    const policy = {
-      max: ratePolicy.max,
-      timeWindow: ratePolicy.timeWindow,
-      bucket: context.rateLimitBucket,
-    };
-    const handlers = Array.isArray(opts.preHandler)
-      ? opts.preHandler
-      : opts.preHandler
-        ? [opts.preHandler]
-        : [];
-    const limit: import("fastify").preHandlerAsyncHookHandler = async (req, reply) => {
-      const decision = await limiter.consume(context.resourceName, policy, {
-        scope: req.scope,
-        ip: req.ip,
-      });
-      for (const [header, value] of Object.entries(decision.headers)) reply.header(header, value);
-      if (!decision.allowed) {
-        await reply.code(429).send({
-          code: "arc.rate_limited",
-          message: "Too many calls to this resource — retry later.",
-          status: 429,
+    if (!limiter) {
+      opts = { ...opts, config: { ...opts.config, rateLimit: false } };
+    } else {
+      const policy = {
+        max: ratePolicy.max,
+        timeWindow: ratePolicy.timeWindow,
+        bucket: context.rateLimitBucket,
+      };
+      const handlers = Array.isArray(opts.preHandler)
+        ? opts.preHandler
+        : opts.preHandler
+          ? [opts.preHandler]
+          : [];
+      const limit: import("fastify").preHandlerAsyncHookHandler = async (req, reply) => {
+        const decision = await limiter.consume(context.resourceName, policy, {
+          scope: req.scope,
+          ip: req.ip,
         });
-      }
-    };
-    const replayIndex = handlers.findIndex(isReplayBoundary);
-    const at = replayIndex < 0 ? handlers.length : replayIndex;
-    opts = {
-      ...opts,
-      config: { ...opts.config, rateLimit: false },
-      preHandler: [...handlers.slice(0, at), limit, ...handlers.slice(at)],
-    };
+        for (const [header, value] of Object.entries(decision.headers)) reply.header(header, value);
+        if (!decision.allowed) {
+          await reply.code(429).send({
+            code: "arc.rate_limited",
+            message: "Too many calls to this resource — retry later.",
+            status: 429,
+          });
+        }
+      };
+      const replayIndex = handlers.findIndex(isReplayBoundary);
+      const at = replayIndex < 0 ? handlers.length : replayIndex;
+      opts = {
+        ...opts,
+        config: { ...opts.config, rateLimit: false },
+        preHandler: [...handlers.slice(0, at), limit, ...handlers.slice(at)],
+      };
+    }
   }
   const problem = idempotencyConfigProblem(opts.config);
   if (problem) {

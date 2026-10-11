@@ -31,6 +31,23 @@ export function isTenantPreparation(middleware: unknown): boolean {
   );
 }
 
+/**
+ * The resource's tenant middlewares minus body INJECTION: an action payload is a command, not
+ * the document, so it is scoped (filters, `_tenantFields`) but never written into.
+ */
+export function withoutTenantInjection<T>(middlewares: readonly T[] | undefined): T[] {
+  return (middlewares ?? []).filter((middleware) => {
+    if (typeof middleware !== "function") return true;
+    const preparation: unknown = Reflect.get(middleware, PREPARATION);
+    return !(
+      typeof preparation === "object" &&
+      preparation !== null &&
+      "mode" in preparation &&
+      preparation.mode === "inject"
+    );
+  });
+}
+
 export function prepareTenancy(
   scope: RequestScope,
   preparation: TenantPreparation,

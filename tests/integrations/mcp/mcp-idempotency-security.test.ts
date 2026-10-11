@@ -166,3 +166,27 @@ describe("MCP idempotency security context", () => {
     expect(controller.create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("MCP idempotent replay fidelity", () => {
+  it("a tool's live structuredContent mutated after it answered does not change the replay", async () => {
+    const live = { id: "run-1", status: "running" as string, steps: ["start"] };
+    const args = {
+      store: new MemoryIdempotencyStore(),
+      key: "k-live",
+      resourceName: "workflow",
+      operation: "start",
+      input: {},
+      session: null,
+      dispatch: async () => ({
+        content: [{ type: "text" as const, text: "started" }],
+        structuredContent: live,
+      }),
+    };
+    const first = await runIdempotentTool(args);
+    live.status = "completed";
+    live.steps.push("finish");
+    const replay = await runIdempotentTool(args);
+    expect(JSON.stringify(replay)).toBe(JSON.stringify(first));
+    expect(replay.structuredContent).toEqual({ id: "run-1", status: "running", steps: ["start"] });
+  });
+});

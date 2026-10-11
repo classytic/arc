@@ -47,7 +47,7 @@ import type {
   ResourceExtensions,
   RouteSchemaOptions,
 } from "../types/index.js";
-import { createError, NotFoundError } from "../utils/errors.js";
+import { createError, NotFoundError, ValidationError } from "../utils/errors.js";
 import { sendControllerResponse } from "./fastifyAdapter.js";
 import {
   buildActionPermissionMw,
@@ -593,6 +593,10 @@ export function createActionRouter(
               throw createError(statusCode, errorMsg, code ? { code } : undefined);
             }
 
+            // A schema refusal inside the handler is the caller's input, not a server fault.
+            const validation = zodIssues(error);
+            if (validation) throw new ValidationError(`Invalid '${action}' payload`, validation);
+
             const err = error as Record<string, unknown>;
             const statusCode = (err.statusCode as number) || (err.status as number) || 500;
             const errorCode = (err.code as string) || "ACTION_FAILED";
@@ -749,4 +753,18 @@ function buildActionDescription(
     lines.push(`- \`${action}\`${roleStr}`);
   }
   return lines.join("\n");
+}
+
+/** A ZodError's issues as `{ field, message }`, or `undefined` for any other error. */
+function zodIssues(error: unknown): Array<{ field: string; message: string }> | undefined {
+  if (!(error instanceof Error) || error.name !== "ZodError" || !("issues" in error))
+    return undefined;
+  const issues = error.issues;
+  if (!Array.isArray(issues)) return undefined;
+  return issues.map((issue: { path?: unknown; message?: unknown }) => ({
+    field: Array.isArray(issue.path)
+      ? issue.path.map(String).join(".") || "(payload)"
+      : "(payload)",
+    message: typeof issue.message === "string" ? issue.message : "invalid",
+  }));
 }

@@ -514,7 +514,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
       return reply;
     }
 
-    // Store full key for preSerialization (body cache) + onResponse (unlock)
+    // Store full key for onSend (body cache) + onResponse (unlock)
     request._idempotencyFullKey = fullKey;
     request._idempotencyFingerprint = requestFingerprint;
 
@@ -581,8 +581,9 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     lockTimeoutMs,
   });
 
-  // Object responses record before serialization; skipped response shapes record in onSend.
-  // Header writes stay in the middleware. Completion precedes flush; onResponse releases locks.
+  // Every response records in onSend, from the SERIALIZED payload: the stored bytes are the served
+  // bytes, so a handler's live object (a workflow run the engine keeps mutating) cannot make a replay
+  // differ from the first call. Completion precedes flush; onResponse releases locks.
   const recordedResponses = new WeakSet<FastifyRequest>();
   async function recordResponse(
     request: FastifyRequest,
@@ -640,13 +641,6 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     } else await store.set(fullKey, completion);
     recordedResponses.add(request);
   }
-  fastify.addHook("preSerialization", async (request, reply, payload) => {
-    await recordResponse(request, reply, payload);
-    return payload;
-  });
-
-  // Fastify skips preSerialization for empty, string and binary responses. No headers are
-  // changed here: completion must be persisted before the response flush and lock release.
   fastify.addHook("onSend", async (request, reply, payload) => {
     if (
       !request._idempotencyFullKey ||
