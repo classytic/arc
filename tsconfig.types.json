@@ -8,6 +8,7 @@
   "include": [
     "src/**/*",
     "tests/types/**/*",
+    "tests/auth/optional-jwt-peer.test.ts",
     "tests/core/repository-contract-types.test-d.ts",
     "tests/core/base-controller-dx.test.ts",
     "tests/core/mixins/type-precision.test.ts",

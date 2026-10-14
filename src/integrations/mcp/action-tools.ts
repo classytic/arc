@@ -13,6 +13,7 @@
  */
 
 import type { z } from "zod";
+import type { ActionTargetCheck } from "../../core/entityHelpers.js";
 import { normalizeSchemaIR, shouldRejectAdditionalProperties } from "../../core/schemaIR.js";
 import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
@@ -49,8 +50,8 @@ export interface ActionToolParity {
   readonly keyRequired: boolean;
   /** `dedup: 'handler'`: the key is demanded and passed through, never stored. */
   readonly handlerDedup: boolean;
-  /** The target fence: `false` = the caller cannot read that row (404). */
-  readonly fence?: (id: string, ctx: IRequestContext) => Promise<boolean>;
+  /** The target fence: not `visible` = the caller cannot read that row (404). */
+  readonly fence?: (id: string, ctx: IRequestContext) => Promise<ActionTargetCheck>;
   /** The resource is audited: record the action like the route does. */
   readonly audit: boolean;
   /** The resource's rate limit, per caller. */
@@ -224,8 +225,11 @@ export function createActionToolHandler(
       const id = idLess ? "" : typeof input.id === "string" ? input.id : "";
       const { id: _discardId, ...data } = input;
 
-      if (!idLess && parity?.fence && !(await parity.fence(id, reqCtx))) {
-        throw new NotFoundError(resourceName);
+      let target: unknown;
+      if (!idLess && parity?.fence) {
+        const check = await parity.fence(id, reqCtx);
+        if (!check.visible) throw new NotFoundError(resourceName);
+        target = check.doc;
       }
       if (
         parity?.allow &&
@@ -234,7 +238,15 @@ export function createActionToolHandler(
         return rateLimitedResult(toolName);
       const run = async (): Promise<CallToolResult> => {
         // The handler deduplicating itself reads the key where HTTP puts it.
-        const req = idempotencyKey === undefined ? reqCtx : { ...reqCtx, idempotencyKey };
+        // The fenced row rides where the HTTP router puts it (`getActionTarget(req)`).
+        const withTarget =
+          target === undefined
+            ? reqCtx
+            : {
+                ...reqCtx,
+                arc: { ...(reqCtx as { arc?: Record<string, unknown> }).arc, actionTarget: target },
+              };
+        const req = idempotencyKey === undefined ? withTarget : { ...withTarget, idempotencyKey };
         // Pass the full IRequestContext as `req` so action handlers see user,
         // scope, metadata, and filters in the same shape as the HTTP path.
         const result = await handler(id, data, req);

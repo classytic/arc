@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { ARC_ERROR_CODES } from "@classytic/repo-core/errors";
 import { fingerprintRequest, IdempotencyError } from "@classytic/repo-core/idempotency";
+import { acquireIdempotencyKey, releaseIdempotencyLock } from "../../idempotency/acquire.js";
 import type { IdempotencyStore } from "../../idempotency/stores/interface.js";
 import { createIdempotencyResult } from "../../idempotency/stores/interface.js";
 import { resolveIdempotencyTiming } from "../../idempotency/timing.js";
@@ -112,19 +113,18 @@ export async function runIdempotentTool(args: {
     }
     return undefined;
   };
-  const cachedResult = replay(await store.get(fullKey));
-  if (cachedResult) return cachedResult;
   const lockId = randomUUID();
-  if (!(await store.tryLock(fullKey, lockId, lockTimeoutMs))) {
+  const acquisition = await acquireIdempotencyKey(store, fullKey, lockId, lockTimeoutMs);
+  if (acquisition.status === "completed") return replay(acquisition.result) as CallToolResult;
+  if (acquisition.status === "locked") {
     return toCallToolError({
       code: ARC_ERROR_CODES.IDEMPOTENCY_CONFLICT,
       message: "A call with this idempotency key is already in progress",
       status: 409,
     });
   }
+  let fencedCompletion = false;
   try {
-    const completed = replay(await store.get(fullKey));
-    if (completed) return completed;
     // One frozen JSON copy is both stored and returned: a tool's live object (structuredContent from
     // an engine that keeps mutating it) cannot make the replay differ from the first answer.
     const result = JSON.parse(JSON.stringify(await dispatch())) as CallToolResult;
@@ -138,13 +138,14 @@ export async function runIdempotentTool(args: {
             status: 409,
           });
         }
+        fencedCompletion = true;
       } else {
         await store.set(fullKey, completion);
       }
     }
     return result;
   } finally {
-    await store.unlock(fullKey, lockId);
+    await releaseIdempotencyLock(store, fullKey, lockId, fencedCompletion);
   }
 }
 

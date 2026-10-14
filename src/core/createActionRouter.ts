@@ -48,6 +48,7 @@ import type {
   RouteSchemaOptions,
 } from "../types/index.js";
 import { createError, NotFoundError, ValidationError } from "../utils/errors.js";
+import type { ActionTargetCheck } from "./entityHelpers.js";
 import { sendControllerResponse } from "./fastifyAdapter.js";
 import {
   buildActionPermissionMw,
@@ -202,6 +203,12 @@ export interface ActionRouterConfig {
    */
   readonly isTargetVisible?: (id: string, req: FastifyRequest) => Promise<boolean>;
 
+  /**
+   * The same fence, also returning the row it read; the router hands that row to the handler
+   * (`getActionTarget(req)`). Wins over `isTargetVisible` when both are set.
+   */
+  readonly loadTarget?: (id: string, req: FastifyRequest) => Promise<ActionTargetCheck>;
+
   /** Id-bound actions whose handler authorizes its own target (`target: { scope: 'handler' }`). */
   readonly handlerScopedActionNames?: readonly string[];
 
@@ -281,6 +288,7 @@ export function createActionRouter(
     idLessActionNames = [],
     extensions,
     isTargetVisible,
+    loadTarget,
     handlerScopedActionNames = [],
     idempotentActionNames = [],
     handlerDedupOwners = {},
@@ -566,13 +574,17 @@ export function createActionRouter(
             );
           }
 
-          if (
-            hasId &&
-            isTargetVisible &&
-            !handlerScoped.has(action) &&
-            !(await isTargetVisible(id, req))
-          ) {
-            throw new NotFoundError(resourceName);
+          if (hasId && (loadTarget || isTargetVisible) && !handlerScoped.has(action)) {
+            const target = loadTarget
+              ? await loadTarget(id, req)
+              : {
+                  visible: await (isTargetVisible as NonNullable<typeof isTargetVisible>)(id, req),
+                };
+            if (!target.visible) throw new NotFoundError(resourceName);
+            if (target.doc !== undefined) {
+              const reqWithExtras = req as RequestWithExtras;
+              reqWithExtras.arc = { ...(reqWithExtras.arc ?? {}), actionTarget: target.doc };
+            }
           }
 
           try {

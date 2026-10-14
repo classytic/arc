@@ -39,6 +39,8 @@ export interface RequestWithExtras extends FastifyRequest {
      * can still read the entity handle.
      */
     entityId?: string;
+    /** The id-bound action's target as the fence read it — read via `getActionTarget(req)`. */
+    actionTarget?: unknown;
   };
   context?: Record<string, unknown>;
   _policyFilters?: Record<string, unknown>;

@@ -917,8 +917,30 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
     type ResumeHookFn = (
       token: string,
       payload: unknown,
+      options?: { container?: NonNullable<WorkflowLike["container"]> },
     ) => Promise<{ runId: string; run: WorkflowRunLike }>;
     let resumeHookFn: ResumeHookFn | undefined;
+
+    /**
+     * The container the token's run lives in. Streamline's DB-fallback resume writes through the DEFAULT
+     * connection's repository and strict-concurrency counter unless it is handed the run's container —
+     * wrong for a streamline bound to another connection. One distinct container is the common case;
+     * several are told apart by which one holds the run.
+     */
+    const containerForRun = async (runId: string) => {
+      const containers = [
+        ...new Set([...registry.values()].map((wf) => wf.container).filter((c) => c !== undefined)),
+      ];
+      if (containers.length <= 1) return containers[0];
+      for (const container of containers) {
+        try {
+          if (await container.repository?.getById?.(runId)) return container;
+        } catch {
+          // a tenant-scoped repository refuses an unscoped read — try the next container
+        }
+      }
+      return undefined;
+    };
 
     fastify.post(
       `${routeScope}/hooks/:token`,
@@ -932,7 +954,12 @@ const streamlinePluginImpl: FastifyPluginAsync<StreamlinePluginOptions> = async 
           resumeHookFn = streamline.resumeHook;
         }
         const { token } = request.params as { token: string };
-        const result = await resumeHookFn(token, request.body);
+        const container = await containerForRun(token.split(":")[0] ?? token);
+        const result = await resumeHookFn(
+          token,
+          request.body,
+          container ? { container } : undefined,
+        );
         return { runId: result.runId, run: result.run };
       },
     );

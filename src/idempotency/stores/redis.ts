@@ -18,7 +18,8 @@
 
 import { createHash } from "node:crypto";
 import type { IoredisKeyValueCommands, UpstashKeyValueCommands } from "../../utils/redisShapes.js";
-import type { IdempotencyResult, IdempotencyStore } from "./interface.js";
+import { acquireBySteps } from "../acquire.js";
+import type { IdempotencyAcquisition, IdempotencyResult, IdempotencyStore } from "./interface.js";
 
 export interface RedisClient {
   get(key: string): Promise<string | null>;
@@ -53,6 +54,8 @@ export interface RedisIdempotencyStoreOptions {
 export class RedisIdempotencyStore implements IdempotencyStore {
   readonly name = "redis";
   readonly supportsFencedCompletion: boolean;
+  /** The fenced completion script deletes the lock; it needs `eval`, as fencing does. */
+  readonly completionReleasesLock: boolean;
   private client: RedisClient;
   private prefix: string;
   private lockPrefix: string;
@@ -61,6 +64,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   constructor(options: RedisIdempotencyStoreOptions) {
     this.client = options.client;
     this.supportsFencedCompletion = typeof (options.client as RedisWithEval).eval === "function";
+    this.completionReleasesLock = this.supportsFencedCompletion;
     this.prefix = options.prefix ?? "idem:";
     this.lockPrefix = options.lockPrefix ?? "idem:lock:";
     const prefixTag = this.prefix.match(/\{([^}]+)\}/)?.[1];
@@ -81,9 +85,11 @@ export class RedisIdempotencyStore implements IdempotencyStore {
   }
 
   async get(key: string): Promise<IdempotencyResult | undefined> {
-    const data = await this.client.get(this.resultKey(key));
-    if (!data) return undefined;
+    return this.parseResult(await this.client.get(this.resultKey(key)));
+  }
 
+  private parseResult(data: string | null): IdempotencyResult | undefined {
+    if (!data) return undefined;
     try {
       const result = JSON.parse(data) as IdempotencyResult;
       // Check if expired (Redis TTL should handle this, but double-check)
@@ -121,6 +127,40 @@ export class RedisIdempotencyStore implements IdempotencyStore {
     return result === "OK";
   }
 
+  async acquire(
+    key: string,
+    requestId: string,
+    lockTtlMs: number,
+  ): Promise<IdempotencyAcquisition> {
+    const client = this.client as RedisWithEval;
+    if (typeof client.eval !== "function") return acquireBySteps(this, key, requestId, lockTtlMs);
+    // One script: a stored result wins, else SET NX the lock. Lock and result share a slot.
+    const reply = (await client.eval(
+      `
+      local done = redis.call("get", KEYS[2])
+      if done then return {1, done} end
+      if redis.call("set", KEYS[1], ARGV[1], "NX", "PX", ARGV[2]) then return {2} end
+      return {0}
+    `,
+      2,
+      this.lockKey(key),
+      this.resultKey(key),
+      requestId,
+      Math.max(1, Math.ceil(lockTtlMs)),
+    )) as [number, string?] | null;
+    const tag = Number(reply?.[0]);
+    if (tag === 2) return { status: "acquired" };
+    if (tag === 1) {
+      const result = this.parseResult(reply?.[1] ?? null);
+      if (result) return { status: "completed", result };
+      // Unreadable or clock-expired payload: same as `get` returning nothing.
+      return (await this.tryLock(key, requestId, lockTtlMs))
+        ? { status: "acquired" }
+        : { status: "locked" };
+    }
+    return { status: "locked" };
+  }
+
   async setIfLocked(
     key: string,
     requestId: string,
@@ -138,6 +178,7 @@ export class RedisIdempotencyStore implements IdempotencyStore {
       `
       if redis.call("get", KEYS[1]) ~= ARGV[1] then return 0 end
       redis.call("set", KEYS[2], ARGV[2], "PX", ARGV[3])
+      redis.call("del", KEYS[1])
       return 1
     `,
       2,

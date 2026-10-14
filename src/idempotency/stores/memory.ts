@@ -11,7 +11,12 @@
  * - Prefix-based operations for raw key invalidation
  */
 
-import type { IdempotencyLock, IdempotencyResult, IdempotencyStore } from "./interface.js";
+import type {
+  IdempotencyAcquisition,
+  IdempotencyLock,
+  IdempotencyResult,
+  IdempotencyStore,
+} from "./interface.js";
 
 export interface MemoryIdempotencyStoreOptions {
   /** Default TTL in milliseconds (default: 86400000 = 24h) */
@@ -24,6 +29,7 @@ export interface MemoryIdempotencyStoreOptions {
 
 export class MemoryIdempotencyStore implements IdempotencyStore {
   readonly name = "memory";
+  readonly completionReleasesLock = true;
   private results: Map<string, IdempotencyResult> = new Map();
   private locks: Map<string, IdempotencyLock> = new Map();
   private ttlMs: number;
@@ -82,7 +88,31 @@ export class MemoryIdempotencyStore implements IdempotencyStore {
       return false;
     // No await or overridable method between the ownership check and write.
     this.writeResult(key, result);
+    this.locks.delete(key);
     return true;
+  }
+
+  async acquire(
+    key: string,
+    requestId: string,
+    lockTtlMs: number,
+  ): Promise<IdempotencyAcquisition> {
+    // Synchronous from here on: no other caller can interleave between the checks and the lock.
+    const result = this.results.get(key);
+    if (result) {
+      if (Date.now() <= new Date(result.expiresAt).getTime())
+        return { status: "completed", result };
+      this.results.delete(key);
+    }
+    const lock = this.locks.get(key);
+    if (lock && Date.now() <= new Date(lock.expiresAt).getTime()) return { status: "locked" };
+    this.locks.set(key, {
+      key,
+      requestId,
+      lockedAt: new Date(),
+      expiresAt: new Date(Date.now() + lockTtlMs),
+    });
+    return { status: "acquired" };
   }
 
   async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {

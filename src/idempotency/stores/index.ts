@@ -8,6 +8,7 @@
  */
 
 export type {
+  IdempotencyAcquisition,
   IdempotencyLock,
   IdempotencyResult,
   IdempotencyStore,

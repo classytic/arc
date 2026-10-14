@@ -27,6 +27,7 @@ import { convertRouteSchema, ensureSchemaConverter } from "../../utils/schemaCon
 import { hasEvents } from "../../utils/typeGuards.js";
 import { resolveActionPermission } from "../actionPermissions.js";
 import { createCrudRouter } from "../createCrudRouter.js";
+import type { ActionTargetCheck } from "../entityHelpers.js";
 import { createRequestContext } from "../fastifyAdapter.js";
 import type { ResourceDefinition } from "./ResourceDefinition.js";
 import { withoutObjectIdPattern } from "./schemas.js";
@@ -351,7 +352,7 @@ export function resolveActionTargetFence(
     idLessActionNames: readonly string[];
     handlerScopedActionNames: readonly string[];
   },
-): ((id: string, ctx: IRequestContext) => Promise<boolean>) | undefined {
+): ((id: string, ctx: IRequestContext) => Promise<ActionTargetCheck>) | undefined {
   const exempt = new Set([
     ...actionConfig.idLessActionNames,
     ...actionConfig.handlerScopedActionNames,
@@ -361,6 +362,7 @@ export function resolveActionTargetFence(
   const ctrl = resource.controller as
     | {
         isActionTargetVisible?: (req: IRequestContext, id: string) => Promise<boolean>;
+        loadActionTarget?: (req: IRequestContext, id: string) => Promise<ActionTargetCheck>;
         canFenceActionTargets?: () => boolean;
       }
     | undefined;
@@ -383,7 +385,9 @@ export function resolveActionTargetFence(
     }
     return undefined;
   }
-  return (id, ctx) => check.call(ctrl, ctx, id);
+  const load = ctrl?.loadActionTarget;
+  if (typeof load === "function") return (id, ctx) => load.call(ctrl, ctx, id);
+  return async (id, ctx) => ({ visible: await check.call(ctrl, ctx, id) });
 }
 
 // ============================================================================
@@ -581,7 +585,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           createActionRouter(typedInstance, {
             ...actionConfig,
             ...(actionTarget
-              ? { isTargetVisible: (id, req) => actionTarget(id, createRequestContext(req)) }
+              ? { loadTarget: (id, req) => actionTarget(id, createRequestContext(req)) }
               : {}),
             auditActions: Boolean(resource.audit),
             resourceName: resource.name,

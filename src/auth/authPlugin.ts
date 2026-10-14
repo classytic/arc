@@ -142,7 +142,21 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
     }
 
     // Register @fastify/jwt
-    const jwtPlugin = await import("@fastify/jwt");
+    const jwtPlugin = await import("@fastify/jwt").catch((error: unknown) => {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ERR_MODULE_NOT_FOUND" &&
+        error.message.includes("@fastify/jwt")
+      ) {
+        throw new Error(
+          "Arc JWT authentication requires @fastify/jwt. Run `npm install @fastify/jwt`. " +
+            "Better Auth and custom authenticators do not require this package.",
+          { cause: error },
+        );
+      }
+      throw error;
+    });
     await fastify.register(jwtPlugin.default ?? jwtPlugin, {
       secret: jwtConfig.secret,
       sign: {

@@ -1,7 +1,7 @@
 /** Resource registration and the module/app lifecycle for createApp. */
 
 import { createEventRouter } from "@classytic/primitives/events";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { defineEvent, type EventRegistry } from "../events/defineEvent.js";
 import { CRUD_EVENT_SCHEMA } from "../events/eventTypes.js";
 import { runShutdown } from "../utils/shutdown.js";
@@ -421,14 +421,12 @@ export async function registerResources(
       // Prefixed resources register under resourcePrefix (or root if no prefix)
       if (prefixed.length) {
         if (config.resourcePrefix) {
-          await fastify.register(
-            async (scoped) => {
-              for (const resource of prefixed) {
-                await registerOne(scoped, resource, config.mountRoutes);
-              }
-            },
-            { prefix: config.resourcePrefix },
-          );
+          const registerPrefixed: FastifyPluginAsync = async (scoped) => {
+            for (const resource of prefixed) {
+              await registerOne(scoped, resource, config.mountRoutes);
+            }
+          };
+          await fastify.register(registerPrefixed, { prefix: config.resourcePrefix });
         } else {
           for (const resource of prefixed) {
             await registerOne(fastify, resource, config.mountRoutes);

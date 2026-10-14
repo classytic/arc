@@ -79,6 +79,8 @@ export {
 // the historical footgun where `findById(id)` silently returned null
 // for resources binding a non-`_id` `idField` (slug, reportId, etc.).
 export {
+  type ActionTargetCheck,
+  getActionTarget,
   getEntityId,
   getEntityIdField,
   getEntityQuery,

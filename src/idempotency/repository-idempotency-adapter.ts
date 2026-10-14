@@ -32,7 +32,11 @@ import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { and, eq as eqFilter, exists, gt, lt, or, startsWith } from "@classytic/repo-core/filter";
 import { update } from "@classytic/repo-core/update";
 import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-helpers.js";
-import type { IdempotencyResult, IdempotencyStore } from "./stores/interface.js";
+import type {
+  IdempotencyAcquisition,
+  IdempotencyResult,
+  IdempotencyStore,
+} from "./stores/interface.js";
 
 /**
  * The backing repository returned a document whose key does not match the
@@ -132,25 +136,13 @@ export function repositoryAsIdempotencyStore(
 
   return {
     name: "repository",
+    completionReleasesLock: true,
 
     async get(key: string): Promise<IdempotencyResult | undefined> {
       const doc = (await safeGetOne(eqFilter(idField, key))) as IdempotencyDoc | null;
       if (!doc) return undefined;
       assertKeyIdentity("get", doc, key);
-      if (!isCompleted(doc)) return undefined;
-      if (new Date(doc.expiresAt) < new Date()) return undefined;
-      return {
-        key,
-        ...(doc.result.requestFingerprint
-          ? { requestFingerprint: doc.result.requestFingerprint }
-          : {}),
-        statusCode: doc.result.statusCode,
-        headers: doc.result.headers,
-        body: doc.result.body,
-        ...(doc.result.bodyEncoding ? { bodyEncoding: doc.result.bodyEncoding } : {}),
-        createdAt: new Date(doc.createdAt),
-        expiresAt: new Date(doc.expiresAt),
-      };
+      return completedResult(doc, key);
     },
 
     async set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void> {
@@ -210,12 +202,61 @@ export function repositoryAsIdempotencyStore(
             createdAt: result.createdAt,
             expiresAt: result.expiresAt,
           },
+          unset: ["lock"],
         }),
         { returnDocument: "after" },
       )) as IdempotencyDoc | null;
       if (!doc) return false;
       assertKeyIdentity("setIfLocked", doc, key);
       return true;
+    },
+
+    async acquire(
+      key: string,
+      requestId: string,
+      lockTtlMs: number,
+    ): Promise<IdempotencyAcquisition> {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const now = new Date();
+        let doc: IdempotencyDoc | null = null;
+        try {
+          // Matches only a row with no live completion AND no live lock; a row that has
+          // either fails the filter, the upsert collides on the key, and the read below says which.
+          doc = (await r.findOneAndUpdate(
+            and(
+              eqFilter(idField, key),
+              or(exists("result.statusCode", false), lt("expiresAt", now)),
+              or(exists("lock", false), lt("lock.expiresAt", now)),
+            ),
+            update({
+              set: {
+                lock: { requestId, expiresAt: new Date(now.getTime() + lockTtlMs) },
+                expiresAt: new Date(now.getTime() + defaultTtlMs),
+              },
+              unset: ["result"],
+              setOnInsert: { [idField]: key, createdAt: now },
+            }),
+            { upsert: true, returnDocument: "after" },
+          )) as IdempotencyDoc | null;
+        } catch (err) {
+          if (!isDuplicateKeyError(err)) throw err;
+        }
+        if (doc) {
+          assertKeyIdentity("acquire", doc, key);
+          return { status: "acquired" };
+        }
+        const existing = (await safeGetOne(eqFilter(idField, key))) as IdempotencyDoc | null;
+        if (existing) {
+          assertKeyIdentity("acquire", existing, key);
+          const result = completedResult(existing, key);
+          if (result) return { status: "completed", result };
+          if (existing.lock && new Date(existing.lock.expiresAt) > new Date()) {
+            return { status: "locked" };
+          }
+        }
+        // The row changed between the two commands (a lease or result just expired): try once more.
+      }
+      return { status: "locked" };
     },
 
     async tryLock(key: string, requestId: string, ttlMs: number): Promise<boolean> {
@@ -308,6 +349,22 @@ export function repositoryAsIdempotencyStore(
     async close(): Promise<void> {
       // Repository lifecycle is owned by the caller.
     },
+  };
+}
+
+/** The row's unexpired completed response, or `undefined`. */
+function completedResult(doc: IdempotencyDoc, key: string): IdempotencyResult | undefined {
+  if (!isCompleted(doc)) return undefined;
+  if (new Date(doc.expiresAt) < new Date()) return undefined;
+  return {
+    key,
+    ...(doc.result.requestFingerprint ? { requestFingerprint: doc.result.requestFingerprint } : {}),
+    statusCode: doc.result.statusCode,
+    headers: doc.result.headers,
+    body: doc.result.body,
+    ...(doc.result.bodyEncoding ? { bodyEncoding: doc.result.bodyEncoding } : {}),
+    createdAt: new Date(doc.createdAt),
+    expiresAt: new Date(doc.expiresAt),
   };
 }
 

@@ -174,7 +174,9 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
   ])(
     "rechecks completion after acquiring a lock ($changedBody, binary $binary)",
     async ({ changedBody, binary }) => {
+      // The step protocol a store without an atomic `acquire` gets: get → tryLock → recheck.
       const store = new MemoryIdempotencyStore();
+      (store as { acquire?: unknown }).acquire = undefined;
       const read = store.get.bind(store);
       let release = () => {};
       let captured = () => {};

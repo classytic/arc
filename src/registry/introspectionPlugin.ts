@@ -34,72 +34,70 @@ const introspectionPlugin: FastifyPluginAsync<IntrospectionPluginOptions> = asyn
   // Instance-scoped registry access
   const getRegistry = () => (fastify as FastifyWithDecorators).arc?.registry;
 
-  await fastify.register(
-    async (instance) => {
-      // GET / - Get all registered resources
-      instance.get(
-        "/",
-        {
-          preHandler: authMiddleware as never,
-        },
-        async (_req: FastifyRequest, _reply: FastifyReply) => {
-          return (
-            getRegistry()?.getIntrospection() ?? {
-              resources: [],
-              stats: {},
-              generatedAt: new Date().toISOString(),
-            }
-          );
-        },
-      );
-
-      // GET /stats - Get registry statistics
-      instance.get(
-        "/stats",
-        {
-          preHandler: authMiddleware as never,
-        },
-        async (_req: FastifyRequest, _reply: FastifyReply) => {
-          return (
-            getRegistry()?.getStats() ?? {
-              totalResources: 0,
-              byModule: {},
-              presetUsage: {},
-              totalRoutes: 0,
-              totalEvents: 0,
-            }
-          );
-        },
-      );
-
-      // GET /:name - Get resource by name
-      instance.get<{ Params: { name: string } }>(
-        "/:name",
-        {
-          schema: {
-            params: {
-              type: "object" as const,
-              properties: {
-                name: { type: "string" as const },
-              },
-              required: ["name" as const],
-            },
-          },
-          preHandler: authMiddleware as never,
-        },
-        async (req, reply: FastifyReply) => {
-          const resource = getRegistry()?.get(req.params.name);
-          if (!resource) {
-            return reply.code(404).send({
-              error: `Resource '${req.params.name}' not found`,
-            });
+  const introspectionRoutes: FastifyPluginAsync = async (instance) => {
+    // GET / - Get all registered resources
+    instance.get(
+      "/",
+      {
+        preHandler: authMiddleware as never,
+      },
+      async (_req: FastifyRequest, _reply: FastifyReply) => {
+        return (
+          getRegistry()?.getIntrospection() ?? {
+            resources: [],
+            stats: {},
+            generatedAt: new Date().toISOString(),
           }
-          return resource;
+        );
+      },
+    );
+
+    // GET /stats - Get registry statistics
+    instance.get(
+      "/stats",
+      {
+        preHandler: authMiddleware as never,
+      },
+      async (_req: FastifyRequest, _reply: FastifyReply) => {
+        return (
+          getRegistry()?.getStats() ?? {
+            totalResources: 0,
+            byModule: {},
+            presetUsage: {},
+            totalRoutes: 0,
+            totalEvents: 0,
+          }
+        );
+      },
+    );
+
+    // GET /:name - Get resource by name
+    instance.get<{ Params: { name: string } }>(
+      "/:name",
+      {
+        schema: {
+          params: {
+            type: "object" as const,
+            properties: {
+              name: { type: "string" as const },
+            },
+            required: ["name" as const],
+          },
         },
-      );
-    },
-    { prefix },
-  );
+        preHandler: authMiddleware as never,
+      },
+      async (req, reply: FastifyReply) => {
+        const resource = getRegistry()?.get(req.params.name);
+        if (!resource) {
+          return reply.code(404).send({
+            error: `Resource '${req.params.name}' not found`,
+          });
+        }
+        return resource;
+      },
+    );
+  };
+  await fastify.register(introspectionRoutes, { prefix });
 
   fastify.log?.debug?.(`Introspection API at ${prefix}`);
 };

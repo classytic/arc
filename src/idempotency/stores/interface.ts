@@ -39,11 +39,26 @@ export interface IdempotencyLock {
   expiresAt: Date;
 }
 
+/** What one atomic {@link IdempotencyStore.acquire} found. */
+export type IdempotencyAcquisition =
+  | { readonly status: "acquired" }
+  | { readonly status: "completed"; readonly result: IdempotencyResult }
+  | { readonly status: "locked" };
+
 export interface IdempotencyStore {
   /** Store name for logging */
   readonly name: string;
   /** false when a conditional completion method cannot be atomic with this backing client. */
   readonly supportsFencedCompletion?: boolean;
+  /** true when `setIfLocked` also releases the lock, so a completed request needs no `unlock`. */
+  readonly completionReleasesLock?: boolean;
+
+  /**
+   * ONE atomic step: an unexpired completion → `completed`; an unexpired lock → `locked`;
+   * otherwise `requestId` now holds the lock (first use, expired lease, or expired result).
+   * Optional — without it callers run `get` → `tryLock` → `get`.
+   */
+  acquire?(key: string, requestId: string, lockTtlMs: number): Promise<IdempotencyAcquisition>;
 
   /**
    * Get a cached result for an idempotency key.
@@ -56,7 +71,10 @@ export interface IdempotencyStore {
    * TTL is handled by the store implementation.
    */
   set(key: string, result: Omit<IdempotencyResult, "key">): Promise<void>;
-  /** Atomically record only while requestId owns an unexpired lock. false means ownership lost. */
+  /**
+   * Atomically record only while requestId owns an unexpired lock. false means ownership lost.
+   * A store declaring `completionReleasesLock` clears the lock in the same write.
+   */
   setIfLocked?(
     key: string,
     requestId: string,

@@ -105,9 +105,10 @@ for (const file of files) {
       declared.add(d[3]);
       if (d[1]) exported.add(d[3]);
     }
-    // `export { Local as alias, Other };` — the LOCAL side is what is declared.
-    if (/^export\s*\{/.test(line)) {
-      for (const spec of line.replace(/^export\s*\{/, "").replace(/\}.*$/, "").split(",")) {
+    // `export { Local as alias, Other };` and `export type { A, B };` (tsdown >=0.23 lists type-only
+    // exports this way) — the LOCAL side is what is declared.
+    if (/^export\s+(?:type\s*)?\{/.test(line)) {
+      for (const spec of line.replace(/^export\s+(?:type\s*)?\{/, "").replace(/\}.*$/, "").split(",")) {
         const local = spec.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]?.trim();
         if (local) exported.add(local);
       }

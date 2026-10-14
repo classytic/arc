@@ -17,6 +17,7 @@ import fp from "fastify-plugin";
 import { createDomainError } from "../utils/errors.js";
 import { requireSingleHeaderValue } from "../utils/headers.js";
 import { operationIdentity as scopedOperationIdentity } from "../utils/operationIdentity.js";
+import { acquireIdempotencyKey, releaseIdempotencyLock } from "./acquire.js";
 import { repositoryAsIdempotencyStore } from "./repository-idempotency-adapter.js";
 import {
   declaresIdempotencyFence,
@@ -491,16 +492,13 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     const fullKey = `${idempotencyKey}:${operationIdentity(request)}`;
     const requestFingerprint = bodyFingerprint(request);
 
-    // Check for cached result
-    const cached = await store.get(fullKey);
-    if (cached) {
-      replay(request, reply, cached, requestFingerprint);
+    // Completed → replay; in flight → 409; otherwise this request holds the lock.
+    const acquisition = await acquireIdempotencyKey(store, fullKey, request.id, lockTimeoutMs);
+    if (acquisition.status === "completed") {
+      replay(request, reply, acquisition.result, requestFingerprint);
       return reply;
     }
-
-    // Try to acquire lock
-    const lockAcquired = await store.tryLock(fullKey, request.id, lockTimeoutMs);
-    if (!lockAcquired) {
+    if (acquisition.status === "locked") {
       // Another request is processing this key
       reply
         .code(409)
@@ -517,22 +515,6 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     // Store full key for onSend (body cache) + onResponse (unlock)
     request._idempotencyFullKey = fullKey;
     request._idempotencyFingerprint = requestFingerprint;
-
-    // A previous holder can finish between our first read and acquiring the lock.
-    // Recheck under ownership before allowing either an execution or a changed-body retry.
-    try {
-      const completed = await store.get(fullKey);
-      if (completed) {
-        await store.unlock(fullKey, request.id);
-        request._idempotencyFullKey = undefined;
-        replay(request, reply, completed, requestFingerprint);
-        return reply;
-      }
-    } catch (err) {
-      await store.unlock(fullKey, request.id);
-      request._idempotencyFullKey = undefined;
-      throw err;
-    }
 
     // Echo the idempotency key on the response. Set here in the middleware —
     // NOT in a later hook — so it survives empty 2xx responses (204,
@@ -585,6 +567,8 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
   // bytes, so a handler's live object (a workflow run the engine keeps mutating) cannot make a replay
   // differ from the first call. Completion precedes flush; onResponse releases locks.
   const recordedResponses = new WeakSet<FastifyRequest>();
+  /** Completed through `setIfLocked` — the lock is already gone when the store says so. */
+  const fencedCompletions = new WeakSet<FastifyRequest>();
   async function recordResponse(
     request: FastifyRequest,
     reply: FastifyReply,
@@ -638,6 +622,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
           409,
         );
       }
+      fencedCompletions.add(request);
     } else await store.set(fullKey, completion);
     recordedResponses.add(request);
   }
@@ -680,7 +665,7 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
     if (request.idempotencyReplayed) return;
     const fullKey = request._idempotencyFullKey;
     if (!fullKey) return;
-    await store.unlock(fullKey, request.id);
+    await releaseIdempotencyLock(store, fullKey, request.id, fencedCompletions.has(request));
   });
 
   // Cleanup on close — only for a store arc constructed. See `ownsStore`.

@@ -65,6 +65,7 @@ import {
   runDistinctVerb,
   runExistsVerb,
 } from "./crud/resourceVerbs.js";
+import type { ActionTargetCheck } from "./entityHelpers.js";
 import { collectReadBlockedFields, pathTouchesBlocked } from "./fieldRulePredicates.js";
 import { resolveTenancy } from "./tenancy.js";
 
@@ -466,12 +467,20 @@ export class BaseCrudController<
   }
 
   async isActionTargetVisible(req: IRequestContext, id: string): Promise<boolean> {
+    return (await this.loadActionTarget(req, id)).visible;
+  }
+
+  /**
+   * The fence's answer plus the row it read (absent when the resource has no row scope, so
+   * nothing was read). The router hands the row to the handler as `getActionTarget(req)`.
+   */
+  async loadActionTarget(req: IRequestContext, id: string): Promise<ActionTargetCheck> {
     const meta = this.meta(req);
     const scoped = resolveTenancy(meta, this.tenantField).mode === "scoped";
     const policy = meta?._policyFilters;
-    if (!scoped && (!policy || Object.keys(policy).length === 0)) return true;
+    if (!scoped && (!policy || Object.keys(policy).length === 0)) return { visible: true };
     const { doc } = await this.fetchByAnyKey(id, req, this.tenantRepoOptions(req));
-    return doc !== null && doc !== undefined;
+    return doc === null || doc === undefined ? { visible: false } : { visible: true, doc };
   }
 
   /** `ETag: "<version>"` for a versioned document under optimistic concurrency. */
@@ -668,7 +677,7 @@ export class BaseCrudController<
 
   private cacheSingleFlight<T>(key: string, fill: () => Promise<T>): Promise<T> {
     const existing = this.inFlightCacheFills.get(key);
-    if (existing) return existing as Promise<T>;
+    if (existing !== undefined) return existing as Promise<T>;
     const flight = fill().finally(() => {
       this.inFlightCacheFills.delete(key);
     });

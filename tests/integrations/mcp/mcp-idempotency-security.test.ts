@@ -13,7 +13,7 @@ describe("MCP idempotency security context", () => {
     "uses shared configured lock and result lifetimes (%s, %s)",
     async (lockMs, ttlMs, expectedLock, expectedTtl) => {
       const store = new MemoryIdempotencyStore();
-      const lock = vi.spyOn(store, "tryLock");
+      const lock = vi.spyOn(store, "acquire");
       const completion = vi.spyOn(store, "setIfLocked");
       const controller = { create: vi.fn(async () => ({ data: {} })) };
       const resource = defineResource({

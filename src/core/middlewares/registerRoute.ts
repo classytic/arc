@@ -3,6 +3,7 @@
  * validator, the idempotency-declaration fence, and duplicate-route diagnostics.
  */
 
+import type { RouteOptions } from "fastify";
 import {
   declaresIdempotencyFence,
   idempotencyConfigProblem,
@@ -28,7 +29,7 @@ import { isReplayBoundary, isValidationGate } from "./chain.js";
  */
 export function tryRegisterRoute(
   fastify: FastifyWithDecorators,
-  opts: Parameters<FastifyWithDecorators["route"]>[0],
+  opts: RouteOptions,
   context: { resourceName: string; op?: string; rateLimitBucket?: string },
 ): void {
   const ratePolicy = opts.config?.rateLimit;

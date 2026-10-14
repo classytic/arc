@@ -53,9 +53,11 @@ function declarationExports(dtsPath) {
       if (/^\w+$/.test(name) && name !== "default") names.add(name);
     }
   }
-  // Direct declarations exported inline.
+  // Direct declarations exported inline. tsdown >=0.23 writes a type as `export interface X` /
+  // `export type X` (no `declare`); earlier output listed it in the trailing `export { }` block.
+  // A functions/classes/consts keep `declare`, so `declare` is optional in the pattern.
   for (const m of text.matchAll(
-    /export\s+declare\s+(?:function|class|const|let|interface|enum|type)\s+(\w+)/g,
+    /^export\s+(?:declare\s+)?(?:abstract\s+)?(?:function|class|const|let|interface|enum|type)\s+(\w+)/gm,
   )) {
     names.add(m[1]);
   }

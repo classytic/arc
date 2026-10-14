@@ -41,6 +41,7 @@ export {
 } from "./repository-idempotency-adapter.js";
 // Types + core (lightweight) stores
 export type {
+  IdempotencyAcquisition,
   IdempotencyLock,
   IdempotencyResult,
   IdempotencyStore,

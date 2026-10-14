@@ -15,6 +15,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { auditPlugin } from "../../src/audit/index.js";
 import { arcCorePlugin } from "../../src/core/arcCorePlugin.js";
 import type { AuditEntry } from "../../src/audit/stores/interface.js";
+import { getActionTarget } from "../../src/core/entityHelpers.js";
 import { defineResource } from "../../src/index.js";
 import { allow, allowPublic, requireAuth } from "../../src/permissions/index.js";
 
@@ -46,6 +47,7 @@ async function memberScope(request: {
 }
 
 const handled: string[] = [];
+const targets: unknown[] = [];
 const entries: AuditEntry[] = [];
 
 async function buildApp(opts: {
@@ -79,10 +81,18 @@ async function buildApp(opts: {
           return { id, status: "approved" };
         },
       },
+      peek: {
+        permissions: gate,
+        handler: async (id, _data, req) => {
+          targets.push(getActionTarget<Doc>(req));
+          return { id };
+        },
+      },
       relay: {
         permissions: requireAuth(),
         target: { scope: "handler", reason: "the id names a row of another tenant on purpose" },
-        handler: async (id) => {
+        handler: async (id, _data, req) => {
+          targets.push(getActionTarget(req));
           handled.push(`relay:${id}`);
           return { id };
         },
@@ -122,6 +132,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await Model.deleteMany({});
   handled.length = 0;
+  targets.length = 0;
   entries.length = 0;
 });
 
@@ -150,6 +161,34 @@ describe("action target fence — tenant", () => {
     const res = await act(app, String(foreign._id), "relay", ORG_A);
     expect(res.statusCode, res.body).toBe(200);
     expect(handled).toEqual([`relay:${foreign._id}`]);
+    await app.close();
+  });
+});
+
+describe("action target — the fenced row reaches the handler", () => {
+  it("hands the handler the row the fence read, so it need not load it again", async () => {
+    const app = await buildApp({ tenantField: "organizationId" });
+    const own = await Model.create({ organizationId: ORG_A, status: "draft" });
+    expect((await act(app, String(own._id), "peek", ORG_A)).statusCode).toBe(200);
+    expect(targets).toHaveLength(1);
+    expect(String((targets[0] as Doc)._id)).toBe(String(own._id));
+    expect((targets[0] as Doc).status).toBe("draft");
+    await app.close();
+  });
+
+  it("a handler-scoped action gets no row: the fence did not read one", async () => {
+    const app = await buildApp({ tenantField: "organizationId" });
+    const foreign = await Model.create({ organizationId: ORG_B, status: "draft" });
+    expect((await act(app, String(foreign._id), "relay", ORG_A)).statusCode).toBe(200);
+    expect(targets).toEqual([undefined]);
+    await app.close();
+  });
+
+  it("an unscoped resource reads nothing, so the handler loads its own row", async () => {
+    const app = await buildApp({ tenantField: false });
+    const doc = await Model.create({ status: "draft" });
+    expect((await act(app, String(doc._id), "peek", ORG_A)).statusCode).toBe(200);
+    expect(targets).toEqual([undefined]);
     await app.close();
   });
 });

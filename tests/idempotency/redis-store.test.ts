@@ -87,12 +87,22 @@ function createMockRedis(): RedisClient & {
     },
 
     async eval(script: string, _numkeys: number, ...args: (string | number)[]): Promise<unknown> {
+      if (script.includes('"NX"')) {
+        // acquire: a stored result wins, else SET NX PX the lock.
+        const lock = String(args[0]),
+          resultKey = String(args[1]);
+        if (isAlive(resultKey)) return [1, store.get(resultKey)?.value];
+        if (isAlive(lock)) return [0];
+        store.set(lock, { value: String(args[2]), expiresAt: Date.now() + Number(args[3]) });
+        return [2];
+      }
       if (script.includes('redis.call("set"')) {
         const lock = String(args[0]),
           resultKey = String(args[1]),
           owner = String(args[2]);
         if (!isAlive(lock) || store.get(lock)?.value !== owner) return 0;
         store.set(resultKey, { value: String(args[3]), expiresAt: Date.now() + Number(args[4]) });
+        store.delete(lock);
         return 1;
       }
       // Minimal Lua interpreter for the unlock script:
@@ -142,9 +152,27 @@ describe("RedisIdempotencyStore", () => {
     expect(await store.setIfLocked("fenced", "new", result)).toBe(true);
     expect(await store.setIfLocked("fenced", "old", { ...result, body: "stale" })).toBe(false);
     expect((await store.get("fenced"))?.body).toBe("winner");
+    // The completion released the lock in the same script: only the response key remains.
     const keys = [...redis._store.keys()];
-    expect(keys).toHaveLength(2);
-    expect(keys[0]?.match(/\{([^}]+)\}/)?.[1]).toBe(keys[1]?.match(/\{([^}]+)\}/)?.[1]);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).not.toBe(lockKey);
+    expect(keys[0]?.match(/\{([^}]+)\}/)?.[1]).toBe(lockKey.match(/\{([^}]+)\}/)?.[1]);
+  });
+
+  it("acquire: one script answers completed, locked or acquired", async () => {
+    const result = {
+      statusCode: 201,
+      headers: {},
+      body: { ok: true },
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 60000),
+    };
+    expect((await store.acquire("one-trip", "a", 30000)).status).toBe("acquired");
+    expect((await store.acquire("one-trip", "b", 30000)).status).toBe("locked");
+    expect(await store.setIfLocked("one-trip", "a", result)).toBe(true);
+    const replay = await store.acquire("one-trip", "c", 30000);
+    expect(replay.status).toBe("completed");
+    expect(replay.status === "completed" && replay.result.body).toEqual({ ok: true });
   });
 
   it("an expired cached response never deletes a new request's live lock", async () => {

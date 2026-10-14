@@ -71,3 +71,21 @@ export function getEntityQuery(req: RequestWithExtras): Record<string, string> {
   if (id === undefined) return {};
   return { [getEntityIdField(req)]: id };
 }
+
+/** The action-target fence's answer and, when it read one, the row (`GET /:id`'s scope). */
+export interface ActionTargetCheck {
+  readonly visible: boolean;
+  readonly doc?: unknown;
+}
+
+/**
+ * The row the action-target fence loaded for this request, so the handler need not read it
+ * again. `undefined` when no fence read happened (untenanted resource, `scope: 'handler'`,
+ * id-less action) — load it yourself then. It is a snapshot taken after the idempotency lock
+ * and before the handler: a guarded write must still carry its precondition in the filter.
+ */
+export function getActionTarget<TDoc = Record<string, unknown>>(req: {
+  readonly arc?: { readonly actionTarget?: unknown };
+}): TDoc | undefined {
+  return req.arc?.actionTarget as TDoc | undefined;
+}

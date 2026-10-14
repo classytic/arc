@@ -112,7 +112,7 @@ async function createTestAppWithResource(resourceOptions: Record<string, any> = 
   // This matches what createApp() does in production.
   const qs = await import("qs");
   app = Fastify({
-    querystringParser: (str: string) => qs.default.parse(str),
+    routerOptions: { querystringParser: (str: string) => qs.default.parse(str) },
   });
   // Decorate for Arc routes
   app.decorate("authenticate", async () => {});
