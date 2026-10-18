@@ -145,37 +145,22 @@ export default defineConfig({
     __ARC_VERSION__: JSON.stringify(version),
   },
   deps: {
-    // arc bundles NOTHING from node_modules — every dependency, peer
-    // dependency (required + optional), and dev-only integration stays
-    // external. Externalizing by RESOLVED PATH means it cannot drift from
-    // package.json and needs no hand-maintained allowlist; new peers are
-    // covered automatically.
+    // arc bundles NOTHING from node_modules. `neverBundle: true` marks every
+    // package specifier external AS WRITTEN, without resolving it, so it covers
+    // dependencies, peers (required + optional), dev-only integrations and
+    // workspace `@classytic/*` symlinks alike, and a new peer needs no list entry.
     //
-    // tsdown deprecates this in favour of `neverBundle: true`, but that option
-    // is a UNION (`true | ExternalOption`) — taking `true` would mean dropping
-    // the pattern list below, and `true` keeps a dependency external only when
-    // it RESOLVES INTO node_modules. A workspace `@classytic/*` symlink
-    // resolves outside it, so the two are not interchangeable here and the
-    // migration would silently start bundling peers. Revisit when tsdown allows
-    // both, or when it exposes a resolved-path predicate.
-    skipNodeModulesBundle: true,
+    // tsdown's DEFAULT is to inline a devDependency that source imports. `./testing`
+    // imports `mongoose` and `mongodb-memory-server` lazily, so under tsdown 0.23
+    // (where the old `skipNodeModulesBundle` no longer protected them) 2.44.0/2.45.0
+    // shipped ~4.5 MB of inlined mongoose + mongodb driver + mongodb-memory-server.
+    // That broke `mongoMemoryDatabase` under vitest 5: the inlined CJS reads `__dirname`,
+    // which an ES module does not have. It also made the harness own a SEPARATE mongoose
+    // instance from the host's, while kernels register models on the host's.
+    neverBundle: true,
 
-    // Belt-and-suspenders for workspace/linked deps that resolve OUTSIDE
-    // node_modules during local dev (monorepo symlinks) — scoped roots +
-    // their subpaths.
-    neverBundle: [
-      /^@classytic\//,
-      /^@fastify\//,
-      /^@opentelemetry\//,
-      /^@modelcontextprotocol\//,
-      /^zod\//,
-      // `vitest` is imported by `@classytic/arc/testing` but is deliberately
-      // NOT a dependency or a peer — see the note on that subpath. It is a
-      // plain devDependency, which the bundler would otherwise INLINE into
-      // shipped output; it stayed external before 2.40 only as a side effect of
-      // the peer declaration that has now been removed. This gate is what keeps
-      // it external on its own merit.
-      /^vitest$/,
-    ],
+    // The guard: a build that would inline ANY node_modules package fails instead of
+    // shipping it. (`onlyBundle` is a whitelist; empty means nothing may be bundled.)
+    onlyBundle: [],
   },
 });
