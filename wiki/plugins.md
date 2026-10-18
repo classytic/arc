@@ -2,7 +2,7 @@
 
 **Summary**: Built-in Fastify plugins that augment arc apps. All opt-in via `createApp({ plugins })` except a few that auto-register.
 **Sources**: src/plugins/.
-**Last updated**: 2026-10-10 (completion fencing, bounded metrics and coordinated runtime shutdown).
+**Last updated**: 2026-10-17 (SSE keyed audience routing).
 
 ---
 
@@ -75,9 +75,21 @@ Three server-push surfaces, three jobs — NOT redundant, but pick deliberately:
 |---|---|---|---|
 | `realtime` plugin | server→client (SSE) | **Per-subscriber**: list-permission gate + row filters + field masking per event | Live dashboards/lists/detail views of RESOURCES — the default choice for "keep this screen fresh" |
 | `integrations/websocket` | **bidirectional** + rooms | Handshake auth + org-room broadcast (its CRUD bridge does NOT row-filter or field-mask per subscriber) | Client→server messages (commands, typing), GeoRoom tracking, push-ref targeting; org-visible resources only on the CRUD bridge |
-| `sse` plugin | server→client (SSE) | Pattern + org scoping + custom filter fn | Raw domain-event firehose for internal tools / event debugging |
+| `sse` plugin | server→client (SSE) | Pattern + org scoping + custom filter fn; optional keyed `audience` routing | Raw domain-event firehose for internal tools / event debugging; per-user notifications with `audience` |
 
 Rule of thumb: resource data with per-user visibility → `realtime`; interactivity or geo → `websocket`; event plumbing → `sse`. If a resource has row-level permissions, do NOT expose it through the websocket CRUD bridge — that bridge is org-coarse by design.
+
+## SSE keyed audience
+
+`ssePlugin({ audience })` routes an event to the connections indexed under the keys it returns, instead of running `filter` against every open connection.
+
+- `audience(event) => readonly string[] | null | undefined` — recipient keys. `null`/`undefined` = broadcast: every connection through org-scoping + `filter`, exactly as without the option. A throw or a non-array drops the event (fail-closed, logged).
+- `connectionKey(request)` — the key a connection is indexed under; default `getUserId(request.scope)`. A key-less connection (public, service) receives broadcasts only.
+- Org-scoping and `filter` still run on every looked-up connection: the audience narrows, it never authorizes. Each payload is serialized once per event.
+- With `audience` set the plugin holds ONE shared subscription per pattern (lazily, on the first connection) and an in-process `Map<key, Set<connection>>`. A connection is indexed only after the subscription is live, and a disconnect during that wait never indexes it. Without `audience` the per-connection subscription path is unchanged.
+- Multi-replica: every replica receives the event from the transport and resolves keys against its own map; no shared keys.
+- `fastify.sseStats()` → `{ connections, keys }`, summed over every `ssePlugin` registration — the connection gauge (the metrics collector has no generic gauge slot).
+- Pinned by `tests/plugins/sse-audience.test.ts`; `npm run bench:sse` measures filter-all vs audience.
 
 ## The onSend race rule (v2.10.2)
 

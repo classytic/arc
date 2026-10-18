@@ -384,8 +384,7 @@ async function getActiveMemberRoles(
 }
 
 /**
- * Resolve org roles for an explicit organizationId — for sessions without
- * `activeOrganizationId` (e.g. API-key auth via `x-organization-id`).
+ * Resolve membership for the explicitly selected organization.
  */
 async function getMemberRolesByOrg(
   auth: BetterAuthHandler,
@@ -602,13 +601,14 @@ export function createBetterAuthAdapter(
     userId: string | undefined,
     userRoles: string[],
   ): Promise<RequestScope | undefined> => {
-    const activeOrgId = (session?.activeOrganizationId as string | undefined) || requestedOrgId;
+    const activeOrgId = requestedOrgId || (session?.activeOrganizationId as string | undefined);
     if (!activeOrgId) return undefined;
 
     let orgRoles: readonly string[] | null = null;
     if (!skipMemberLookup) {
-      // `getActiveMember` can only succeed when the SESSION has an active org.
-      if (session?.activeOrganizationId) orgRoles = await getActiveMemberRoles(auth, headers);
+      // Session-bound membership is valid only for the selected organization.
+      if (session?.activeOrganizationId === activeOrgId)
+        orgRoles = await getActiveMemberRoles(auth, headers);
       if (!orgRoles) orgRoles = await getMemberRolesByOrg(auth, headers, activeOrgId);
     }
     if (resolveOrgRoles && userId) {

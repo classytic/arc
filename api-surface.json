@@ -1221,6 +1221,7 @@
       "RealtimeOptions",
       "RequestIdOptions",
       "SSEOptions",
+      "SSEStats",
       "ScheduleDefinition",
       "ScheduleStats",
       "SchedulesPluginOptions",
@@ -1245,7 +1246,7 @@
       "ssePlugin",
       "versioningPlugin"
     ],
-    "typesHash": "9b10931cc9fbca5a"
+    "typesHash": "a3ca504f930759f8"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1611,7 +1612,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "421373e08c772938"
+    "typesHash": "5c583abd139fb9d9"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1790,7 +1791,7 @@
       "verifyModuleGraph",
       "withRelayNudge"
     ],
-    "typesHash": "6f6e9bcf007d620b"
+    "typesHash": "1d6231589d4e4329"
   },
   "./schemas": {
     "stability": "stable",

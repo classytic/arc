@@ -11,8 +11,10 @@
 import http from "node:http";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
+import { MemoryEventTransport } from "../../src/events/EventTransport.js";
 import { eventPlugin } from "../../src/events/eventPlugin.js";
 import ssePlugin from "../../src/plugins/sse.js";
+import { waitFor } from "../../src/testing/mocks.js";
 
 // ============================================================================
 // Helper: fetch SSE endpoint with timeout
@@ -225,6 +227,61 @@ describe("SSE Plugin", () => {
       // The fetch should resolve (connection drops)
       const result = await ssePromise;
       expect(result.statusCode).toBe(200);
+    });
+
+    it("a disconnect while subscribing leaves no live subscription (many cycles)", async () => {
+      // Slow subscribe: the response head is flushed before it resolves, so the
+      // client can hang up mid-subscribe — the window that orphaned handlers.
+      let live = 0;
+      let settled = 0;
+      class CountingTransport extends MemoryEventTransport {
+        override async subscribe(
+          pattern: string,
+          handler: Parameters<MemoryEventTransport["subscribe"]>[1],
+        ) {
+          await new Promise((r) => setTimeout(r, 20));
+          const unsub = await super.subscribe(pattern, handler);
+          live++;
+          settled++;
+          let done = false;
+          return () => {
+            if (done) return;
+            done = true;
+            live--;
+            unsub();
+          };
+        }
+      }
+      app = Fastify({ logger: false });
+      await app.register(eventPlugin, { transport: new CountingTransport() });
+      await app.register(ssePlugin, {
+        requireAuth: false,
+        heartbeat: 60000,
+        patterns: ["a.*", "b.*"],
+      });
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const { port } = app.server.address() as { port: number };
+
+      const cycles = 50;
+      await Promise.all(
+        Array.from(
+          { length: cycles },
+          () =>
+            new Promise<void>((resolve) => {
+              const req = http.get(`http://127.0.0.1:${port}/events/stream`, () => {
+                req.destroy();
+                resolve();
+              });
+              req.on("error", () => resolve());
+            }),
+        ),
+      );
+      // Every connection reached at least its first subscribe; wait until all settled.
+      await waitFor(() => settled >= cycles && live === 0 && app.sseStats().connections === 0, {
+        timeout: 10_000,
+        label: "every mid-subscribe disconnect unsubscribed",
+      });
+      expect(live).toBe(0);
     });
   });
 });

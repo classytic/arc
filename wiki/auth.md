@@ -2,7 +2,7 @@
 
 **Summary**: `authPlugin` handles JWT via `@fastify/jwt`. Better Auth is an adapter. Sessions live in `sessionManager` with optional Redis backing. Revocation is fail-closed.
 **Sources**: src/auth/.
-**Last updated**: 2026-09-02.
+**Last updated**: 2026-10-17.
 
 ---
 
@@ -16,8 +16,11 @@
 ## Better Auth organization and team scope
 
 With `orgContext: true`, the adapter derives member scope from Better Auth's
-active organization and membership APIs. An active team is exposed as
-`request.scope.teamId` only when it belongs to that active organization. Both
+membership APIs. An explicit `x-organization-id` selects the request's store;
+the session's active organization is the fallback when the header is absent.
+Roles are resolved for the selected organization; the session's active-member
+roles are reused only when it is the same organization. An active team is
+exposed as `request.scope.teamId` only when it belongs to the selected organization. Both
 `authenticate` and `optionalAuthenticate` use this same validation; stale,
 missing, or cross-organization team state is omitted rather than trusted.
 

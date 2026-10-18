@@ -84,7 +84,7 @@ export type {
 } from "./schedules.js";
 // Recurring in-process jobs with optional multi-replica leader safety
 export { default as schedulesPlugin } from "./schedules.js";
-export type { SSEOptions } from "./sse.js";
+export type { SSEOptions, SSEStats } from "./sse.js";
 // Server-Sent Events
 export { default as ssePlugin } from "./sse.js";
 // OpenTelemetry distributed tracing — use dedicated subpath to avoid

@@ -137,8 +137,14 @@ describe("Better Auth adapter — API-key path via x-organization-id header", ()
     expect(getRoleSpy.mock.calls[0][0].query).toEqual({ organizationId: "org-42" });
   });
 
-  it("prefers session.activeOrganizationId over x-organization-id when session has one", async () => {
-    // Direct-api getSession returns session with an activeOrganizationId.
+  it("resolves the header organization's membership instead of borrowing the synthetic session's roles", async () => {
+    const activeMember = vi.fn(async () => ({
+      id: "m-1",
+      userId: "u-1",
+      organizationId: "org-from-session",
+      role: "admin",
+    }));
+    const memberByOrg = vi.fn(async () => ({ role: "member" }));
     const handler: BetterAuthHandler = {
       handler: vi.fn(),
       api: {
@@ -146,32 +152,26 @@ describe("Better Auth adapter — API-key path via x-organization-id header", ()
           user: { id: "u-1" },
           session: { id: "s-1", activeOrganizationId: "org-from-session" },
         })),
-        organization: {
-          getActiveMember: vi.fn(async () => ({
-            id: "m-1",
-            userId: "u-1",
-            organizationId: "org-from-session",
-            role: "member",
-          })),
-          getActiveMemberRole: vi.fn(async () => ({ role: "member" })),
-        },
+        organization: { getActiveMember: activeMember, getActiveMemberRole: memberByOrg },
       },
     };
-
     const built = await buildApp(handler);
     app = built.app;
-
     const res = await app.inject({
       method: "GET",
       url: "/me",
-      headers: { "x-organization-id": "org-ignored-header" },
+      headers: { "x-organization-id": "org-from-header" },
     });
-
     expect(res.statusCode).toBe(200);
-    const scope = built.getCapturedScope() as Record<string, unknown>;
-    expect(scope).toMatchObject({
+    expect(built.getCapturedScope()).toMatchObject({
       kind: "member",
-      organizationId: "org-from-session",
+      organizationId: "org-from-header",
+      orgRoles: ["member"],
+    });
+    expect(activeMember).not.toHaveBeenCalled();
+    expect(memberByOrg).toHaveBeenCalledWith({
+      headers: expect.any(Headers),
+      query: { organizationId: "org-from-header" },
     });
   });
 

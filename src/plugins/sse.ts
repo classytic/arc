@@ -20,12 +20,12 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
-import { eventAudienceOf, isEventVisible } from "../core/tenancy.js";
+import { type EventAudience, eventAudienceOf, isEventVisible } from "../core/tenancy.js";
 import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
 import type { RequestScope } from "../scope/types.js";
-import { PUBLIC_SCOPE } from "../scope/types.js";
-import { openSseStream } from "../utils/sseStream.js";
+import { getUserId, PUBLIC_SCOPE } from "../scope/types.js";
+import { openSseStream, type SseStream } from "../utils/sseStream.js";
 import { promoteStreamTokenToHeader } from "../utils/streaming.js";
 
 const log = arcLog("sse");
@@ -65,7 +65,67 @@ export interface SSEOptions {
    * Set `null` to disable promotion (e.g. cookie-only auth).
    */
   tokenQueryParam?: string | null;
+  /**
+   * Keyed delivery: the connection keys (user ids by default) an event is for.
+   * Delivery becomes one map lookup per key, and org-scoping + `filter` still run
+   * on those connections only. `null`/`undefined` = broadcast through the filter.
+   * Each replica resolves it against its own connections. Setting it switches the
+   * plugin to one shared subscription per pattern. See wiki/plugins.md.
+   */
+  audience?: (event: DomainEvent<unknown>) => readonly string[] | null | undefined;
+  /** Key a connection is indexed under for `audience` (default: scope user id; none = broadcasts only). */
+  connectionKey?: (request: FastifyRequest) => string | null | undefined;
 }
+
+/** Live connection gauge, summed across every `ssePlugin` registration on the instance. */
+export interface SSEStats {
+  /** Open SSE connections. */
+  connections: number;
+  /** Distinct `connectionKey`s indexed (0 without `audience`). */
+  keys: number;
+}
+
+declare module "fastify" {
+  interface FastifyInstance {
+    sseStats: () => SSEStats;
+  }
+}
+
+/** Per-registration stats providers behind one `sseStats` decorator. */
+const statsProviders = new WeakMap<() => SSEStats, Set<() => SSEStats>>();
+
+function registerStats(fastify: FastifyInstance, provider: () => SSEStats): void {
+  if (fastify.hasDecorator("sseStats")) {
+    statsProviders.get(fastify.sseStats)?.add(provider);
+    return;
+  }
+  const providers = new Set([provider]);
+  const sseStats = (): SSEStats => {
+    const total: SSEStats = { connections: 0, keys: 0 };
+    for (const p of providers) {
+      const s = p();
+      total.connections += s.connections;
+      total.keys += s.keys;
+    }
+    return total;
+  };
+  statsProviders.set(sseStats, providers);
+  fastify.decorate("sseStats", sseStats);
+}
+
+interface KeyedConnection {
+  request: FastifyRequest;
+  stream: SseStream;
+  orgAudience: EventAudience;
+  key: string | undefined;
+}
+
+const serializeEvent = (event: DomainEvent<unknown>): string =>
+  JSON.stringify({
+    type: event.type,
+    payload: event.payload,
+    meta: { id: event.meta.id, timestamp: event.meta.timestamp },
+  });
 
 // ============================================================================
 // Plugin
@@ -83,6 +143,8 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
     orgScoped = true,
     filter: customFilter,
     tokenQueryParam = "token",
+    audience: resolveAudience,
+    connectionKey = (request: FastifyRequest) => getUserId(request.scope ?? PUBLIC_SCOPE),
   } = opts;
 
   // Check that events plugin is registered
@@ -96,6 +158,73 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
 
   // Track active connections for cleanup
   const activeConnections = new Set<() => void>();
+
+  // Keyed mode (`audience` set): one shared subscription per pattern and an
+  // index of connections by key, instead of one subscription per connection.
+  const connections = new Set<KeyedConnection>();
+  const byKey = new Map<string, Set<KeyedConnection>>();
+  const sharedUnsubs: (() => void)[] = [];
+  let sharedSubscription: Promise<void> | undefined;
+
+  const visibleTo = (conn: KeyedConnection, event: DomainEvent<unknown>): boolean =>
+    (!orgScoped || isEventVisible(event.meta?.organizationId, conn.orgAudience)) &&
+    (!customFilter || customFilter(event, conn.request));
+
+  const dispatch = (event: DomainEvent<unknown>): void => {
+    let keys: readonly string[] | null | undefined;
+    try {
+      keys = resolveAudience?.(event);
+      if (keys != null && !Array.isArray(keys)) {
+        throw new TypeError("audience must return an array");
+      }
+    } catch (error) {
+      log.error(`audience resolver failed for '${event.type}'; event not delivered`, error);
+      return;
+    }
+    let data: string | undefined;
+    let filterFailed = false;
+    const deliver = (conn: KeyedConnection): void => {
+      try {
+        if (!visibleTo(conn, event)) return;
+      } catch (error) {
+        // Fail closed for this connection; log once per event, not per connection.
+        if (!filterFailed) log.error(`filter threw for '${event.type}'`, error);
+        filterFailed = true;
+        return;
+      }
+      data ??= serializeEvent(event);
+      conn.stream.write(event.type, data);
+    };
+    if (keys == null) {
+      for (const conn of connections) deliver(conn);
+      return;
+    }
+    // Keys are deduped; each connection has one key, so no connection is written twice.
+    for (const key of new Set(keys)) {
+      const set = byKey.get(key);
+      if (set) for (const conn of set) deliver(conn);
+    }
+  };
+
+  const ensureSharedSubscription = (): Promise<void> => {
+    sharedSubscription ??= (async () => {
+      for (const pattern of patterns) {
+        sharedUnsubs.push(await fastify.events.subscribe(pattern, dispatch));
+      }
+    })().catch((error: unknown) => {
+      // Let the next connection retry rather than pinning a rejected promise.
+      for (const unsub of sharedUnsubs.splice(0)) unsub();
+      sharedSubscription = undefined;
+      throw error;
+    });
+    return sharedSubscription;
+  };
+
+  registerStats(fastify, () =>
+    resolveAudience
+      ? { connections: connections.size, keys: byKey.size }
+      : { connections: activeConnections.size, keys: 0 },
+  );
 
   // Build route options
   const routeOpts: {
@@ -131,6 +260,40 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
       const scope: RequestScope = request.scope ?? PUBLIC_SCOPE;
       const audience = eventAudienceOf(scope);
 
+      if (resolveAudience) {
+        // Cleanup is registered BEFORE the await, so a disconnect during it is
+        // seen (`closed`) and the connection is never indexed — no orphaned entry.
+        const key = connectionKey(request) || undefined;
+        const conn: KeyedConnection = { request, stream, orgAudience: audience, key };
+        let closed = false;
+        stream.onCleanup(() => {
+          closed = true;
+          activeConnections.delete(stream.close);
+          connections.delete(conn);
+          const set = key === undefined ? undefined : byKey.get(key);
+          if (set?.delete(conn) && set.size === 0) byKey.delete(key as string);
+        });
+        await ensureSharedSubscription();
+        if (closed) return;
+        connections.add(conn);
+        if (key !== undefined) {
+          const set = byKey.get(key) ?? new Set<KeyedConnection>();
+          set.add(conn);
+          byKey.set(key, set);
+        }
+        activeConnections.add(stream.close);
+        return;
+      }
+
+      // Cleanup is registered BEFORE the awaits: a cleanup added after the stream
+      // closed never runs, so a disconnect mid-subscribe would orphan the handler.
+      let closed = false;
+      const unsubs: (() => void)[] = [];
+      stream.onCleanup(() => {
+        closed = true;
+        for (const unsub of unsubs.splice(0)) unsub();
+      });
+
       for (const pattern of patterns) {
         const unsub = await fastify.events.subscribe(
           pattern,
@@ -149,7 +312,11 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
             stream.write(event.type, data);
           },
         );
-        stream.onCleanup(unsub);
+        if (closed) {
+          unsub();
+          return;
+        }
+        unsubs.push(unsub);
       }
 
       activeConnections.add(stream.close);
@@ -197,9 +364,10 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
       cleanup();
     }
     activeConnections.clear();
+    for (const unsub of sharedUnsubs.splice(0)) unsub();
   });
 
-  log.debug("Plugin registered", { path, patterns, orgScoped });
+  log.debug("Plugin registered", { path, patterns, orgScoped, keyed: Boolean(resolveAudience) });
 };
 
 export default fp(ssePlugin, {

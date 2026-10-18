@@ -124,12 +124,15 @@ describe("createBetterAuthAdapter — memberLookup", () => {
     });
     await server.ready();
 
-    const call = async (token: string) => {
+    const call = async (token: string, organizationId?: string) => {
       const before = w.reads();
       const res = await server.inject({
         method: "GET",
         url: "/managers-only",
-        headers: { authorization: `Bearer ${token}` },
+        headers: {
+          authorization: `Bearer ${token}`,
+          ...(organizationId ? { "x-organization-id": organizationId } : {}),
+        },
       });
       return {
         status: res.statusCode,
@@ -139,13 +142,15 @@ describe("createBetterAuthAdapter — memberLookup", () => {
     };
 
     const allowed = await call("manager");
+    const requestedOther = await call("manager", "org-b");
+    const requestedUnknown = await call("manager", "org-missing");
     const denied = await call("cashier");
     const notAMember = await call("outsider");
     w.switchOrg("manager", "org-b");
     const afterSwitch = await call("manager");
     w.ban("cashier");
     const banned = await call("cashier");
-    return { allowed, denied, notAMember, afterSwitch, banned };
+    return { allowed, denied, notAMember, afterSwitch, banned, requestedOther, requestedUnknown };
   }
 
   it("decides every case exactly as the default does", async () => {
@@ -159,6 +164,14 @@ describe("createBetterAuthAdapter — memberLookup", () => {
 
     expect(strip(viaResolver)).toEqual(strip(byDefault));
     expect(byDefault.allowed.status).toBe(200);
+    expect(byDefault.requestedOther).toMatchObject({
+      status: 403,
+      scope: { kind: "member", organizationId: "org-b", orgRoles: ["cashier"] },
+    });
+    expect(byDefault.requestedUnknown).toMatchObject({
+      status: 403,
+      scope: { kind: "authenticated" },
+    });
     expect(byDefault.denied.status).toBe(403);
     expect(byDefault.notAMember).toMatchObject({ status: 403, scope: { kind: "authenticated" } });
     expect(byDefault.afterSwitch).toMatchObject({
