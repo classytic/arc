@@ -1,27 +1,7 @@
 /**
- * `createDataCleanupModule` — mounts the Data Cleanup Center as an Arc module
- * (data-cleanup design §6.5 contract).
- *
- * The host injects the recipes + durable ports; this factory builds the
- * registry (boot-time uniqueness) + orchestration service and exposes them as
- * the module's public export, plus a single operations resource:
- *
- *   GET  {prefix}/recipes         — recipe cards (introspection) [view]
- *   POST {prefix}/preview         — plan + digest, no mutation     [view]
- *   POST {prefix}/runs            — execute a confirmed plan (202) [execute]
- *   GET  {prefix}/runs/:id        — observe a run                  [view]
- *   POST {prefix}/runs/:id/action — cancel | retry                 [manage]
- *
- * The resource has NO Mongo model — run/evidence persistence is the injected
- * ports' job (the host owns the collections). Routes are `raw` Fastify handlers
- * with route-level `permissions` AND Fastify JSON-Schema validation (`schema`);
- * thrown `CleanupError`s carry `statusCode`/`code` so arc's error handler maps
- * them without a per-host mapper.
- *
- * Route schemas are plain JSON Schema (not Zod) on purpose: `zod` is an OPTIONAL
- * arc peer and this subpath is always-loaded, so importing zod here would make
- * it a de-facto requirement for every cleanup consumer. Arc's `convertRouteSchema`
- * accepts either form; a host that prefers Zod can override at its own edge.
+ * Compose cleanup recipes and durable ports behind Arc permission gates.
+ * Resolve recipe/store thunks during bootstrap so composition registers no models.
+ * Use JSON Schema for raw routes; cleanup does not require the optional Zod peer.
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -38,7 +18,6 @@ import type {
   CleanupEvidenceStore,
   CleanupJobQueue,
   CleanupLimits,
-  CleanupPermissions,
   CleanupRecipe,
   CleanupRunStore,
   CleanupWriteFence,
@@ -80,7 +59,7 @@ export interface DataCleanupModuleDeps {
     | CleanupEvidenceStore
     | (() => CleanupEvidenceStore | Promise<CleanupEvidenceStore>);
   /** Permission checks for view / execute / manage. */
-  permissions: CleanupPermissions;
+  permissions: { view: PermissionCheck; execute: PermissionCheck; manage?: PermissionCheck };
   /** Optional write fence (§8). Thunk-friendly — see {@link runStore}. */
   writeFence?:
     | CleanupWriteFence
@@ -255,9 +234,9 @@ export function createDataCleanupModule(deps: DataCleanupModuleDeps): ArcModule<
   const prefix = deps.prefix ?? "/governance/data-cleanup";
   const resolveActor = deps.resolveActor ?? defaultResolveActor;
   const resolveAmbient = deps.resolveAmbient;
-  const view = deps.permissions.view as PermissionCheck;
-  const execute = deps.permissions.execute as PermissionCheck;
-  const manage = (deps.permissions.manage ?? deps.permissions.execute) as PermissionCheck;
+  const view = deps.permissions.view;
+  const execute = deps.permissions.execute;
+  const manage = deps.permissions.manage ?? deps.permissions.execute;
 
   const resource = defineResource({
     name: deps.moduleName ?? "data-cleanup",
