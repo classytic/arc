@@ -63,7 +63,10 @@ function buildValidationGate(format?: RouteHandlerMethod | null): PreHandlerHook
   const gate: RouteHandlerMethod = async function arcValidationGate(req, reply) {
     const parked = (req as FastifyRequest & { validationError?: Error }).validationError;
     if (!parked) return;
-    if (format) await format.call(this, req, reply);
+    if (format) {
+      const result = await format.call(this, req, reply);
+      if (result === reply) return reply;
+    }
     if (reply.sent) return;
     throw parked;
   };

@@ -49,7 +49,7 @@ export interface RequestWithExtras extends FastifyRequest {
 }
 
 export type FastifyWithAuth = FastifyInstance & {
-  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
 };
 
 /**
@@ -90,7 +90,7 @@ export interface EventsDecorator {
 export type FastifyWithDecorators = FastifyInstance & {
   arc?: ArcDecorator;
   events?: EventsDecorator;
-  authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  authenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
   optionalAuthenticate?: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   /** Organization-scoped filtering — from `multiTenant` preset */
   organizationScoped?: (options?: { required?: boolean }) => RouteHandlerMethod;

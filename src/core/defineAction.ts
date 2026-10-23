@@ -34,6 +34,8 @@ export interface DefineActionConfig<
 > {
   /** Per-action body schema (Zod v4). Drives both AJV validation and the typed `data` param. */
   schema?: TSchema;
+  /** Parse the body with `schema` before the handler runs (trim/defaults/refine). See `ActionDefinition.parse`. */
+  parse?: boolean;
   /** Per-action permission gate. Falls back to resource-level if omitted. */
   permissions?: PermissionCheck;
   /** OpenAPI / MCP description. */
@@ -80,5 +82,6 @@ export function defineAction<TSchema extends z.ZodTypeAny | undefined = undefine
     id: config.id,
     mcp: config.mcp,
     ...(config.idempotency ? { idempotency: config.idempotency } : {}),
+    ...(config.parse ? { parse: true } : {}),
   };
 }

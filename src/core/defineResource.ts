@@ -54,6 +54,7 @@ import {
   type ResolvedResourceConfig,
   ResourceDefinition,
 } from "./defineResource/ResourceDefinition.js";
+import { collectSchemaSlotDiagnostics } from "./defineResource/schemaDiagnostics.js";
 import { resolveOpenApiSchemas } from "./defineResource/schemas.js";
 import {
   validateDefineResourceConfig,
@@ -148,6 +149,12 @@ export function defineResource<TDoc = AnyRecord>(
   const strict =
     resolvedConfig.strictPermissions ?? readEnv(process.env).bool("ARC_STRICT_PERMISSIONS", true);
   diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig, strict));
+  diagnostics = diagnostics.concat(
+    collectSchemaSlotDiagnostics(
+      resolvedConfig,
+      resolvedConfig.strictSchemas ?? readEnv(process.env).bool("ARC_STRICT_SCHEMAS", false),
+    ),
+  );
 
   // Fatal diagnostics (severity: "error") fail boot at define-time — the same
   // synchronous UX as `validateCustomRoutePermissions`. Aggregate all of them so

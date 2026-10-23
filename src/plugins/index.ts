@@ -36,6 +36,17 @@ export { default as cachingPlugin } from "./caching.js";
 export type { ArcPlugin, CreatePluginDefinition, PluginResourceResult } from "./createPlugin.js";
 // Plugin factory (forRoot/forFeature pattern)
 export { createPlugin } from "./createPlugin.js";
+// Daily gate: once per local civil day in an IANA zone, claimed in a host ledger
+export type {
+  DailyClaimInfo,
+  DailyClock,
+  DailyGate,
+  DailyGateOptions,
+  DailyLedger,
+  DailyRunOutcome,
+  MemoryDailyLedger,
+} from "./dailyGate.js";
+export { createDailyGate, createMemoryDailyLedger } from "./dailyGate.js";
 export type { ErrorHandlerOptions, ErrorMapper } from "./errorHandler.js";
 
 // Global error handling
@@ -78,7 +89,9 @@ export {
   sanitizeRequestId,
 } from "./requestId.js";
 export type {
+  DailyScheduleOptions,
   ScheduleDefinition,
+  ScheduleRunContext,
   ScheduleStats,
   SchedulesPluginOptions,
 } from "./schedules.js";

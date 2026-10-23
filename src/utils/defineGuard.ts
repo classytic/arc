@@ -33,6 +33,7 @@
  */
 
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
+import { runObservingSend } from "./observeSend.js";
 
 /** Hidden property key for guard context storage on the request object. */
 const GUARD_STORE_KEY = "__arcGuardContext";
@@ -67,16 +68,18 @@ export function defineGuard<T>(config: GuardConfig<T>): Guard<T> {
   const { name, resolve } = config;
 
   const preHandler: RouteHandlerMethod = async (req, reply) => {
-    const ctx = await resolve(req, reply);
-    // Only stash if the guard didn't abort (reply.sent check)
-    if (!reply.sent) {
-      const store =
-        ((req as unknown as Record<string, unknown>)[GUARD_STORE_KEY] as
-          | Record<string, unknown>
-          | undefined) ?? {};
-      store[name] = ctx;
-      (req as unknown as Record<string, unknown>)[GUARD_STORE_KEY] = store;
-    }
+    // `reply.sent` stays false while async send-phase hooks defer the write, so a guard that
+    // answered the request is detected by observing its `send` call as well.
+    const { result: ctx, answered } = await runObservingSend(reply, () => resolve(req, reply));
+    if (answered) return reply;
+    // Only stash if the guard didn't abort
+    const store =
+      ((req as unknown as Record<string, unknown>)[GUARD_STORE_KEY] as
+        | Record<string, unknown>
+        | undefined) ?? {};
+    store[name] = ctx;
+    (req as unknown as Record<string, unknown>)[GUARD_STORE_KEY] = store;
+    return undefined;
   };
 
   return {

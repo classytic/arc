@@ -9,6 +9,7 @@ import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ErrorHandlerOptions, ErrorMapper } from "../plugins/errorHandler.js";
 import { PUBLIC_SCOPE } from "../scope/types.js";
+import { runObservingSend } from "../utils/observeSend.js";
 import type { CreateAppOptions } from "./types/index.js";
 
 type PluginTracker = (name: string, opts?: Record<string, unknown>) => void;
@@ -81,7 +82,12 @@ export async function registerAuth(
     case "authenticator": {
       const { authenticate, optionalAuthenticate } = authConfig;
       fastify.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
-        await authenticate(request, reply);
+        // A refusal returns the reply, which ends the lifecycle even when async send-phase
+        // hooks defer the write (`reply.sent` is false then).
+        const { result, answered } = await runObservingSend(reply, () =>
+          authenticate(request, reply),
+        );
+        return answered ? reply : result;
       });
       if (!fastify.hasDecorator("optionalAuthenticate")) {
         if (optionalAuthenticate) {
@@ -184,6 +190,7 @@ export async function registerErrorHandler(
   const derived: ErrorHandlerOptions = {
     includeStack: !productionEnv,
     exposeInternalMessages: !productionEnv,
+    notFound: true,
   };
   let errorOpts: ErrorHandlerOptions =
     typeof config.errorHandler === "object" ? { ...derived, ...config.errorHandler } : derived;
@@ -208,7 +215,7 @@ export async function registerErrorHandler(
  * the authenticator calls reply.code(401).send() instead of throwing.
  */
 function createOptionalAuthenticate(
-  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>,
 ) {
   return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     let intercepted = false;

@@ -80,4 +80,4 @@ For the audit, your auditor will ask for evidence that controls operate. Arc sur
 
 - [hipaa.md](hipaa.md) — HIPAA Technical Safeguards
 - [enterprise-auth.md](../../skills/arc/references/enterprise-auth.md) — feature matrix
-- [auth.md](../../skills/arc/references/auth.md) — auth surface deep-dive
+- [auth.md](../../skills/arc/references/auth-strategies.md) — auth surface deep-dive

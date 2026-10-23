@@ -21,7 +21,8 @@
     "tests/presets/files-upload.test.ts",
     "tests/presets/preset-controller-types.test.ts",
     "tests/schemas/schema-helpers-fastify-integration.test.ts",
-    "tests/scope/service-scope.test.ts"
+    "tests/scope/service-scope.test.ts",
+    "tests/skills/skills.test.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

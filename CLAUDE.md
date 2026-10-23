@@ -37,6 +37,7 @@ npm run test:ci                                   # Release gate — main + isol
 npm run build                                     # tsdown → dist/
 npm run smoke                                     # CLI + subpath imports
 npx knip                                          # Dead-code detection
+npm run check:skills                              # skills/ + llms.txt: size, wording, identifiers exist (also in lint)
 npm run fix:line-endings                          # CRLF crept into the working tree (see gotcha)
 npm run push -- main                              # Push as classytic-bot[bot] (see below)
 ```
@@ -126,9 +127,9 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 
 | Peer | Min | Required? |
 |------|-----|-----------|
-| fastify | >=5.12.0 | **Yes** |
-| @classytic/primitives | >=0.31.0 | **Yes** |
-| @classytic/repo-core | >=0.31.0 | **Yes** |
+| fastify | >=5.12.7 | **Yes** |
+| @classytic/primitives | >=0.34.0 | **Yes** |
+| @classytic/repo-core | >=0.32.0 | **Yes** |
 | better-auth | >=1.7.0 | No |
 | ioredis | >=6.0.0 | No |
 | bullmq | >=6.0.0 | No |

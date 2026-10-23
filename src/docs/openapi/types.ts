@@ -74,6 +74,12 @@ export interface Operation {
   "x-arc-permission"?: { type: string; roles?: readonly string[] };
   /** Arc pipeline steps (OpenAPI extension) */
   "x-arc-pipeline"?: Array<{ type: string; name: string }>;
+  /** Filter fields, operators and sort fields the list route accepts (declared by the query parser). */
+  "x-arc-query"?: {
+    filterFields?: readonly string[];
+    operators?: readonly string[];
+    sortFields?: readonly string[];
+  };
   /** Idempotency-key fence: every call (`required`) or the listed actions (`requiredActions`). */
   "x-arc-idempotency"?: {
     required?: true;

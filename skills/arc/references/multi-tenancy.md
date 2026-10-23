@@ -1,265 +1,91 @@
----
-name: Multi-Tenancy Playbook
-description: Where `tenantField` takes effect, how it composes with `_policyFilters`, and how to install scope from custom auth (API keys, service accounts, gateway headers)
----
+# Multi-tenancy: scope, tenantField, filters
 
-# Multi-Tenancy Playbook
+One source of truth: `request.scope`. Installing scope from custom auth is in tenancy-scope-install.md.
 
-Arc's multi-tenancy has exactly **one source of truth**: `request.scope`. This document shows where it's read, how filters compose, and how to wire custom authentication strategies (API keys, service accounts) without fighting the framework.
-
-## Mental model
-
-Every request goes through this ladder — if any step is missed, tenant isolation silently breaks:
+## Request ladder
 
 ```
-1. Authenticator populates request.scope   (member | service | elevated | ...)
-                  ↓
-2. Permission check validates access        (allowPublic | requireAuth | requireApiKey | ...)
-                  ↓                          may ALSO set request.scope via PermissionResult.scope
-3. fastifyAdapter snapshots scope into metadata._scope
-                  ↓
+1. Authenticator sets request.scope          (member | service | elevated | ...)
+2. Permission check validates access         (may also set scope via allow({ scope }))
+3. Adapter snapshots scope into metadata._scope
 4. QueryResolver / AccessControl read metadata._scope
-                  ↓
-5. If tenantField is set AND getOrgId(scope) returns an orgId,
-   the org filter is ALWAYS prepended to the query
+5. tenantField set AND getOrgId(scope) defined => org filter always applied
 ```
 
-## The 5 scope kinds
+Skip a step and isolation silently breaks.
 
-| Kind            | Use case                            | Has `userId` | Has `organizationId` | Helper                   |
-|-----------------|-------------------------------------|:------------:|:--------------------:|--------------------------|
-| `public`        | No authentication                   | ❌           | ❌                    | `PUBLIC_SCOPE`           |
-| `authenticated` | Logged-in user, no org context      | ✅           | ❌                    | `getUserId()`            |
-| `member`        | User in an org with specific roles  | ✅           | ✅                    | `isMember()` + `getOrgId()` |
-| `service`       | Machine-to-machine (API keys, bots) | ❌ (`clientId` instead) | ✅          | `isService()` + `getClientId()` |
-| `elevated`      | Platform admin, explicit elevation  | ✅           | Optional             | `isElevated()`           |
+## Scope kinds
 
-**Why `service` is distinct from `member`:** a service account is not a human. It has no user record, no global roles, and should be auditable as a machine actor. Faking it as a `member` with `userId: client._id` pollutes audit logs, confuses rate-limit keys, and makes future per-service-scope authorization (OAuth scopes) harder.
+| Kind | Use | `userId` | `organizationId` | Helper |
+|---|---|:-:|:-:|---|
+| `public` | No auth | no | no | `PUBLIC_SCOPE` |
+| `authenticated` | Signed in, no org | yes | no | `getUserId()` |
+| `member` | User in an org with roles | yes | yes | `isMember()`, `getOrgId()` |
+| `service` | Machine caller (API key, bot) | no (`clientId`) | yes | `isService()`, `getClientId()` |
+| `elevated` | Platform admin | yes | optional | `isElevated()` |
 
-## Where `tenantField` is read
+Never fake a service as a `member` with `userId: client._id`: it pollutes audit rows, rate-limit keys and OAuth-scope checks.
 
-Every resource defines `tenantField` (default: `'organizationId'`, or `false` to disable). **One function decides tenancy — `resolveTenancy()` in `src/core/tenancy.ts`** — and every layer switches on its result:
+## How `tenantField` is read
+
+Every resource has `tenantField` (default `'organizationId'`, or `false`). `resolveTenancy()` (`src/core/tenancy.ts`) is the single decision; list, get/update/delete by id, post-fetch org check, the kit tenant options, bulk ops and the `sse`/`realtime` streams all switch on it:
 
 | Result | Meaning |
 |---|---|
-| `{ mode: 'scoped', field, orgId }` | filter by `field = orgId` (a member, a service key, or an elevated admin who SELECTED an org) |
-| `unscoped: 'platform'` | elevated admin with NO org — sees and writes across tenants |
-| `unscoped: 'cross-tenant'` | the route declared `multiTenantPreset({ crossTenant: [...] })` — reads only; the row policy still applies |
-| `unscoped: 'no-org'` | anonymous, or signed in with no org selected — reads get no tenant filter (the preset refuses earlier where one is required); **writes are refused** |
+| `scoped` (`field`, `orgId`) | Filter `field = orgId` (member, service, or elevated admin who selected an org) |
+| `unscoped: 'platform'` | Elevated admin, no org: sees and writes across tenants |
+| `unscoped: 'cross-tenant'` | Route listed in `multiTenantPreset({ crossTenant })`: reads only, row policy still applies |
+| `unscoped: 'no-org'` | Anonymous or no org selected: reads get no tenant filter (the preset refuses earlier where an org is required); writes are refused |
 | `unscoped: 'untenanted-resource'` | `tenantField: false` |
 
-Consumers: `QueryResolver` (list), `AccessControl.buildIdFilter` (get/update/delete by id) and `checkOrgScope` (post-fetch), `buildTenantRepoOptions` (what the kit is told, `bypassTenant`), the bulk mixin (`bulkCreate` stamping + `buildBulkFilter`), and — via `eventAudienceOf` / `isEventVisible` — the `sse` and `realtime` streams.
-
-**Never re-derive the org from the scope in a new layer.** Each layer used to, with its own condition, and they drifted: `crossTenant` was taught to three of four read layers (`get` silently ignored it for signed-in members), bulk writes skipped the org for ANY elevated admin (an admin acting as org-9 deleted across every tenant), and `realtime` withheld the platform view that reads grant. The union is exhaustive, so a new mode is a compile error in every consumer that has not handled it.
-
-The cache key (`deriveCacheScope`) deliberately does NOT use it: it answers "whose cache partition", which on a cross-tenant read is still the caller's org — dropping it could let one org's cached page answer another's.
+Never re-derive the org from scope in a new layer; call `resolveTenancy`. The cache key (`deriveCacheScope`) deliberately does not use it: it names the caller's cache partition.
 
 ## Filter composition
 
-`_policyFilters` and `tenantField` are different and both apply:
+Final filter = AND of the parsed query filters, `_policyFilters` (from permission checks: ownership, project scoping), and `{ [tenantField]: orgId }`.
 
-```ts
-// The final filter passed to the database is:
-{
-  ...parsedUserFilters,      // from the incoming query string
-  ..._policyFilters,         // from permission checks (ownership, project scoping, etc.)
-  [tenantField]: orgId,      // from metadata._scope (if tenantField is set and scope has orgId)
-}
+- A client filter can never widen or overwrite a policy filter (they are conjoined).
+- The tenant filter is added unless the policy already constrains that field.
+- Elevated scope without `organizationId`: no tenant filter (admin sees everything).
+
+## Missing scope
+
+If `tenantField` is set but `getOrgId(scope)` is undefined, list/get/update/delete are NOT narrowed: a `public` caller could read every tenant. Pair `tenantField` with a permission check that installs an org scope. `bulkUpdate` / `bulkDelete` return a null filter and are rejected.
+
+Arc does NOT derive scope from `request.user.organizationId` inside permission checks. The JWT/`authenticator` path derives it for you (user with `organizationId` => `member`); otherwise return `scope` from the check.
+
+## Presets and fields
+
+```typescript
+presets: [{ name: 'multiTenant', tenantField: 'organizationId' }]
+// or several dimensions, fail-closed if one is missing:
+multiTenantPreset({ tenantFields: [
+  { field: 'organizationId', type: 'org' },
+  { field: 'branchId', contextKey: 'branchId' },     // from scope.context
+] })
 ```
 
-**Priority rules:**
-- `_policyFilters` overrides user-supplied filters (the user can't bypass them)
-- `tenantField` only gets injected if `_policyFilters` does not already set it (so a more specific policy filter wins)
-- `elevated` scope with no `organizationId` means the filter is skipped entirely (admin sees everything)
-
-## Four ways to install scope
-
-### 1. Better Auth (recommended for human users)
-
-The `betterAuth` adapter reads the session cookie and installs `kind: 'member'` automatically. Nothing to wire.
-
-```ts
-await createApp({
-  auth: getAuth(),  // Better Auth instance
-  // ... scope is set by the adapter, zero code
-});
-```
-
-### 2. Custom Fastify authenticator (JWT, headers, whatever)
-
-Arc's `authPlugin.ts` auto-derives scope from `request.user` after your authenticator returns. If your user has `organizationId`, you get a `member` scope for free:
-
-```ts
-await createApp({
-  auth: {
-    type: 'authenticator',
-    authenticate: async (request) => {
-      const user = await verifyJwt(request.headers.authorization);
-      return user; // Must have `organizationId` for member scope
-    },
-  },
-});
-```
-
-### 3. `PermissionResult.scope` (NEW — best for API keys, service accounts, custom headers)
-
-Return the scope directly from your permission check. This is the cleanest integration point for machine-to-machine auth — no separate auth plugin, no scope-derivation-from-user magic. It's explicit, typed, and auditable.
-
-```ts
-// src/permissions/apiKey.ts
-import { allow, deny, type PermissionCheck } from '@classytic/arc/permissions';
-import { ClientModel } from '../models/Client.js';
-
-export function requireApiKey(): PermissionCheck {
-  return async ({ request }) => {
-    const apiKey = request.headers['x-api-key'] as string | undefined;
-    if (!apiKey) return deny('Missing API key');
-
-    const client = await ClientModel.findOne({ apiKey });
-    if (!client) return deny('Invalid API key');
-
-    return allow({
-      scope: {
-        kind: 'service',
-        clientId: String(client._id),
-        organizationId: String(client.companyId),
-        scopes: client.allowedScopes,  // optional OAuth-style scope strings
-      },
-      // Optional additional row-level narrowing
-      ...(client.projectId ? { policy: { projectId: client.projectId } } : {}),
-    });
-  };
-}
-```
-
-Then wire it into the resource:
-
-```ts
-// import { createMongooseAdapter } from '@classytic/mongokit/adapter';
-// import { buildCrudSchemasFromModel } from '@classytic/mongokit';
-
-defineResource({
-  name: 'job',
-  adapter: createMongooseAdapter({ model: Job, repository: jobRepo, schemaGenerator: buildCrudSchemasFromModel }),
-  controller: new BaseController(jobRepo, { tenantField: 'companyId' }),
-  permissions: {
-    list: requireApiKey(),
-    get: requireApiKey(),
-    create: requireApiKey(),
-    update: requireApiKey(),
-    delete: requireApiKey(),
-  },
-});
-```
-
-**That's the whole setup.** No auth plugin, no scope-resolution hook, no separate tenant-filter middleware. One file, one function, full tenant isolation — verified against cross-tenant `get`, `list`, `update`, and `delete` in [tests/e2e/permission-scope-wire.test.ts](../../../tests/e2e/permission-scope-wire.test.ts).
-
-**Override safety:** `PermissionResult.scope` only writes to `request.scope` when the current scope is still `public`. An already-authenticated request (from Better Auth, JWT, etc.) is never downgraded or overwritten.
-
-### 4. Custom Fastify hook (advanced)
-
-For exotic cases (mTLS, downstream RPC calls), write an `onRequest` hook that sets `request.scope` directly. Arc reads from `request.scope` — it doesn't care how you got there.
-
-## Decision table
-
-| Your auth source                  | Where to set scope                                  |
-|-----------------------------------|------------------------------------------------------|
-| Better Auth session cookie        | Nothing — `betterAuth` adapter handles it            |
-| JWT with `organizationId` claim   | Return it from `authenticate()` — auth plugin derives scope |
-| API key → DB lookup               | **`PermissionResult.scope`** ← the clean path        |
-| Gateway-injected headers          | `PermissionResult.scope` or a custom `onRequest` hook |
-| Service account OAuth token       | `PermissionResult.scope` with `kind: 'service'`      |
-| Platform admin elevation          | `elevationPlugin` — sets `kind: 'elevated'`          |
-
-## What happens when scope is missing
-
-If `tenantField` is set but `getOrgId(scope)` returns `undefined`:
-
-- **`list` / `get` / `update` / `delete`** — the filter is NOT narrowed. A caller with `public` scope would see ALL rows across ALL tenants. **This is why you must always pair `tenantField` with a permission check that installs a scope with `organizationId`.**
-- **`bulkUpdate` / `bulkDelete`** — `buildBulkFilter()` returns `null` and the bulk operation is rejected. This is a safety net, but don't rely on it for `list`.
-
-Arc does NOT auto-derive scope from `request.user.organizationId` — that's a footgun (silent tenant leak if you set the user but forget the scope). If you want this behavior, either use the JWT/custom authenticator path (which does derive automatically) or return `scope` explicitly from your permission check.
+`multiTenantPreset` options: `tenantField` XOR `tenantFields`, `allowPublic: [routes]`, `crossTenant: ['list' | 'get']`. `crossTenant` removes the tenant filter, authorizes nothing: the check must return a row `policy` (e.g. `{ status: 'active' }`) or every tenant's rows are published.
 
 ## Gotchas
 
-1. **`tenantField` is per-resource, not per-app.** Different resources can use different tenant field names (`companyId`, `workspaceId`, `tenantId`). The org ID always comes from `getOrgId(scope)`. **Auto-inference (2.12):** when the Mongoose model has no `organizationId` path AND no other tenant field is configured, arc auto-infers `tenantField: false` rather than emitting queries against a non-existent column.
-2. **`elevated` with no `organizationId` bypasses tenant filtering.** This is intentional (admin sees everything), but it means you can't use `kind: 'elevated'` for normal per-org access.
-3. **`systemManaged` is your seatbelt for create/update.** Mark tenant fields (`companyId`, `organizationId`) as `systemManaged` in `fieldRules` so `BodySanitizer` strips any client-supplied value. The tenant field is then injected from the scope at write time — not from the request body.
-4. **Rate-limit keys respect all 5 scope kinds.** The built-in `createTenantKeyGenerator` uses `organizationId` for member/service/elevated and falls back to `userId`/IP for authenticated/public.
-5. **multiTenant preset injects org on UPDATE (v2.9).** Body-supplied `organizationId` is overwritten with the caller's scope — closes the tenant-hop vector where a member could PATCH their own doc into another tenant. Elevated scope with no org still bypasses (admin cross-tenant).
+1. `tenantField` is per resource (`companyId`, `workspaceId`, ...); the value always comes from `getOrgId(scope)`.
+2. `kind: 'elevated'` without an org bypasses tenant filtering: unusable for normal per-org access.
+3. Mark the tenant field `systemManaged` in `fieldRules`: `BodySanitizer` strips client values and the scope value is injected on write.
+4. The preset overwrites a body-supplied org on UPDATE (blocks tenant hopping). Elevated without an org still bypasses.
+5. `createTenantKeyGenerator()` (`@classytic/arc/scope`) keys rate limits by org for member/service/elevated, else user or IP.
 
-## Mongokit tenant-context helper (optional)
+## Helpers (`@classytic/arc/scope`)
 
-If your adapter is mongokit ≥3.7, you can wire mongokit's `createTenantContext()` to propagate the org id through `AsyncLocalStorage` — useful when domain code outside arc routes needs the current tenant without threading `req` everywhere:
-
-```ts
-import { createTenantContext, multiTenantPlugin, Repository } from '@classytic/mongokit';
-import { getOrgId } from '@classytic/arc/scope';
-
-const tenantContext = createTenantContext();
-const repo = new Repository(Model, [
-  multiTenantPlugin({ tenantField: 'organizationId', context: tenantContext }),
-]);
-
-// Install scope → ALS bridge once in your app:
-fastify.addHook('preHandler', (req, _reply, done) => {
-  const scope = (req.metadata as { _scope?: unknown } | undefined)?._scope;
-  const orgId = scope ? getOrgId(scope as never) : undefined;
-  if (orgId) tenantContext.run(orgId, done);
-  else done();
-});
-
-// Now any domain code can read it:
-import { getTenantId } from './tenantContext.js';
-await someService.doThing({ orgId: getTenantId() });
-```
-
-Arc doesn't bundle this — it's mongokit-specific. Arc's scope helpers (`getOrgId`, `getOrgContext`) remain the source of truth inside the request cycle; `createTenantContext()` is a complement for code that lives outside it.
-
-## Plugin-order safety (mongokit ≥3.7)
-
-Mongokit's `Repository` constructor accepts `pluginOrderChecks: 'warn' | 'throw' | 'off'` (default `'warn'`). Pass `'throw'` in production to catch foot-guns — e.g. installing `softDeletePlugin` AFTER `batchOperationsPlugin` silently bypasses soft-delete on `deleteMany`:
-
-```ts
-new Repository(Model, [
-  multiTenantPlugin({...}),       // must precede cache + batch-ops
-  softDeletePlugin(),             // must precede batch-ops
-  batchOperationsPlugin(),
-], {}, { pluginOrderChecks: 'throw' });
-```
-
-Arc doesn't surface this option — configure it directly on the mongokit `Repository` you hand to `defineResource({ adapter: createMongooseAdapter({ repository }) })`.
-
-## Helpers reference
-
-All exported from `@classytic/arc/scope`:
-
-```ts
+```typescript
 import {
-  // Type guards
-  isMember, isService, isElevated, isAuthenticated, hasOrgAccess,
-
-  // Accessors (return undefined when not applicable — no throws)
-  getUserId,       // authenticated | member | elevated
-  getClientId,     // service only
-  getOrgId,        // member | service | elevated
-  getUserRoles,    // authenticated | member
-  getOrgRoles,     // member only
-  getServiceScopes, // service only (OAuth-style scope strings)
-  getTeamId,       // member with teamId set
-
-  // Throwing accessors — return the value or throw a 403 ArcError
-  requireUserId,
-  requireOrgId,
-  requireClientId,
-  requireTeamId,
-
-  // Canonical request extractor
-  getOrgContext,
-
-  // Constants
-  PUBLIC_SCOPE, AUTHENTICATED_SCOPE,
-
-  type RequestScope,
+  isMember, isService, isElevated, isAuthenticated, hasOrgAccess,    // guards
+  getUserId, getClientId, getOrgId, getUserRoles, getOrgRoles,       // return undefined, never throw
+  getServiceScopes, getTeamId, getScopeContext, getOrgContext,
+  requireUserId, requireOrgId, requireClientId, requireTeamId,       // throw 403 / 401
+  isOrgInScope, getAncestorOrgIds,                                   // explicit hierarchy checks
+  PUBLIC_SCOPE, AUTHENTICATED_SCOPE, type RequestScope,
 } from '@classytic/arc/scope';
 ```
+
+Hierarchy: `scope.ancestorOrgIds` (closest first, loaded by your auth) plus `requireOrgInScope(...)` from `@classytic/arc/permissions`; there is no automatic inheritance.

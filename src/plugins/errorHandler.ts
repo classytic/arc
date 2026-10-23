@@ -89,6 +89,24 @@ export interface ErrorHandlerOptions {
   errorMappers?: ErrorMapper[];
   /** Driver-aware duplicate-key classifier. Override to add long-tail drivers. */
   isDuplicateKeyError?: (err: unknown) => boolean;
+  /**
+   * Unknown routes answer the canonical `ErrorContract` (404 `arc.not_found`) instead of Fastify's
+   * `{ message, error, statusCode }`. `true` installs arc's handler; a function replaces it;
+   * `false`/omitted leaves Fastify's default. `createApp` turns it on. Fastify allows ONE not-found
+   * handler per scope, so a host that calls `setNotFoundHandler` itself must pass `false` here.
+   */
+  notFound?: boolean | ((request: FastifyRequest, reply: FastifyReply) => unknown);
+}
+
+/** Canonical 404 body for a request that matched no route. */
+function notFoundContract(request: FastifyRequest): ErrorContract {
+  const correlationId = (request as { id?: string }).id;
+  return {
+    code: statusToArcCode(404),
+    message: `Route ${request.method} ${request.url.split("?")[0]} not found`,
+    status: 404,
+    ...(correlationId ? { correlationId } : {}),
+  };
 }
 
 /**
@@ -244,7 +262,16 @@ async function errorHandlerPluginFn(
     errorMap = {},
     errorMappers = [],
     isDuplicateKeyError = defaultIsDuplicateKeyError,
+    notFound = false,
   } = options;
+
+  if (notFound) {
+    fastify.setNotFoundHandler(
+      typeof notFound === "function"
+        ? notFound
+        : async (request, reply) => reply.status(404).send(notFoundContract(request)),
+    );
+  }
 
   fastify.setErrorHandler(
     async (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {

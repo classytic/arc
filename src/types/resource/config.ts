@@ -380,6 +380,12 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    */
   strictPermissions?: boolean;
   /**
+   * A `{ body: X }` wrapper where arc expects the schema itself (an action's `schema`, a route's
+   * `body` slot) is read as an empty schema, so the endpoint accepts anything. Default: warn at
+   * registration. `true` (or `ARC_STRICT_SCHEMAS=true`) fails `defineResource()` instead.
+   */
+  strictSchemas?: boolean;
+  /**
    * Default `limit` value when the request omits `?limit=`. Default 20.
    * Surfaced at the resource level (rather than only via a custom
    * `queryParser`) so hosts can declare it inline next to the resource

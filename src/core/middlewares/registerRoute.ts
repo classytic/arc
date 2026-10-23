@@ -69,6 +69,7 @@ export function tryRegisterRoute(
             message: "Too many calls to this resource — retry later.",
             status: 429,
           });
+          return reply;
         }
       };
       const replayIndex = handlers.findIndex(isReplayBoundary);

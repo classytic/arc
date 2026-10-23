@@ -6,6 +6,7 @@ Release **index** — one line per minor, newest first. Full notes + migration s
 
 | Version | Headline |
 |---|---|
+| [2.46](changelog/v2.md#2460) | ⚠ Security: a refused request could still run its handler (all gates now end the lifecycle). `routeInput` / `crudInput` / `defineAction({ parse })` zod-once validation; `daily` schedules + `createDailyGate`; `x-arc-query` + `RegistryEntry.queryContract`; default not-found answers `ErrorContract` (`errorHandler.notFound`). Split, budget-checked skills. |
 | [2.45](changelog/v2.md#2451) | SSE `audience` — keyed per-user delivery, `sseStats()`; Better Auth `x-organization-id` scope. 2.45.1: `./testing` stopped inlining mongoose/mongodb (`__dirname` under vitest 5). 2.45.2: data-cleanup accepts standard permission gates. |
 | [2.44](changelog/v2.md#2440) | `getActionTarget(req)` — the fence's row, not a second read; atomic `IdempotencyStore.acquire()`. `@fastify/jwt` optional for Better Auth hosts. |
 | [2.43](changelog/v2.md#2430) | Idempotent replay is the first call's bytes; list schemas carry `totalIsEstimate` / keyset `prev`. |

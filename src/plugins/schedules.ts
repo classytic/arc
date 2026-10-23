@@ -48,6 +48,36 @@ import fp from "fastify-plugin";
 import { runWorkScope } from "../context/workScope.js";
 import { type RenewingLease, startRenewingLease } from "../lock/renewingLease.js";
 import { registerShutdownParticipant, runAdmittedWork, runShutdown } from "../utils/shutdown.js";
+import {
+  assertDailyTime,
+  createDailyGate,
+  type DailyClock,
+  type DailyGate,
+  type DailyLedger,
+} from "./dailyGate.js";
+
+/** Once per local calendar day at/after a wall-clock time. See `ScheduleDefinition.daily`. */
+export interface DailyScheduleOptions {
+  /** Local hour 0-23 in `zone`. */
+  hour: number;
+  /** Local minute 0-59 (default 0). */
+  minute?: number;
+  /** IANA zone the day and time are read in. Required: there is no server-zone default. */
+  zone: string;
+  /** Idempotency ledger (host-implemented; `createMemoryDailyLedger()` for tests). */
+  ledger: DailyLedger;
+  /** Latest lateness (ms) at which a missed run still fires. Default: until the local day ends. */
+  catchUpWindowMs?: number;
+  /** Re-grant an uncompleted claim older than this (crash mid-run). Default: never. */
+  staleAfterMs?: number;
+  /** Injectable clock (tests). */
+  clock?: DailyClock;
+}
+
+/** Second argument of a schedule handler. `day` is the civil date (`YYYY-MM-DD`) of a `daily` run. */
+export interface ScheduleRunContext {
+  day?: string;
+}
 
 export interface ScheduleDefinition {
   /** Unique name — also the lock key (`arc:schedule:<name>`). */
@@ -55,7 +85,14 @@ export interface ScheduleDefinition {
   /** Interval in milliseconds between the END of one run and the next tick. */
   every: number;
   /** The work. Receives the Fastify instance; errors are logged, never fatal. */
-  handler: (fastify: FastifyInstance) => void | Promise<void>;
+  handler: (fastify: FastifyInstance, ctx?: ScheduleRunContext) => void | Promise<void>;
+  /**
+   * Run the handler once per local calendar day at/after `hour:minute` in `zone`, claimed in
+   * `ledger` so restarts and replicas do not repeat it (a throwing run releases the claim and
+   * retries next poll). `every` becomes the POLL interval; keep it well under an hour. With a
+   * `lock`, only the lease holder polls. The handler receives `{ day }`.
+   */
+  daily?: DailyScheduleOptions;
   /** Fire once immediately when the app becomes ready (default: false). */
   runOnStart?: boolean;
   /**
@@ -137,6 +174,10 @@ export interface ScheduleStats {
   skippedByLock: number;
   lastRunAt: string | null;
   lastError: string | null;
+  /** `daily` schedules only: civil date of the last executed run. */
+  lastDay?: string | null;
+  /** `daily` schedules only: polls that did not execute (too early, outside window, claimed elsewhere). */
+  skippedByGate?: number;
 }
 
 declare module "fastify" {
@@ -191,6 +232,13 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
     }
   }
 
+  const gates = new Map<string, DailyGate>();
+  for (const s of schedules) {
+    if (!s.daily) continue;
+    assertDailyTime(`[arc-schedules] "${s.name}" daily`, s.daily);
+    gates.set(s.name, createDailyGate({ key: s.name, ...s.daily }));
+  }
+
   const timers = new Map<string, NodeJS.Timeout>();
   const inFlight = new Map<string, Promise<void>>();
   let closing = false;
@@ -242,12 +290,24 @@ const schedulesPlugin: FastifyPluginAsync<SchedulesPluginOptions> = async (fasti
             ),
         });
       }
+      const previousRunAt = stat.lastRunAt;
       stat.runs++;
       stat.lastRunAt = new Date().toISOString();
       // A run is a unit of work: its own scope, so per-request mechanisms
       // (`requestScopedCache`, correlation) work inside a job too.
       await runAdmittedWork(() =>
-        runWorkScope({ kind: "job", id: s.name }, () => s.handler(fastify)),
+        runWorkScope({ kind: "job", id: s.name }, async () => {
+          const gate = gates.get(s.name);
+          if (!gate) return s.handler(fastify);
+          const outcome = await gate.run((day) => s.handler(fastify, { day }));
+          if (outcome.ran) {
+            stat.lastDay = outcome.day;
+          } else {
+            stat.runs--; // a poll the gate declined is not a run
+            stat.lastRunAt = previousRunAt;
+            stat.skippedByGate = (stat.skippedByGate ?? 0) + 1;
+          }
+        }),
       );
       stat.lastError = null;
     } catch (err) {

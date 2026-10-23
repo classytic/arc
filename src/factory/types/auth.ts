@@ -193,7 +193,7 @@ export interface CustomPluginAuthOption {
 export interface CustomAuthenticatorOption {
   type: "authenticator";
   /** Authenticate function — decorates fastify.authenticate directly */
-  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
   /**
    * Optional authenticate function for public routes.
    * If not provided, Arc auto-generates one by wrapping `authenticate` and

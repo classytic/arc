@@ -83,4 +83,4 @@ For Mongo: declare a TTL index on `timestamp` instead — server-side TTL is che
 
 - [soc2.md](soc2.md) — SOC 2 Trust Services Criteria
 - [enterprise-auth.md](../../skills/arc/references/enterprise-auth.md) — feature matrix
-- [`audit-trail`](../../skills/arc/references/production.md) — audit-plugin operational guide
+- [`audit-trail`](../../skills/arc/references/production-audit.md) — audit-plugin operational guide

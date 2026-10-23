@@ -5,6 +5,7 @@ Recent decisions only — a **recency signal, not an archive**. This file loads 
 Full history: `git log -- wiki/` · release detail: [changelog/v2.md](../changelog/v2.md) · current contracts: the wiki page itself.
 
 ---
+- 2026-10-23 — core, plugins — `routeInput`/`crudInput`/`parse`, `{ body }` wrapper diagnostic, `schedules daily`, default `arc.not_found` handler. changelog/v2.md.
 - 2026-10-17 — plugins — SSE `audience`: keyed delivery via a per-replica connection map; filter still runs on recipients. `sseStats()` gauge. wiki/plugins.md.
 - 2026-10-17 — explicit organization headers select request scope and membership; active-session roles cannot cross organizations. wiki/auth.md.
 - 2026-10-10 — shared tenant/limit policies, fenced replay, stable inbox identities, ordered runtime drains and bounded histograms. changelog/v2.md.
@@ -14,4 +15,3 @@ Full history: `git log -- wiki/` · release detail: [changelog/v2.md](../changel
 - 2026-09-14 — utils — `CircuitBreaker` sharedState: cluster failure window (`RedisCircuitBreakerState`) — 50 pods no longer each absorb the full threshold. Shares the SIGNAL, not the state machine; failure path never awaits it. changelog/v2.md#2410.
 - 2026-09-14 — factory, plugins — ⚠ schedules without a `lock` FAIL a distributed boot (was a warn; an external audit read the warn as a guarantee). Escape: `singleReplica: true`, same idiom as `eventPlugin singleProcess`. changelog/v2.md#2410.
 - 2026-09-13 — usage, context — the audit may only name what arc can fix: `RedisUsageStore` ships (HINCRBY, opt-in retention), both stores run repo-core's `runUsageStoreContract`. Scope cache LRU-bounded — a job run is not "garbage in milliseconds". changelog/v2.md#2410.
-- 2026-09-12 — context, events, factory — a scope must not outlive its unit of work: `setImmediate` keeps the caller's ALS store, so `requestDrain` ran the whole relay pass under the nudging request; capability declarations from an encapsulated child were dropped. changelog/v2.md#2410.

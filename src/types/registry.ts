@@ -98,6 +98,15 @@ export interface RegistryEntry extends ResourceMetadata {
   rateLimit?: RateLimitConfig | false;
   /** Built-in write ops that require an idempotency key (`defineResource({ idempotency })`). */
   idempotency?: ResourceIdempotencyConfig;
+  /**
+   * What the resource's query parser declares for the list route: allowed filter fields, operators
+   * and sort fields. Published as `x-arc-query` on the list operation. Absent when it declares none.
+   */
+  queryContract?: {
+    filterFields?: readonly string[];
+    operators?: readonly string[];
+    sortFields?: readonly string[];
+  };
   /** Per-resource audit opt-in flag (read by `auditPlugin` perResource mode) */
   audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
   /**

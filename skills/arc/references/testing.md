@@ -1,200 +1,157 @@
-# Arc Testing Utilities (2.11)
+# Testing (`@classytic/arc/testing`)
 
-Three primary entry points — pick by what you're testing. Everything else composes with one of them.
+| Need | Use |
+|---|---|
+| Auto CRUD + permission + validation coverage for one resource | `createHttpTestHarness` |
+| Custom scenarios, one app with auth and fixtures | `createTestApp` + `expectArc` |
+| Real app around modules (boots green means it composes) | `bootModuleApp` |
+| Prove an adapter or store satisfies a contract | `runStorageContract`, `runOutboxStoreContract` (`/testing/outbox`), `runCleanupRunStoreContract` (`/testing/cleanup`) |
 
-| Entry point | Use when | Tests in scope |
-|---|---|---|
-| `createHttpTestHarness(resource, ctxFn)` | You want auto-generated CRUD + permission + validation coverage per resource | ~16 tests / resource, zero boilerplate |
-| `createTestApp({ resources, authMode, db })` | Custom scenarios, end-to-end flows, integration across resources | You write assertions with `expectArc(res)` |
-| `runStorageContract(setup)` | You're building an adapter and want to prove it satisfies arc's Storage contract | DB-agnostic adapter conformance |
-
----
-
-## `createTestApp()` — turnkey Fastify + in-memory Mongo + auth + fixtures
+## createTestApp
 
 ```typescript
 import { createTestApp, expectArc } from '@classytic/arc/testing';
 import type { TestAppContext } from '@classytic/arc/testing';
 
-describe('Product API', () => {
-  let ctx: TestAppContext;
-
-  beforeAll(async () => {
-    ctx = await createTestApp({
-      resources: [productResource],
-      authMode: 'jwt',           // 'jwt' | 'better-auth' | 'none'
-      db: 'in-memory',           // default; or { uri } | false
-      connectMongoose: true,     // optional — one-liner for Mongoose apps
-    });
-
-    ctx.auth.register('admin', {
-      user: { id: '1', roles: ['admin'] },
-      orgId: 'org-1',
-    });
+let ctx: TestAppContext;
+beforeAll(async () => {
+  ctx = await createTestApp({
+    resources: [productResource],
+    authMode: 'jwt',          // 'jwt' (default) | 'better-auth' | 'none'
+    db: 'in-memory',          // default | { uri } | false
+    connectMongoose: true,    // mongoose.connect(dbUri) for Mongoose apps
   });
+  ctx.auth!.register('admin', { user: { id: '1', roles: ['admin'] }, orgId: 'org-1' });
+});
+afterAll(() => ctx.close());
 
-  afterAll(() => ctx.close());
-
-  it('GET /products — public', async () => {
-    const res = await ctx.app.inject({ method: 'GET', url: '/products' });
-    expectArc(res).ok().paginated();
+it('POST /products as admin', async () => {
+  const res = await ctx.app.inject({
+    method: 'POST', url: '/products',
+    headers: ctx.auth!.as('admin').headers,
+    payload: { name: 'Widget', price: 99 },
   });
-
-  it('POST /products — admin required', async () => {
-    const res = await ctx.app.inject({
-      method: 'POST',
-      url: '/products',
-      headers: ctx.auth.as('admin').headers,
-      payload: { name: 'Widget', price: 99 },
-    });
-    expectArc(res).ok();
-  });
+  expectArc(res).ok(201);
 });
 ```
 
-**`TestAppContext` shape**: `{ app, auth, fixtures, dbUri, close }`. Auth is `undefined` when `authMode: 'none'`; `dbUri` is present when `db: 'in-memory'` or `{ uri }`.
+- `TestAppContext`: `{ app, auth, fixtures, dbUri, close }`. `auth` is `undefined` when `authMode: 'none'`.
+- Other `createApp` options pass through (`plugins`, `auth`, `ports` ...). Defaults: `preset: 'testing'`, no logger, helmet, cors, rate limit.
+- `db: 'in-memory'` needs `mongodb-memory-server` (dev dependency). `dbUri` is NOT wired into your adapters: connect them yourself.
+- `authMode: 'better-auth'` requires you to pass `auth: { type: 'better-auth', ... }`; it throws otherwise.
+- `ok()` defaults to 200, so pass the exact status (`ok(201)`).
 
-**`db` modes**:
-- `'in-memory'` (default) — boots `MongoMemoryServer`, exposes `dbUri`, stops on `close()`. Needs `npm i -D mongodb-memory-server`.
-- `{ uri }` — external Mongo URI; caller owns lifecycle.
-- `false` — no DB wiring (pure Fastify unit tests).
+## Auth sessions
 
-**`authMode: 'better-auth'`** requires the caller to also pass `auth: { type: 'better-auth', ... }`. Mismatched config fails fast at setup.
-
----
-
-## `TestAuthProvider` — unified session primitive
-
-One `register()` → `.as(role).headers` flow across JWT, Better Auth, and custom providers.
+`ctx.auth.register(role, { user | token, orgId?, extraHeaders? })`, then `ctx.auth.as(role).headers` (`authorization`, `x-organization-id`), `.withExtra({...})`, `ctx.auth.anonymous()` for 401 tests, `ctx.auth.roles`.
 
 ```typescript
-// JWT — provider signs on-the-fly via app.jwt.sign()
-ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] }, orgId: 'org-1' });
-ctx.auth.register('user', { user: { id: '2', roles: ['user'] } });
-
-// Better Auth / custom — pre-signed tokens
-ctx.auth.register('admin', { token: existingToken, orgId: 'org-1' });
-
-// Use
-const headers = ctx.auth.as('admin').headers;              // { authorization, x-organization-id }
-const withExtra = ctx.auth.as('admin').withExtra({ 'x-request-id': 'r-1' }).headers;
+import { createJwtAuthProvider, createBetterAuthProvider, createCustomAuthProvider } from '@classytic/arc/testing';
+const auth = createJwtAuthProvider(app, { defaultOrgId: 'org-1' }); // signs via app.jwt.sign
 ```
 
-Directly construct without `createTestApp`:
+`user` is signed by the JWT provider; Better Auth and custom providers need a pre-minted `token`.
+
+## expectArc
+
+Success bodies have no envelope, failures are `{ code, message, status }`.
 
 ```typescript
-import { createJwtAuthProvider, createBetterAuthProvider } from '@classytic/arc/testing';
-const auth = createJwtAuthProvider(app, { defaultOrgId: 'org-1' });
-```
-
----
-
-## `createHttpTestHarness(resource, ctxFn)` — auto-generated resource coverage
-
-~16 tests per resource (CRUD + permission + validation + error envelope) from a single factory call. Reads `defineResource()` config and probes every route.
-
-```typescript
-import { createTestApp, createHttpTestHarness } from '@classytic/arc/testing';
-
-describe('Product resource — full coverage', () => {
-  const ctx = await createTestApp({ resources: [productResource] });
-  ctx.auth.register('admin', { user: { id: '1', roles: ['admin'] } });
-
-  createHttpTestHarness(productResource, () => ({
-    app: ctx.app,
-    auth: ctx.auth,
-    adminRole: 'admin',
-    fixtures: { product: (i) => ({ name: `P${i}`, price: 10 + i }) },
-  })).runAll();
-});
-```
-
----
-
-## `expectArc(response)` — fluent envelope matchers
-
-```typescript
-expectArc(res).ok();                         // 200/201 with data envelope
-expectArc(res).forbidden();                  // 403, arc error envelope
+expectArc(res).ok(201);
+expectArc(res).forbidden();                 // also unauthorized(), notFound(), validationError(), conflict(), failed(status?)
 expectArc(res).notFound().hasError(/not exist/);
-expectArc(res).validationError().hasData({ fields: ['email'] });
-expectArc(res).paginated({ total: 10 });     // meta.pagination present
-expectArc(res).hidesField('password');       // field stripped from response
-expectArc(res).hasMeta('traceId');
+expectArc(res).paginated({ total: 10 });    // docs[] plus pagination fields
+expectArc(res).hidesField('password');      // also showsField, hasData(), hasMeta(key, value?)
 ```
 
-Available: `.ok`, `.failed`, `.unauthorized`, `.forbidden`, `.notFound`, `.validationError`, `.conflict`, `.hasData`, `.hidesField`, `.showsField`, `.paginated`, `.hasError`, `.hasMeta`.
+## createHttpTestHarness
 
----
+```typescript
+createHttpTestHarness(productResource, () => ({
+  app: ctx.app,
+  auth: ctx.auth!,
+  adminRole: 'admin',
+  fixtures: { valid: { name: 'P', price: 10 }, update: { price: 20 }, invalid: { price: 'x' } },
+  apiPrefix: '/api',          // optional
+})).runAll();                 // or runCrud() / runPermissions() / runValidation()
+```
 
-## `createTestFixtures()` — DB-agnostic seeding
+Reads the resource config (`disabledRoutes`, `updateMethod`) and probes each enabled route. Pass a getter when the app is built in `beforeAll`.
+
+## Fixtures
 
 ```typescript
 import { createTestFixtures } from '@classytic/arc/testing';
-
 const fixtures = createTestFixtures();
-fixtures.register('product', async (data) => {
-  const doc = await Product.create(data);
-  return { record: doc, destroy: () => Product.deleteOne({ _id: doc._id }) };
+fixtures.register('product', {
+  create: (data) => Product.create(data),
+  destroy: (doc) => Product.deleteOne({ _id: doc._id }).then(() => undefined),
 });
-
-const widget = await fixtures.create('product', { name: 'Widget' });
-await fixtures.clear();  // runs destroyers newest-first
+await fixtures.create('product', { name: 'Widget' });
+await fixtures.createMany('product', 3);
+await fixtures.clear();       // destroyers run newest first
 ```
 
-Destroyers bind at create time — no global cleanup registry. Works with any backend (Mongoose, sqlitekit, Prisma, in-memory).
+`register` also accepts a bare factory function (no cleanup). `ctx.fixtures` is the same tracker.
 
----
-
-## Better Auth orchestration — `setupBetterAuthTestApp`
-
-Composes `createTestApp` with Better Auth sign-up + org creation. Use when you need real Better Auth tokens rather than pre-signed stubs:
+## bootModuleApp
 
 ```typescript
-import { setupBetterAuthTestApp, createBetterAuthTestHelpers } from '@classytic/arc/testing';
+import { bootModuleApp, testActorHeaders } from '@classytic/arc/testing';
 
-const { ctx, helpers } = await setupBetterAuthTestApp({ resources: [orderResource], auth });
-const { user, token, orgId } = await helpers.signUpWithOrg({ email: 'a@x.co', name: 'A' });
-ctx.auth.register('admin', { token, orgId });
-```
-
----
-
-## Mocks (non-Fastify unit tests)
-
-```typescript
-import {
-  createMockRepository,
-  createDataFactory,
-  createMockUser,
-  createMockRequest,
-  createMockReply,
-  waitFor,
-  createSpy,
-  createTestTimer,
-} from '@classytic/arc/testing';
-```
-
----
-
-## `runStorageContract(setup)` — adapter conformance
-
-DB-agnostic Storage contract check. Build a setup that returns your adapter factory + a cleanup fn; arc runs the full contract suite against it.
-
-```typescript
-import { runStorageContract } from '@classytic/arc/testing';
-runStorageContract(async () => {
-  const storage = createMyAdapter();
-  return { storage, cleanup: async () => storage.close() };
+const t = await bootModuleApp((ctx) => [catalogModule(ctx.connection)], {
+  replset: false,             // true for transactions
+  actor: { roles: ['manager'], organizationId: 'org-1' },  // default actor
+  ports: { /* host ports */ },
+  app: { /* extra createApp options */ },
 });
+const engine = t.exports<CatalogEngine>('catalog');
+await t.app.inject({ url: '/x', headers: testActorHeaders('cashier', 'org-1') });
+await t.close();
 ```
 
----
+- Database is a seam: `database` (default `mongoMemoryDatabase`) returns `{ uri, connection, teardown }`; kits inject their own.
+- Identity comes from the `x-test-actor` header (`testActorHeaders(actor | roleString | null, orgId?)`). `null` stays public. Only `bootModuleApp` installs it; `createApp` never does.
+- Gate routes with arc primitives (`requireRoles`, `requireOrgMembership`), not test-only gates.
+- `assertModuleBootsAlone(modules, name, { probe })` boots a module with its dependency closure only.
+- `assertRequiresPorts(module, ports, { with, ports })` proves declared required ports.
+- `createTestModuleSetup({ ports })` gives `{ context, deferred, dispose }` to unit-test module phases.
+- `runAuthorizationConformance`, `scopeRoleGate(...roles)` exist for authorization suites.
+
+## Better Auth
+
+```typescript
+import { setupBetterAuthTestApp } from '@classytic/arc/testing';
+
+const r = await setupBetterAuthTestApp({
+  app,                                        // built app with Better Auth registered
+  org: { name: 'Acme', slug: 'acme' },
+  users: [
+    { key: 'admin', email: 'a@x.co', password: 'pw', name: 'A', role: 'owner', isCreator: true },
+  ],
+  addMember,                                  // required for non-creator users
+});
+r.auth.as('admin').headers; r.orgId; r.users.admin.token; await r.teardown();
+```
+
+Exactly one user has `isCreator: true`. Lower level: `createBetterAuthTestHelpers()` gives `signUp`, `signIn`, `createOrg`, `setActiveOrg`, `authHeaders`.
+
+## Contracts
+
+```typescript
+runStorageContract('my-storage', async () => ({ storage, teardown: async () => storage.close() }));
+runOutboxStoreContract('my-store', async () => ({ store, reset: async () => { /* empty it */ }, teardown }));
+```
+
+`reset` is required for the outbox contract and runs before every test.
+
+## Unit-test mocks
+
+`createMockRepository`, `createMockController`, `createMockUser`, `createMockRequest`, `createMockReply`, `createDataFactory`, `createSpy`, `createTestTimer`, `waitFor`.
 
 ## Tips
 
-1. **`app.inject()` over real HTTP** — same server, zero network.
-2. **Register auth sessions once per role** — not per test.
-3. **Use `ctx.fixtures.clear()` in `afterEach`** — destroyers handle dependency order.
-4. **Test permission denials explicitly** — `expectArc(res).forbidden()` beats status-code assertions.
-5. **Reach for `createHttpTestHarness` first** — 16 tests for one function call.
+- Use `app.inject()`, never a real port.
+- Register one auth session per role in `beforeAll`.
+- Call `ctx.fixtures.clear()` in `afterEach`.
+- Assert denials with `expectArc(res).forbidden()`, not raw status codes.

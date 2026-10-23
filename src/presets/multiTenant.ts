@@ -158,7 +158,7 @@ function createTenantMiddleware(
   const middleware: RouteHandler = async (
     request: RequestWithExtras,
     reply: FastifyReply,
-  ): Promise<void> => {
+  ): Promise<void | FastifyReply> => {
     try {
       applyTenantPreparation(request, request.body, getScope(request), preparation);
     } catch (error) {
@@ -168,6 +168,7 @@ function createTenantMiddleware(
         error: error.status === 401 ? "Unauthorized" : "Forbidden",
         message: error.message,
       });
+      return reply;
     }
   };
   return tagTenantPreparation(middleware, preparation);

@@ -91,11 +91,13 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
   const authenticateWithElevation = async (
     request: FastifyRequest,
     reply: FastifyReply,
-  ): Promise<void> => {
+  ): Promise<void | FastifyReply> => {
     // Step 1: Run original auth (sets request.user + default scope)
-    await originalAuthenticate.call(fastify, request, reply);
+    const authResult: unknown = await originalAuthenticate.call(fastify, request, reply);
 
-    // If auth failed and sent a reply, stop
+    // If auth failed and sent a reply, stop. The wrapped hook signals a refusal by returning the
+    // reply; `reply.sent` alone is false while async send-phase hooks defer the write.
+    if (authResult === reply) return reply;
     if (reply.sent) return;
 
     // Step 2: Check elevation header
@@ -111,7 +113,7 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
         message: "Authentication required for platform elevation",
         status: 401,
       } satisfies ErrorContract);
-      return;
+      return reply;
     }
 
     const userRoles = getUserRoles(user);
@@ -126,7 +128,7 @@ const elevationPlugin: FastifyPluginAsync<ElevationOptions> = async (
         message: "Insufficient privileges for platform elevation",
         status: 403,
       } satisfies ErrorContract);
-      return;
+      return reply;
     }
 
     // Step 4: Build elevated scope

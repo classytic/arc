@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.45.2",
+  "version": "2.46.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -311,7 +311,8 @@
     "typecheck": "npm run typecheck:src && npm run typecheck:types && npm run typecheck:types-strict && npm run check:type-lane",
     "typecheck:src": "tsc --noEmit",
     "check:type-lane": "node scripts/check-type-lane.mjs",
-    "lint": "biome check src/",
+    "lint": "biome check src/ && npm run check:skills",
+    "check:skills": "node scripts/check-skills.mjs",
     "lint:fix": "biome check --fix src/",
     "lint:all": "biome check src/ tests/",
     "test": "vitest run",
@@ -357,9 +358,9 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.31.0",
-    "@classytic/repo-core": ">=0.31.0",
-    "@classytic/streamline": ">=2.8.0",
+    "@classytic/primitives": ">=0.34.0",
+    "@classytic/repo-core": ">=0.32.0",
+    "@classytic/streamline": ">=2.11.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
     "@fastify/jwt": ">=10.0.0",
@@ -381,7 +382,7 @@
     "@opentelemetry/sdk-node": ">=0.50.0",
     "better-auth": ">=1.7.0",
     "bullmq": ">=6.0.0",
-    "fastify": ">=5.12.0",
+    "fastify": ">=5.12.7",
     "fastify-raw-body": ">=5.0.0",
     "h3-js": ">=4.0.0",
     "ioredis": ">=6.0.0",
@@ -495,7 +496,7 @@
     "@classytic/mongokit": "^3.43.0",
     "@classytic/pgkit": "^0.1.0",
     "@classytic/primitives": "^0.34.0",
-    "@classytic/repo-core": "^0.31.1",
+    "@classytic/repo-core": "^0.32.0",
     "@classytic/sqlitekit": "^0.10.0",
     "@classytic/streamline": "^2.11.0",
     "@electric-sql/pglite": "^0.5.10",
@@ -536,7 +537,7 @@
     "publint": "^0.3.25",
     "tsdown": "^0.23.1",
     "typebox": "^1.4.2",
-    "typescript": "^7.0.2",
+    "typescript": "^7.1.0-beta",
     "vitest": "^5.0.5",
     "ws": "^8.22.0",
     "zod": "^4.6.7"

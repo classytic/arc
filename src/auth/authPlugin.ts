@@ -46,13 +46,13 @@ import { createDomainError, isArcError, UnauthorizedError } from "../utils/error
 declare module "fastify" {
   interface FastifyInstance {
     /** Authenticate middleware - use in preHandler for protected routes */
-    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
     /** Optional authenticate - parses JWT if present, doesn't fail if absent */
     optionalAuthenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     /** Authorize middleware factory - checks if user has required roles */
     authorize: (
       ...roles: string[]
-    ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
     /** Auth helpers - issueTokens, jwt utilities */
     auth: AuthHelpers;
   }
@@ -217,7 +217,10 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
    * Arc adds this to preHandler for non-public routes.
    * Calls app's authenticator or falls back to default JWT verify.
    */
-  const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const authenticate = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void | FastifyReply> => {
     try {
       let user: unknown = null;
 
@@ -315,7 +318,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
       // Custom failure handler
       if (onFailure) {
         await onFailure(request, reply, error);
-        return;
+        return reply;
       }
 
       // No-envelope contract: emit canonical `ErrorContract` directly.
@@ -331,7 +334,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
           message,
           status: error.statusCode,
         });
-        return;
+        return reply;
       }
 
       // Fallback: a non-ArcError reached us (e.g. fastify-jwt verify
@@ -342,6 +345,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
         message,
         status: 401,
       });
+      return reply;
     }
   };
 
@@ -530,7 +534,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
    * preHandler: [fastify.authenticate, fastify.authorize('admin', 'superadmin')]
    */
   const authorize = (...allowedRoles: string[]) => {
-    return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    return async (request: FastifyRequest, reply: FastifyReply): Promise<void | FastifyReply> => {
       const reqRecord = request as unknown as Record<string, unknown>;
       const user = (reqRecord[userProperty] ?? reqRecord.user) as { roles?: string[] } | undefined;
 
@@ -540,7 +544,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
           message: "No user context",
           status: 401,
         });
-        return;
+        return reply;
       }
 
       const userRoles = getUserRoles(user);
@@ -559,7 +563,7 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (
           message: `Requires one of: ${allowedRoles.join(", ")}`,
           status: 403,
         });
-        return;
+        return reply;
       }
     };
   };

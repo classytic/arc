@@ -248,7 +248,7 @@ declare module "fastify" {
        * }, handler);
        * ```
        */
-      middleware: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+      middleware: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
     };
   }
   interface FastifyRequest {
@@ -380,17 +380,20 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
   });
 
   // ---- Route-level middleware: serve from cache (AFTER auth) ----
-  const cacheMiddleware = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const cacheMiddleware = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<FastifyReply | undefined> => {
     // Only check cache for cacheable requests
     const ttl = request.__arcCacheTTL;
-    if (!ttl || ttl <= 0) return;
-    if (request.method !== "GET" && request.method !== "HEAD") return;
+    if (!ttl || ttl <= 0) return undefined;
+    if (request.method !== "GET" && request.method !== "HEAD") return undefined;
 
     const key = buildKey(request);
-    if (!key) return;
+    if (!key) return undefined;
 
     const entry = cache.get(key);
-    if (!entry) return; // Cache MISS — let handler run, onSend will store
+    if (!entry) return undefined; // Cache MISS — let handler run, onSend will store
 
     // Cache HIT — serve directly (auth has already validated the caller)
     if (xCacheHeader) {
@@ -404,6 +407,7 @@ const responseCachePluginImpl: FastifyPluginAsync<ResponseCacheOptions> = async 
     // Clear TTL so the onSend hook doesn't overwrite x-cache to MISS
     request.__arcCacheTTL = 0;
     reply.code(entry.statusCode).send(entry.body);
+    return reply;
   };
 
   // ---- preSerialization hook: store in cache (recompute key — user is now populated) ----

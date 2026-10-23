@@ -72,3 +72,9 @@ Zod's default is `output`. Converting a request with it marks every `.default()`
 `.meta({ title, description, examples })` flows straight into the emitted JSON Schema (via `z.globalRegistry`), so OpenAPI and MCP descriptions come free — no parallel annotation layer.
 
 **Targets**: Zod types `target` as `… | ({} & string)`, so an unrecognized value is not rejected — it just matches no internal branch and silently falls back to draft-2020-12. `draft-7` is safe (Zod normalizes it to `draft-07`); `openapi-3.1` is not, so arc maps it to `draft-2020-12` explicitly — the correct dialect, since OAS 3.1 aligned with JSON Schema 2020-12.
+
+## One declaration, parsed input (`routeInput` / `crudInput` / `ActionDefinition.parse`)
+
+JSON Schema cannot express `.trim()`, `.default()` on nested objects, or `.refine()`. `src/core/routeInput.ts` closes that gap without a second schema: the slot goes through the pipeline above (AJV, OpenAPI, MCP), and a `preHandler` re-parses the SAME zod schema with `safeParse` and replaces `request.body|query|params` with the output. Zod is never imported at runtime (duck-typed `safeParse`), so it stays an optional peer. Failures throw `ValidationError` (400 `arc.validation_error`, `details[]`), the same wire as AJV. Actions parse through `withParsedInput` in `normalizeActionsToRouterConfig`, opt-in per action (`parse: true`).
+
+**Wrapper misuse**: an action `schema` or a route slot shaped `{ body: X }` has no `type`/`properties`, reads as an empty schema in `normalizeSchemaIR`, and validates nothing. `defineResource/schemaDiagnostics.ts` flags it (`schema.slot_wrapper`; fatal under `strictSchemas` / `ARC_STRICT_SCHEMAS`).

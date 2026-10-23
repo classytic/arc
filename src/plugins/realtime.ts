@@ -380,7 +380,7 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
     const needsAuth = entries.some(isProtected);
     if (tokenQueryParam) promoteStreamTokenToHeader(request, tokenQueryParam);
     const authenticate = (needsAuth ? fastify.authenticate : fastify.optionalAuthenticate) as
-      | ((req: FastifyRequest, rep: FastifyReply) => Promise<void>)
+      | ((req: FastifyRequest, rep: FastifyReply) => Promise<unknown>)
       | undefined;
     if (needsAuth && typeof authenticate !== "function") {
       await reply
@@ -389,8 +389,8 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
       return false;
     }
     if (typeof authenticate === "function") {
-      await authenticate(request, reply);
-      if (reply.sent) return false;
+      const authResult = await authenticate(request, reply);
+      if (authResult === reply || reply.sent) return false;
     }
     return true;
   };
@@ -582,13 +582,13 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
         "list permission — row filters and field-level read permissions apply per event.",
       response: { 200: { type: "string", description: "text/event-stream" } },
     },
-    handler: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    handler: async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | void> => {
       const resourceName = (request.params as { resource: string }).resource;
       const entry = lookupEntry(resourceName);
       if (!entry) return notFound(reply, resourceName);
-      if (!(await runAuth(request, reply, [entry]))) return;
+      if (!(await runAuth(request, reply, [entry]))) return reply;
       const sub = await authorizeResource(resourceName, entry, request, reply);
-      if (!sub) return;
+      if (!sub) return reply;
       await streamSubscriptions(request, reply, [sub]);
     },
   });
@@ -620,7 +620,7 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
       },
       response: { 200: { type: "string", description: "text/event-stream" } },
     },
-    handler: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    handler: async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | void> => {
       const raw = (request.query as { resources: string }).resources;
       const names = [
         ...new Set(
@@ -645,7 +645,7 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
         entries.push(entry);
       }
 
-      if (!(await runAuth(request, reply, entries))) return;
+      if (!(await runAuth(request, reply, entries))) return reply;
 
       const subscriptions: ResourceSubscription[] = [];
       for (let i = 0; i < names.length; i++) {
@@ -655,7 +655,7 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
           request,
           reply,
         );
-        if (!sub) return; // denial reply already sent, names the resource
+        if (!sub) return reply; // denial reply already sent, names the resource
         subscriptions.push(sub);
       }
 

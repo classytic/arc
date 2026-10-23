@@ -109,6 +109,15 @@ export { TreeMixin } from "./mixins/tree.js";
 export type { QueryResolverConfig } from "./QueryResolver.js";
 export { QueryResolver } from "./QueryResolver.js";
 export { type NativePolicyFilter, nativePolicyFilter } from "./repositoryFilter.js";
+// Declare a zod schema once per route / action / CRUD verb: AJV + parsed handler input + docs
+export {
+  crudInput,
+  type InputSchema,
+  noPayloadSchema,
+  parsed,
+  type RouteInputSlots,
+  routeInput,
+} from "./routeInput.js";
 export type {
   ConfigError,
   ValidateOptions,

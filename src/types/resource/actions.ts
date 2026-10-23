@@ -39,6 +39,12 @@ export interface ActionDefinition {
    * Runtime feature-detects via `convertRouteSchema` / `toJsonSchema`.
    */
   readonly schema?: unknown;
+  /**
+   * With a Zod `schema`: parse the body with it before the handler runs, so `data` is the schema's
+   * OUTPUT (trimmed, defaulted, refined). A failure is a 400 `arc.validation_error`. Default
+   * `false`: `data` is what AJV accepted. Ignored for a plain JSON Schema.
+   */
+  readonly parse?: boolean;
   /** Description for OpenAPI docs and MCP tool */
   readonly description?: string;
   /**

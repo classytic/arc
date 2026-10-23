@@ -53,6 +53,7 @@ export function appendCrudPaths(
       "List all",
       {
         parameters: listParams,
+        ...(resource.queryContract && { "x-arc-query": resource.queryContract }),
         responses: {
           "200": {
             description: "List of items",

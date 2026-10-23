@@ -164,7 +164,7 @@ export interface BetterAuthAdapterResult {
   /** Fastify plugin that registers catch-all auth routes */
   plugin: FastifyPluginAsync;
   /** Authenticate preHandler -- validates session via Better Auth */
-  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
   /** Optional authenticate -- resolves session silently, continues as unauthenticated on failure */
   optionalAuthenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   /** Permission helpers bound to this auth adapter (available when orgContext is enabled) */
@@ -188,7 +188,7 @@ declare module "fastify" {
      * Validates session by calling Better Auth's session endpoint internally.
      * Set by the Better Auth adapter plugin.
      */
-    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
     /**
      * Optional authenticate middleware (Better Auth variant).
      * Tries to resolve session silently — populates request.user if valid,
@@ -644,7 +644,10 @@ export function createBetterAuthAdapter(
    * `{ kind: 'member', organizationId, orgRoles, teamId? }`.
    * On failure, replies with 401.
    */
-  const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const authenticate = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void | FastifyReply> => {
     const presented = presentedCredential(request);
     if (presented) {
       const scope = await presented.verify(presented.value, request);
@@ -654,7 +657,7 @@ export function createBetterAuthAdapter(
           message: "Invalid credentials",
           status: 401,
         });
-        return;
+        return reply;
       }
       (request as unknown as { scope: RequestScope }).scope = scope;
       return;
@@ -670,7 +673,7 @@ export function createBetterAuthAdapter(
           message: "Invalid or expired session",
           status: 401,
         });
-        return;
+        return reply;
       }
 
       const req = request as unknown as Record<string, unknown>;
@@ -707,6 +710,7 @@ export function createBetterAuthAdapter(
         message,
         status: 401,
       });
+      return reply;
     }
   };
 

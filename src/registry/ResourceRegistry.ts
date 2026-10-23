@@ -16,6 +16,7 @@ import type {
   RegistryStats,
   ResourcePermissions,
 } from "../types/index.js";
+import type { QueryParserInterface } from "../types/query.js";
 
 export interface RegisterOptions {
   module?: string;
@@ -178,6 +179,7 @@ export class ResourceRegistry {
       pipelineSteps: extractPipelineSteps(resource.pipe),
       rateLimit: resource.rateLimit,
       idempotency: resource.idempotency,
+      queryContract: readQueryContract(resource.queryParser),
       audit: resource.audit,
       // v2.8.1 — expose actions metadata + fallback permission for OpenAPI/MCP/introspection
       actionPermissions: resource.actionPermissions,
@@ -529,4 +531,18 @@ export function stringifyMeasureMap(
     out[alias] = m.op;
   }
   return out;
+}
+
+/** The allow-lists a query parser declares, or undefined when it declares none. */
+function readQueryContract(
+  parser: QueryParserInterface | undefined,
+): RegistryEntry["queryContract"] {
+  if (!parser) return undefined;
+  const { allowedFilterFields, allowedOperators, allowedSortFields } = parser;
+  const contract = {
+    ...(allowedFilterFields && { filterFields: [...allowedFilterFields] }),
+    ...(allowedOperators && { operators: [...allowedOperators] }),
+    ...(allowedSortFields && { sortFields: [...allowedSortFields] }),
+  };
+  return Object.keys(contract).length > 0 ? contract : undefined;
 }

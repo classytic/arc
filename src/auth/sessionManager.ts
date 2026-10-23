@@ -120,7 +120,7 @@ export interface SessionManagerResult {
   /** Fastify plugin that adds session middleware */
   plugin: FastifyPluginAsync;
   /** PreHandler that rejects requests without a fresh session */
-  requireFresh: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  requireFresh: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
 }
 
 // ============================================================================
@@ -130,7 +130,7 @@ export interface SessionManagerResult {
 declare module "fastify" {
   interface FastifyInstance {
     /** Authenticate middleware — validates session and sets request.user */
-    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
     /** Session management helpers */
     sessionManager: {
       /** Create a new session for a user */
@@ -551,7 +551,10 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
    * A session is fresh if it was last updated within `freshAge` seconds.
    * Use this for sensitive operations like password changes, email changes, etc.
    */
-  const requireFresh = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  const requireFresh = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void | FastifyReply> => {
     const session = request.session;
 
     if (!session) {
@@ -560,7 +563,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         message: "Authentication required",
         status: 401,
       });
-      return;
+      return reply;
     }
 
     const elapsed = Date.now() - session.updatedAt;
@@ -570,7 +573,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
         message: "Session is not fresh. Please re-authenticate to perform this action.",
         status: 403,
       });
-      return;
+      return reply;
     }
   };
 
@@ -590,7 +593,10 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
 
     // ---- authenticate decorator ----
 
-    const authenticate = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    const authenticate = async (
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ): Promise<void | FastifyReply> => {
       // Parse cookies from header
       const cookieHeader = request.headers.cookie;
       const cookies = parseCookies(typeof cookieHeader === "string" ? cookieHeader : undefined);
@@ -602,7 +608,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           message: "No session cookie",
           status: 401,
         });
-        return;
+        return reply;
       }
 
       // Verify signature
@@ -615,7 +621,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           message: "Invalid session",
           status: 401,
         });
-        return;
+        return reply;
       }
 
       // Load session from store
@@ -628,7 +634,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           message: "Session expired or revoked",
           status: 401,
         });
-        return;
+        return reply;
       }
 
       // Check expiration (belt-and-suspenders, store should handle this too)
@@ -640,7 +646,7 @@ export function createSessionManager(options: SessionManagerOptions): SessionMan
           message: "Session expired",
           status: 401,
         });
-        return;
+        return reply;
       }
 
       // Set user and session on request

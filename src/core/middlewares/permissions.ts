@@ -55,11 +55,13 @@ export function buildCrudPermissionMw(
   action: string,
 ): RouteHandlerMethod | null {
   if (!permissionCheck) return null;
-  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | undefined> => {
     const context = buildPermissionContext(req, { resource: resourceName, action });
-    await evaluateAndApplyPermission(permissionCheck, context, req, reply);
-    // evaluateAndApplyPermission returns false when it sends a response;
-    // Fastify treats a sent reply as terminating the preHandler chain.
+    const allowed = await evaluateAndApplyPermission(permissionCheck, context, req, reply);
+    // A refusal sent the response; returning the reply ends the lifecycle even when async
+    // preSerialization/onSend hooks defer the write (`reply.sent` is still false then, and
+    // Fastify would otherwise run the handler).
+    return allowed ? undefined : reply;
   };
 }
 
@@ -86,7 +88,7 @@ export function buildActionPermissionMw(
 ): RouteHandlerMethod {
   const enumSet = new Set(actionEnum);
   const validActions = [...actionEnum];
-  return async (req: FastifyRequest, reply: FastifyReply): Promise<void> => {
+  return async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | undefined> => {
     const body = (req.body ?? {}) as { action?: string } & Record<string, unknown>;
     const action = body.action;
 
@@ -101,7 +103,7 @@ export function buildActionPermissionMw(
     }
 
     const permissionCheck = actionPermissions[action] ?? globalAuth;
-    if (!permissionCheck) return;
+    if (!permissionCheck) return undefined;
 
     const { action: _discard, ...data } = body;
     const params = req.params as { id?: string } | undefined;
@@ -111,9 +113,10 @@ export function buildActionPermissionMw(
       resourceId: params?.id,
       data,
     });
-    await evaluateAndApplyPermission(permissionCheck, context, req, reply, {
+    const allowed = await evaluateAndApplyPermission(permissionCheck, context, req, reply, {
       defaultDenialMessage: (user) =>
         user ? `Permission denied for '${action}'` : "Authentication required",
     });
+    return allowed ? undefined : reply;
   };
 }

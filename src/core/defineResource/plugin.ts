@@ -29,6 +29,7 @@ import { resolveActionPermission } from "../actionPermissions.js";
 import { createCrudRouter } from "../createCrudRouter.js";
 import type { ActionTargetCheck } from "../entityHelpers.js";
 import { createRequestContext } from "../fastifyAdapter.js";
+import { withParsedInput } from "../routeInput.js";
 import type { ResourceDefinition } from "./ResourceDefinition.js";
 import { withoutObjectIdPattern } from "./schemas.js";
 
@@ -261,7 +262,7 @@ export function normalizeActionsToRouterConfig(
       handlers[name] = entry;
     } else {
       const def = entry as ActionDefinition;
-      handlers[name] = def.handler;
+      handlers[name] = def.parse ? withParsedInput(def.handler, def.schema) : def.handler;
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
       if (def.id === false) idLessActionNames.push(name);
       if (def.idempotency?.required === true) idempotentActionNames.push(name);

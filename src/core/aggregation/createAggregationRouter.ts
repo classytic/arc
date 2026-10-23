@@ -182,7 +182,10 @@ function registerOne(
   // restricts aggregation queries identically (the handler threads
   // `request._policyFilters` into the aggregation filter).
   const permissionFn = config.permissions;
-  const permissionMw: RouteHandlerMethod = async (req, reply): Promise<void> => {
+  const permissionMw: RouteHandlerMethod = async (
+    req,
+    reply,
+  ): Promise<FastifyReply | undefined> => {
     const ctx = buildPermissionContextLite(req, normalized.name);
     // Delegate to the ONE shared evaluator (identical to CRUD + actions): it
     // normalizes the decision, maps thrown ArcErrors to structured responses and
@@ -190,12 +193,13 @@ function registerOne(
     // reason, and on allow installs the decision's scope + policy. On deny it
     // sends the reply, which short-circuits the Fastify route — the aggregation
     // handler never runs. No per-surface evaluation logic to drift.
-    await evaluateAndApplyPermission(permissionFn, ctx, req, reply, {
+    const allowed = await evaluateAndApplyPermission(permissionFn, ctx, req, reply, {
       defaultDenialMessage: (user) =>
         user
           ? "You do not have permission to access this aggregation."
           : "Authentication required to access this aggregation.",
     });
+    return allowed ? undefined : reply;
   };
 
   // Cache / idempotency middleware — read paths only. Aggregations are

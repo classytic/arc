@@ -240,7 +240,7 @@ auth: { type: 'custom', plugin: myAuthPlugin }
 auth: false
 ```
 
-Better Auth + arc resources over BA tables: the kit owns the bridge. `@classytic/mongokit/better-auth` ships `createBetterAuthOverlay()` (per-collection `DataAdapter` for `defineResource`) and `registerBetterAuthStubs()` (bulk stub models for `populate()`). Sqlitekit users hand-roll the Drizzle table — see [auth.md](skills/arc/references/auth.md).
+Better Auth + arc resources over BA tables: the kit owns the bridge. `@classytic/mongokit/better-auth` ships `createBetterAuthOverlay()` (per-collection `DataAdapter` for `defineResource`) and `registerBetterAuthStubs()` (bulk stub models for `populate()`). Sqlitekit users hand-roll the Drizzle table — see [auth-better-auth-overlay.md](skills/arc/references/auth-better-auth-overlay.md).
 
 ---
 
