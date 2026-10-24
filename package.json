@@ -537,7 +537,7 @@
     "publint": "^0.3.25",
     "tsdown": "^0.23.1",
     "typebox": "^1.4.2",
-    "typescript": "^7.1.0-beta",
+    "typescript": "7.1.0-beta",
     "vitest": "^5.0.5",
     "ws": "^8.22.0",
     "zod": "^4.6.7"
