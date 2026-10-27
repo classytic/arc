@@ -62,6 +62,10 @@ export default defineConfig({
     "src/plugins/index.ts",
     "src/plugins/tracing-entry.ts",
     "src/plugins/response-cache.ts",
+    "src/http-cache/index.ts",
+    "src/http-cache/purgers/cloudflare.ts",
+    "src/http-cache/purgers/fastly.ts",
+    "src/http-cache/testing/index.ts",
 
     // Events — barrel (memory + repo-backed outbox) + Redis transport subpaths
     "src/events/index.ts",

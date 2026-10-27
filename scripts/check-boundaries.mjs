@@ -56,6 +56,7 @@ const LAYERS = {
   middleware: 2,
   hooks: 2,
   cache: 2,
+  "http-cache": 2,
   idempotency: 2,
   events: 2,
   audit: 2,

@@ -89,6 +89,8 @@ export interface CrudRouterOptions {
   rateLimit?: RateLimitConfig | false;
   /** Idempotency-key fence for the built-in write routes. */
   idempotency?: import("./resource/index.js").ResourceIdempotencyConfig;
+  /** HTTP caching for the built-in list/get routes. */
+  httpCache?: import("../http-cache/policy/policy.types.js").ResourceHttpCacheConfig;
   /** PreHandler guards applied to every route (CRUD + custom + preset). */
   routeGuards?: RouteHandlerMethod[];
   /**

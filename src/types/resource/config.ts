@@ -499,6 +499,11 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   /** Idempotency-key fence for the built-in write routes. See `ResourceIdempotencyConfig`. */
   idempotency?: ResourceIdempotencyConfig;
   /**
+   * HTTP caching for the built-in `list` / `get` routes: tags `<name>` and `<name>:<id>` are derived, and
+   * the resource's CRUD events purge them. Requires `httpCachePlugin` (`@classytic/arc/http-cache`).
+   */
+  httpCache?: import("../../http-cache/policy/policy.types.js").ResourceHttpCacheConfig;
+  /**
    * QueryCache configuration for this resource. Enables
    * stale-while-revalidate and auto-invalidation. Requires
    * `queryCachePlugin` to be registered.

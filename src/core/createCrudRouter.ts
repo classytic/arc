@@ -55,6 +55,28 @@ import {
  * SINGLE `config` key Fastify reads. Returns arc's object untouched when the host
  * supplied none, so the route options stay literally what was declared.
  */
+/** The `config.httpCache` a CRUD read route carries when its resource declared `httpCache`. */
+function routeHttpCache(
+  httpCache: CrudRouterOptions["httpCache"],
+  resourceName: string,
+  op: string,
+): Record<string, unknown> | undefined {
+  if (!httpCache || (op !== "list" && op !== "get")) return undefined;
+  const policy = op === "list" ? httpCache.list : httpCache.get;
+  if (!policy) return undefined;
+  const extra = httpCache.tags?.extra;
+  return { ...policy, resource: { name: resourceName, op, ...(extra ? { extra } : {}) } };
+}
+
+/** Add `httpCache` to a route's `config`, keeping whatever `buildRouteConfig` produced. */
+function withHttpCache(
+  base: { config?: Record<string, unknown> },
+  policy: Record<string, unknown> | undefined,
+): { config?: Record<string, unknown> } {
+  if (!policy) return base;
+  return { config: { ...(base.config ?? {}), httpCache: policy } };
+}
+
 function mergeRouteConfig(
   hostConfig: Record<string, unknown> | undefined,
   arcConfig: { config?: Record<string, unknown> },
@@ -393,6 +415,7 @@ export function createCrudRouter<TDoc = unknown>(
     idField,
     extensions,
     idempotency,
+    httpCache,
   } = options;
 
   // A fence on a route that is not mounted protects nothing — refuse it at boot.
@@ -544,11 +567,14 @@ export function createCrudRouter<TDoc = unknown>(
             ) as FastifySchema,
             ...routeHookOptions(hooks),
             handler: handlers[spec.op],
-            ...buildRouteConfig(
-              rateLimitConfig,
-              extensions,
-              undefined,
-              idempotentOps.has(spec.op) ? { required: true } : undefined,
+            ...withHttpCache(
+              buildRouteConfig(
+                rateLimitConfig,
+                extensions,
+                undefined,
+                idempotentOps.has(spec.op) ? { required: true } : undefined,
+              ),
+              routeHttpCache(httpCache, resourceName, spec.op),
             ),
           },
           { resourceName, op: spec.op },

@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.46.0",
+  "version": "2.47.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -188,6 +188,22 @@
       "types": "./dist/plugins/response-cache.d.mts",
       "default": "./dist/plugins/response-cache.mjs"
     },
+    "./http-cache": {
+      "types": "./dist/http-cache/index.d.mts",
+      "default": "./dist/http-cache/index.mjs"
+    },
+    "./http-cache/cloudflare": {
+      "types": "./dist/http-cache/purgers/cloudflare.d.mts",
+      "default": "./dist/http-cache/purgers/cloudflare.mjs"
+    },
+    "./http-cache/fastly": {
+      "types": "./dist/http-cache/purgers/fastly.d.mts",
+      "default": "./dist/http-cache/purgers/fastly.mjs"
+    },
+    "./http-cache/testing": {
+      "types": "./dist/http-cache/testing/index.d.mts",
+      "default": "./dist/http-cache/testing/index.mjs"
+    },
     "./scope": {
       "types": "./dist/scope/index.d.mts",
       "default": "./dist/scope/index.mjs"
@@ -287,6 +303,10 @@
       "./integrations/webhooks": "stable",
       "./auth/redis": "stable",
       "./plugins/response-cache": "stable",
+      "./http-cache": "experimental",
+      "./http-cache/cloudflare": "experimental",
+      "./http-cache/fastly": "experimental",
+      "./http-cache/testing": "experimental",
       "./scope": "stable",
       "./mcp": "stable",
       "./mcp/testing": "stable",
@@ -358,9 +378,9 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.34.0",
-    "@classytic/repo-core": ">=0.32.0",
-    "@classytic/streamline": ">=2.11.0",
+    "@classytic/primitives": ">=0.35.0",
+    "@classytic/repo-core": ">=0.34.0",
+    "@classytic/streamline": ">=2.12.0",
     "@fastify/cors": ">=11.0.0",
     "@fastify/helmet": ">=13.0.0",
     "@fastify/jwt": ">=10.0.0",
@@ -380,16 +400,16 @@
     "@opentelemetry/instrumentation-http": ">=0.50.0",
     "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
     "@opentelemetry/sdk-node": ">=0.50.0",
-    "better-auth": ">=1.7.0",
-    "bullmq": ">=6.0.0",
+    "better-auth": ">=1.7.14",
+    "bullmq": ">=6.5.0",
     "fastify": ">=5.12.7",
-    "fastify-raw-body": ">=5.0.0",
+    "fastify-raw-body": ">=6.0.3",
     "h3-js": ">=4.0.0",
     "ioredis": ">=6.0.0",
     "jose": ">=6.0.0",
     "pino-pretty": ">=13.0.0",
     "typebox": ">=1.0.0",
-    "zod": ">=4.4.0"
+    "zod": ">=4.6.7"
   },
   "peerDependenciesMeta": {
     "@classytic/streamline": {
@@ -490,15 +510,15 @@
     "@arethetypeswrong/cli": "^0.18.5",
     "@better-auth/drizzle-adapter": "^1.7.10",
     "@better-auth/mongo-adapter": "^1.7.10",
-    "@biomejs/biome": "^2.5.15",
+    "@biomejs/biome": "^2.6.3",
     "@classytic/dev-tools": "^0.2.1",
     "@classytic/gitkit": ">=0.3.0",
-    "@classytic/mongokit": "^3.43.0",
+    "@classytic/mongokit": "^3.43.1",
     "@classytic/pgkit": "^0.1.0",
-    "@classytic/primitives": "^0.34.0",
-    "@classytic/repo-core": "^0.32.0",
-    "@classytic/sqlitekit": "^0.10.0",
-    "@classytic/streamline": "^2.11.0",
+    "@classytic/primitives": "^0.35.0",
+    "@classytic/repo-core": "^0.34.0",
+    "@classytic/sqlitekit": "^0.11.0",
+    "@classytic/streamline": "^2.12.0",
     "@electric-sql/pglite": "^0.5.10",
     "@fastify/cors": "^11.3.1",
     "@fastify/helmet": "^13.2.0",
@@ -518,9 +538,9 @@
     "@types/qs": "^6.15.1",
     "@vitest/coverage-v8": "^5.0.5",
     "ajv": "^8.20.0",
-    "better-auth": "^1.7.10",
+    "better-auth": "^1.7.14",
     "better-sqlite3": "^13.0.3",
-    "bullmq": "^6.3.16",
+    "bullmq": "^6.5.0",
     "dotenv": "^18.0.8",
     "drizzle-orm": "^0.45.4",
     "fast-check": "^4.10.2",
@@ -530,12 +550,12 @@
     "ioredis": "^6.0.0",
     "jose": "^6.2.12",
     "jsonwebtoken": "^9.0.3",
-    "knip": "^6.41.0",
+    "knip": "^6.43.0",
     "mongodb": "^7.7.0",
     "mongodb-memory-server": "^11.3.0",
-    "mongoose": "^9.11.2",
+    "mongoose": "^9.11.4",
     "publint": "^0.3.25",
-    "tsdown": "^0.23.1",
+    "tsdown": "^0.23.2",
     "typebox": "^1.4.2",
     "typescript": "7.1.0-beta",
     "vitest": "^5.0.5",
@@ -570,5 +590,13 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/classytic/arc.git"
+  },
+  "overrides": {
+    "tsdown": {
+      "typescript": "$typescript"
+    },
+    "@arethetypeswrong/core": {
+      "typescript": "5.6.1-rc"
+    }
   }
 }

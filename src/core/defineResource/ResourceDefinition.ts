@@ -106,6 +106,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
   // ── Cross-cutting ──
   readonly rateLimit?: RateLimitConfig | false;
   readonly idempotency?: ResourceIdempotencyConfig;
+  readonly httpCache?: import("../../http-cache/policy/policy.types.js").ResourceHttpCacheConfig;
   readonly lookupFields?: readonly string[];
   readonly audit?: boolean | { operations?: ("create" | "update" | "delete")[] };
   readonly updateMethod?: "PUT" | "PATCH" | "both";
@@ -304,6 +305,7 @@ export class ResourceDefinition<TDoc = AnyRecord> {
 
     this.rateLimit = config.rateLimit;
     this.idempotency = config.idempotency;
+    this.httpCache = config.httpCache;
     this.lookupFields = config.lookupFields;
     this.audit = config.audit;
     this.updateMethod = config.updateMethod;

@@ -562,6 +562,7 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           schemaOptions: resource.schemaOptions,
           rateLimit: resource.rateLimit,
           idempotency: resource.idempotency,
+          httpCache: resource.httpCache,
           updateMethod: resource.updateMethod,
           pipe: resource.pipe,
           fields: resource.fields,
