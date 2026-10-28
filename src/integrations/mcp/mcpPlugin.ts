@@ -3,11 +3,10 @@
  *
  * Fastify plugin that auto-generates MCP tools from Arc resources.
  *
- * Two transport modes:
- * - **Stateless** (default) — fresh server per request, no session tracking.
- *   Best for production, horizontal scaling, serverless, edge.
- * - **Stateful** — sessions cached with TTL, reused across requests.
- *   Use when you need server-initiated notifications or long-lived connections.
+ * Serves MCP protocol revision 2026-07-28 ONLY, through the SDK's
+ * `createMcpHandler` with `legacy: 'reject'`: a fresh server per request, no
+ * sessions. A 2025-era `initialize` is answered with the SDK's
+ * unsupported-protocol-version error naming 2026-07-28.
  *
  * Auth is NOT enforced — the plugin respects whatever auth mode you choose:
  * - `auth: false` — no auth, anonymous access (dev/testing/stdio)
@@ -16,11 +15,7 @@
  *
  * @example
  * ```typescript
- * // Stateless (default) — production, scalable
  * await app.register(mcpPlugin, { resources, auth: false });
- *
- * // Stateful — when you need session persistence
- * await app.register(mcpPlugin, { resources, stateful: true, sessionTtlMs: 600000 });
  *
  * // Multiple MCP endpoints scoped to different resource groups
  * await app.register(mcpPlugin, { resources: catalogResources, prefix: '/mcp/catalog' });
@@ -28,26 +23,31 @@
  * ```
  */
 
-import { randomUUID } from "node:crypto";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import {
   createMemoryResourceRateLimiter,
   resolveResourceRateLimiter,
 } from "../../permissions/resourceRateLimit.js";
-import { requireSingleHeaderValue } from "../../utils/headers.js";
 import { declareRuntimeCapability } from "../../utils/runtimeCapabilities.js";
 import {
+  fromSdkAuthInfo,
   isBetterAuth,
   McpAuthCache,
+  oauthChallengeHeader,
   registerOAuthDiscovery,
   resolveMcpAuth,
+  toSdkAuthInfo,
 } from "./authBridge.js";
 import { type AuthRef, createMcpServer, type McpServerInstance } from "./createMcpServer.js";
 import { resourceToTools } from "./resourceToTools.js";
 import { registerSchemaResources } from "./schemaResources.js";
-import { McpSessionCache } from "./sessionCache.js";
-import type { CrudOperation, McpAuthResult, McpPluginOptions, SessionEntry } from "./types.js";
+import type { CrudOperation, McpPluginOptions } from "./types.js";
+
+type NodeModule = typeof import("@modelcontextprotocol/node");
+
+/** The one MCP protocol revision arc's endpoint speaks. */
+export const MCP_PROTOCOL_VERSION = "2026-07-28";
 
 // ============================================================================
 // Fastify type augmentation
@@ -60,20 +60,16 @@ import type { CrudOperation, McpAuthResult, McpPluginOptions, SessionEntry } fro
  * setups can inspect any endpoint's tool list, not just the first one.
  */
 export interface McpRegistration {
-  sessions: McpSessionCache | null;
   toolNames: string[];
   resourceNames: string[];
-  stateful: boolean;
 }
 
 export interface McpDecorator {
   /** Map of prefix → registration info. Iterate for all endpoints. */
   registrations: Map<string, McpRegistration>;
   /** Shortcut for the first registered prefix (back-compat for single-endpoint apps) */
-  readonly sessions: McpSessionCache | null;
   readonly toolNames: string[];
   readonly resourceNames: string[];
-  readonly stateful: boolean;
   /** Look up a specific prefix */
   get(prefix: string): McpRegistration | undefined;
 }
@@ -89,15 +85,19 @@ declare module "fastify" {
 // ============================================================================
 
 const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, options) => {
+  // ── 0. The removed session mode fails the boot rather than being ignored ──
+  if ((options as { stateful?: unknown }).stateful === true) {
+    throw new Error(
+      `mcpPlugin: \`stateful: true\` was removed — MCP ${MCP_PROTOCOL_VERSION} has no sessions, ` +
+        "so every request is served statelessly. Delete `stateful`, `sessionTtlMs` and `maxSessions`.",
+    );
+  }
+
   // ── 1. Dynamic import guard ──
   // Emit separate diagnostics for SDK vs zod so install hints are actionable.
-  let StreamableHTTPServerTransport: new (
-    opts: Record<string, unknown>,
-  ) => SessionEntry["transport"] & { sessionId: string | undefined };
+  let nodeSdk: NodeModule;
   try {
-    const mod = await import("@modelcontextprotocol/node");
-    StreamableHTTPServerTransport =
-      mod.NodeStreamableHTTPServerTransport as typeof StreamableHTTPServerTransport;
+    nodeSdk = await import("@modelcontextprotocol/node");
   } catch {
     throw new Error(
       "@modelcontextprotocol/server and @modelcontextprotocol/node are required for MCP support. " +
@@ -191,13 +191,7 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     overrideOpsMap[name] = { operations: cfg.operations };
   }
 
-  // ── 5. Mode: stateless (default) or stateful ──
-  const stateful = options.stateful === true;
-  const cache = stateful
-    ? new McpSessionCache({ ttlMs: options.sessionTtlMs, maxSessions: options.maxSessions })
-    : null;
-
-  // ── 6. Server factory ──
+  // ── 5. Server factory ──
   async function createServerInstance(authRef: AuthRef): Promise<McpServerInstance> {
     const server = await createMcpServer(
       {
@@ -206,6 +200,7 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
         instructions: options.instructions,
         tools: allTools,
         prompts: options.extraPrompts,
+        logger: fastify.log,
       },
       authRef,
     );
@@ -213,15 +208,15 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     return server;
   }
 
-  // ── 7. OAuth discovery (Better Auth only) ──
+  // ── 6. OAuth discovery (Better Auth only) ──
   if (options.auth && isBetterAuth(options.auth)) {
     await registerOAuthDiscovery(fastify, options.auth);
   }
 
-  // ── 8. MCP HTTP routes ──
+  // ── 7. MCP HTTP routes ──
   const prefix = options.prefix ?? "/mcp";
 
-  // ── 8a. Loud warning when MCP is exposed with auth disabled ──
+  // ── 7a. Loud warning when MCP is exposed with auth disabled ──
   //
   // `auth: false` is legitimate for stdio transports and local development,
   // but a real-world incident pattern is: dev sets `auth: false` to skip
@@ -247,7 +242,7 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     );
   }
 
-  // ── 8b. DNS-rebinding protection (Host / Origin) ──
+  // ── 7b. DNS-rebinding protection (Host / Origin) ──
   //
   // Closes the attack the MCP SDK ships this for: a page the developer visits
   // POSTs to `127.0.0.1:<port>`, and if an attacker-controlled DNS name resolves
@@ -271,8 +266,8 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
   // guarding it turns DNS-rebinding protection into a restart loop. The prize in
   // this attack is the tool surface on POST, not liveness.
   //
-  // Runs at `onRequest`, before auth, so a rebound request is refused without
-  // touching the session store.
+  // Runs at `onRequest`, before auth, so a rebound request is refused before
+  // any credential is resolved.
   //
   // The matching rules come from `@modelcontextprotocol/server` — port-agnostic,
   // IPv6-bracket aware, "absent Origin passes" for non-browser clients. Arc
@@ -311,14 +306,14 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
     });
   }
 
-  // ── Health endpoint (both modes) — no MCP protocol needed ──
+  // ── Health endpoint — no MCP protocol needed ──
   //
   // Liveness stays unauthenticated (k8s probes carry no credentials), but
-  // the ENUMERATION half (tool names, resource/session counts) is withheld
+  // the ENUMERATION half (tool and resource counts, tool names) is withheld
   // from anonymous callers when auth is configured — it mapped the entire
   // tool surface to anyone who could reach the URL.
   fastify.get(`${prefix}/health`, async (request, reply) => {
-    const liveness = { status: "ok", mode: stateful ? "stateful" : "stateless" };
+    const liveness = { status: "ok", protocolVersion: MCP_PROTOCOL_VERSION };
     if (options.auth) {
       const authResult = await resolveMcpAuth(
         request.headers as Record<string, string | undefined>,
@@ -331,87 +326,46 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
       tools: allTools.length,
       resources: enabledResources.length,
       toolNames: allTools.map((t) => t.name),
-      sessions: cache?.size ?? null,
     });
   });
 
-  if (stateful) {
-    // ────────────────────────────────────────────────────────────
-    // STATEFUL MODE — session-cached, reused across requests
-    // ────────────────────────────────────────────────────────────
-    // `cache` is initialised in the stateful branch above; this `else`
-    // block is the stateful path, so the cache instance is guaranteed
-    // present — make that explicit instead of asserting non-null.
-    if (!cache) {
-      throw new Error("[Arc/MCP] Stateful session cache missing in stateful registration");
-    }
-    registerStatefulRoutes(
-      fastify,
-      prefix,
-      options,
-      cache,
-      createServerInstance,
-      StreamableHTTPServerTransport,
-    );
-  } else {
-    // ────────────────────────────────────────────────────────────
-    // STATELESS MODE — fresh server per request, no session tracking
-    // Best for production, horizontal scaling, serverless
-    // ────────────────────────────────────────────────────────────
-    const authCache =
-      options.auth && options.authCacheTtlMs !== 0
-        ? new McpAuthCache({ ttlMs: options.authCacheTtlMs })
-        : undefined;
-    registerStatelessRoutes(
-      fastify,
-      prefix,
-      options,
-      createServerInstance,
-      StreamableHTTPServerTransport,
-      authCache,
-    );
-  }
+  const authCache =
+    options.auth && options.authCacheTtlMs !== 0
+      ? new McpAuthCache({ ttlMs: options.authCacheTtlMs })
+      : undefined;
+  await registerRoutes(
+    fastify,
+    prefix,
+    options,
+    createServerInstance,
+    nodeSdk.toNodeHandler,
+    authCache,
+  );
 
-  // ── 9. Graceful shutdown ──
-  if (cache) {
-    fastify.addHook("onClose", async () => cache.close());
-  }
-
-  // ── 10. Decorate ──
-  // Build the per-prefix registration. A single fastify instance can register
-  // mcpPlugin multiple times (e.g. /mcp/catalog, /mcp/orders) — the decorator
-  // exposes all of them via `registrations`, plus legacy top-level getters
-  // that point at the first-registered endpoint for backwards compatibility.
+  // ── 8. Decorate ──
+  // A single fastify instance can register mcpPlugin multiple times (e.g.
+  // /mcp/catalog, /mcp/orders) — the decorator exposes all of them via
+  // `registrations`, plus top-level getters for the first-registered endpoint.
   const registration: McpRegistration = {
-    sessions: cache,
     toolNames: allTools.map((t) => t.name),
     resourceNames: enabledResources.map((r) => r.name),
-    stateful,
   };
 
   if (!fastify.hasDecorator("mcp")) {
     const registrations = new Map<string, McpRegistration>();
     registrations.set(prefix, registration);
-    // Legacy top-level getters point at the first-inserted registration —
-    // Maps preserve insertion order, so `.values().next().value` is the
-    // first entry. Extracted for readability.
+    // Maps preserve insertion order, so the first entry is the first prefix.
     const first = (): McpRegistration | undefined => registrations.values().next().value;
     const decorator: McpDecorator = {
       registrations,
       get(p: string) {
         return registrations.get(p);
       },
-      get sessions() {
-        return first()?.sessions ?? null;
-      },
       get toolNames() {
         return first()?.toolNames ?? [];
       },
       get resourceNames() {
         return first()?.resourceNames ?? [];
-      },
-      get stateful() {
-        return first()?.stateful ?? false;
       },
     };
     fastify.decorate("mcp", decorator);
@@ -428,222 +382,72 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
 };
 
 // ============================================================================
-// Stateless Routes
+// Routes
 // ============================================================================
 
-function registerStatelessRoutes(
+async function registerRoutes(
   fastify: Parameters<FastifyPluginAsync>[0],
   prefix: string,
   options: McpPluginOptions,
   createServer: (authRef: AuthRef) => Promise<McpServerInstance>,
-  Transport: new (
-    opts: Record<string, unknown>,
-  ) => SessionEntry["transport"] & { sessionId: string | undefined },
+  toNodeHandler: NodeModule["toNodeHandler"],
   authCache?: McpAuthCache,
-): void {
-  // POST /mcp — each request gets a fresh server + transport
+): Promise<void> {
+  const { createMcpHandler } = await import("@modelcontextprotocol/server");
+  const onerror = (err: Error) => fastify.log.error({ err }, "mcpPlugin: MCP request failed");
+  // `legacy: 'reject'` — a 2025-era request gets the SDK's
+  // unsupported-protocol-version error naming 2026-07-28, never a fallback.
+  // The factory runs once per request; arc's identity reaches it through the
+  // SDK's `authInfo` pass-through rather than a shared mutable ref.
+  const handler = createMcpHandler(
+    ({ authInfo }) => createServer({ current: fromSdkAuthInfo(authInfo) }),
+    { legacy: "reject", onerror },
+  );
+  const serve = toNodeHandler(handler, { onerror });
+  fastify.addHook("onClose", async () => handler.close());
+
   fastify.post(prefix, async (request, reply) => {
-    const authResult = await resolveMcpAuth(
-      request.headers as Record<string, string | undefined>,
-      options.auth ?? false,
-      authCache,
-    );
-    if (!authResult && options.auth) {
-      fastify.log.warn({ msg: "mcpPlugin: auth failed", status: 401 });
-      return reply
-        .code(401)
-        .send({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" } });
-    }
+    const headers = request.headers as Record<string, string | undefined>;
+    const authResult = await resolveMcpAuth(headers, options.auth ?? false, authCache);
+    if (!authResult && options.auth) return sendUnauthorized(fastify, options, request, reply);
 
-    const authRef: AuthRef = { current: authResult };
-    const transport = new Transport({ sessionIdGenerator: undefined });
-    const server = await createServer(authRef);
-    await server.connect(transport);
-    await transport.handleRequest(request.raw, reply.raw, request.body);
+    // `toNodeHandler` forwards `req.auth` as `authInfo` — the documented channel.
+    const raw = authResult
+      ? Object.assign(request.raw, { auth: toSdkAuthInfo(authResult, headers) })
+      : request.raw;
+    await serve(raw, reply.raw, request.body);
   });
 
-  // GET /mcp — not supported in stateless mode (no SSE stream without sessions)
-  fastify.get(prefix, async (_request, reply) => {
-    reply.code(405).send({
-      jsonrpc: "2.0",
-      error: {
-        code: -32000,
-        message:
-          "SSE not available in stateless mode. Use stateful: true for server-initiated messages.",
-      },
-    });
-  });
-
-  // DELETE /mcp — no-op in stateless mode
-  fastify.delete(prefix, async (_request, reply) => {
-    reply.code(200).send();
-  });
+  // GET / DELETE were 2025-era session operations; 2026-07-28 is POST only.
+  const methodNotAllowed = async (_request: FastifyRequest, reply: FastifyReply) =>
+    reply
+      .code(405)
+      .header("allow", "POST")
+      .send({
+        jsonrpc: "2.0",
+        error: {
+          code: -32000,
+          message: `Method not allowed: MCP ${MCP_PROTOCOL_VERSION} is served over POST only.`,
+        },
+        id: null,
+      });
+  fastify.get(prefix, methodNotAllowed);
+  fastify.delete(prefix, methodNotAllowed);
 }
 
-// ============================================================================
-// Stateful Routes
-// ============================================================================
-
-function registerStatefulRoutes(
+/** 401 in the JSON-RPC envelope; Better Auth adds the RFC 9728 challenge. */
+function sendUnauthorized(
   fastify: Parameters<FastifyPluginAsync>[0],
-  prefix: string,
   options: McpPluginOptions,
-  cache: McpSessionCache,
-  createServer: (authRef: AuthRef) => Promise<McpServerInstance>,
-  Transport: new (
-    opts: Record<string, unknown>,
-  ) => SessionEntry["transport"] & { sessionId: string | undefined },
-): void {
-  /**
-   * Check if the requesting principal owns the session. FAIL-CLOSED:
-   *
-   *   - `authResult === null` (failed/absent credentials) NEVER owns a
-   *     session — pre-2.20 this returned `true`, so an unauthenticated
-   *     caller with a leaked `Mcp-Session-Id` could attach to the victim's
-   *     SSE stream, terminate the session, and (via the auth-snapshot
-   *     refresh) wipe `entry.auth` to null — after which ANY principal
-   *     passed ownership and took over the session.
-   *   - `entry.auth === null` under configured auth is equally a deny:
-   *     POST 401s before creating a session, so an auth-mode session always
-   *     has an owner snapshot; a missing one means corrupted state.
-   */
-  function isSessionOwner(entry: SessionEntry, authResult: McpAuthResult | null): boolean {
-    if (!options.auth) return true;
-    if (!authResult || !entry.auth) return false;
-    const prev = entry.auth;
-    // Compare all identity fields — prevents session confusion between
-    // different service clients in the same org, and between human/machine principals.
-    return (
-      prev.userId === authResult.userId &&
-      prev.organizationId === authResult.organizationId &&
-      prev.clientId === authResult.clientId
-    );
-  }
-
-  // POST /mcp — reuse session or create new one
-  fastify.post(prefix, async (request, reply) => {
-    const authResult = await resolveMcpAuth(
-      request.headers as Record<string, string | undefined>,
-      options.auth ?? false,
-    );
-    if (!authResult && options.auth) {
-      fastify.log.warn({ msg: "mcpPlugin: auth failed", status: 401 });
-      return reply
-        .code(401)
-        .send({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" } });
-    }
-
-    const sessionId = requireSingleHeaderValue(request.headers, "mcp-session-id");
-
-    // Existing session — verify ownership before reuse
-    if (sessionId) {
-      const entry = cache.get(sessionId);
-      if (entry) {
-        // Reject if the session belongs to a different user/org (prevents session fixation)
-        if (!isSessionOwner(entry, authResult)) {
-          return reply.code(403).send({
-            jsonrpc: "2.0",
-            error: { code: -32000, message: "Session ownership mismatch" },
-          });
-        }
-        cache.touch(sessionId);
-        entry.auth = authResult;
-        entry.authRef.current = authResult;
-        await entry.transport.handleRequest(request.raw, reply.raw, request.body);
-        return;
-      }
-    }
-
-    // New session — stateful mode NEEDS a sessionIdGenerator. Passing
-    // `undefined` (as stateless mode does) disables the SDK's session
-    // management entirely, leaving `transport.sessionId` undefined and
-    // breaking cache.set() / session reuse.
-    //
-    // The `onsessioninitialized` callback fires when the SDK assigns the
-    // session id during the initialize handshake — this is the only
-    // reliable moment to wire the entry into the cache, since
-    // `transport.sessionId` is undefined until then.
-    const authRef: AuthRef = { current: authResult };
-    const transport = new Transport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (newSessionId: string) => {
-        cache.set(newSessionId, {
-          transport,
-          lastAccessed: Date.now(),
-          organizationId: authResult?.organizationId ?? "",
-          auth: authResult,
-          authRef,
-        });
-      },
-    });
-    const server = await createServer(authRef);
-    await server.connect(transport);
-
-    await transport.handleRequest(request.raw, reply.raw, request.body);
-  });
-
-  // GET /mcp — SSE stream for server-initiated messages
-  fastify.get(prefix, async (request, reply) => {
-    const sessionId = requireSingleHeaderValue(request.headers, "mcp-session-id");
-    if (!sessionId) return reply.code(400).send({ error: "Missing Mcp-Session-Id header" });
-
-    const entry = cache.get(sessionId);
-    // Return 403 (not 404) to prevent session enumeration
-    if (!entry) return reply.code(403).send({ error: "Unauthorized" });
-
-    // Re-verify auth — prevent session hijacking via stolen session ID.
-    // Failed credentials get an explicit 401 (mirror of POST) BEFORE the
-    // ownership check, and the auth snapshot is only ever refreshed with a
-    // verified non-null identity — overwriting it with null was the wipe
-    // that let a follow-up principal take over the session.
-    if (options.auth) {
-      const authResult = await resolveMcpAuth(
-        request.headers as Record<string, string | undefined>,
-        options.auth,
-      );
-      if (!authResult) {
-        return reply.code(401).send({ error: "Unauthorized" });
-      }
-      if (!isSessionOwner(entry, authResult)) {
-        return reply.code(403).send({ error: "Unauthorized" });
-      }
-      entry.auth = authResult;
-      entry.authRef.current = authResult;
-    }
-
-    cache.touch(sessionId);
-    await entry.transport.handleRequest(request.raw, reply.raw);
-  });
-
-  // DELETE /mcp — session termination (requires ownership proof)
-  fastify.delete(prefix, async (request, reply) => {
-    const sessionId = requireSingleHeaderValue(request.headers, "mcp-session-id");
-    if (!sessionId) return reply.code(400).send({ error: "Missing Mcp-Session-Id header" });
-
-    const entry = cache.get(sessionId);
-    if (!entry) return reply.code(204).send();
-
-    // Verify the requester owns the session before termination.
-    // Failed credentials 401 first (mirror of POST/GET); the snapshot is
-    // only refreshed with a verified non-null identity.
-    if (options.auth) {
-      const authResult = await resolveMcpAuth(
-        request.headers as Record<string, string | undefined>,
-        options.auth,
-      );
-      if (!authResult) {
-        return reply.code(401).send({ error: "Unauthorized" });
-      }
-      if (!isSessionOwner(entry, authResult)) {
-        return reply.code(403).send({ error: "Unauthorized" });
-      }
-      entry.auth = authResult;
-      entry.authRef.current = authResult;
-    }
-
-    cache.remove(sessionId);
-    reply.code(204).send();
-  });
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  fastify.log.warn({ msg: "mcpPlugin: auth failed", status: 401 });
+  const challenge = oauthChallengeHeader(options.auth, request);
+  if (challenge) reply.header("www-authenticate", challenge);
+  return reply
+    .code(401)
+    .send({ jsonrpc: "2.0", error: { code: -32000, message: "Unauthorized" }, id: null });
 }
 
 // ============================================================================

@@ -1,9 +1,10 @@
 /**
  * @classytic/arc — createMcpServer()
  *
- * Level 2 — Declarative MCP server factory.
- * Uses `server.registerTool()` / `server.registerPrompt()` (official SDK API)
- * with flat inputSchema shapes — no z.object() wrapping, no Zod version hacks.
+ * Level 2 — Declarative MCP server factory over `server.registerTool()` /
+ * `server.registerPrompt()`. Hosts keep the flat-shape ergonomic
+ * (`{ name: z.string() }`); arc wraps it in `z.object()` before registering,
+ * because the SDK's raw-shape overloads are deprecated.
  *
  * @example
  * ```typescript
@@ -24,13 +25,22 @@
  * ```
  */
 
+import type {
+  McpServer,
+  CallToolResult as SdkCallToolResult,
+  GetPromptResult as SdkGetPromptResult,
+  ServerContext,
+} from "@modelcontextprotocol/server";
+import { z } from "zod";
 import { ArcError } from "../../utils/errors.js";
 import type {
   CreateMcpServerConfig,
   McpAuthResult,
+  McpToolLogger,
   PromptDefinition,
   ToolContext,
   ToolDefinition,
+  ToolInputSchema,
 } from "./types.js";
 
 /**
@@ -54,10 +64,10 @@ export interface AuthRef {
 export async function createMcpServer(
   config: CreateMcpServerConfig,
   authRef?: AuthRef,
-): Promise<McpServerInstance> {
-  const { McpServer } = await import("@modelcontextprotocol/server");
+): Promise<McpServer> {
+  const { McpServer: McpServerCtor } = await import("@modelcontextprotocol/server");
 
-  const server = new McpServer(
+  const server = new McpServerCtor(
     { name: config.name, version: config.version ?? "1.0.0" },
     config.instructions ? { instructions: config.instructions } : undefined,
   );
@@ -72,13 +82,13 @@ export async function createMcpServer(
     // automatically and throws a typed error naming BOTH sources for
     // everything else.
     const resolved = resolveToolCollisions(config.tools);
-    for (const tool of resolved) registerTool(server, tool, authRef);
+    for (const tool of resolved) registerTool(server, tool, authRef, config.logger);
   }
   if (config.prompts) {
     for (const prompt of config.prompts) registerPrompt(server, prompt);
   }
 
-  return server as McpServerInstance;
+  return server;
 }
 
 // ============================================================================
@@ -153,101 +163,99 @@ export function resolveToolCollisions(tools: readonly ToolDefinition[]): ToolDef
 }
 
 // ============================================================================
-// McpServer shape (minimal interface to avoid importing SDK types)
+// McpServer type
 // ============================================================================
 
-/** Minimal interface for McpServer — avoids hard SDK type dependency */
-export interface McpServerInstance {
-  connect: (transport: unknown) => Promise<void>;
-  registerTool: (
-    name: string,
-    config: Record<string, unknown>,
-    handler: (input: Record<string, unknown>, extra: Record<string, unknown>) => unknown,
-  ) => unknown;
-  registerPrompt: (
-    name: string,
-    config: Record<string, unknown>,
-    handler: (args: Record<string, unknown>) => unknown,
-  ) => void;
-  /** v2 name. v1 called this `resource()` — same four arguments. */
-  registerResource: (...args: unknown[]) => void;
-}
+/**
+ * The SDK's `McpServer`. Kept as a named alias because hosts import it from
+ * `@classytic/arc/mcp`; it was a hand-written structural subset, which hid the
+ * real signatures (and their deprecations) from the type checker.
+ */
+export type McpServerInstance = McpServer;
 
 // ============================================================================
 // Registration
 // ============================================================================
 
 /**
- * Register a ToolDefinition using `server.registerTool()`.
- *
- * The inputSchema is passed as a flat Zod shape `{ field: z.string() }` —
- * the SDK wraps it in z.object() internally. This avoids the Zod v3/v4-mini
- * version mismatch entirely.
+ * Flat shape → `z.object()`. A whole schema (anything carrying
+ * `~standard`, e.g. `z.strictObject(...)`) is registered as-is. The SDK still
+ * accepts a raw shape, but only through overloads marked deprecated.
  */
-function registerTool(server: unknown, tool: ToolDefinition, authRef?: AuthRef): void {
-  const srv = server as McpServerInstance;
-
-  const config: Record<string, unknown> = {};
-  if (tool.title) config.title = tool.title;
-  if (tool.description) config.description = tool.description;
-  /**
-   * Flat SHAPES are passed straight through. v2's `registerTool` carries a
-   * `ZodRawShape` overload and auto-wraps it in `z.object()` itself, so arc's
-   * host-facing ergonomic (`{ name: z.string() }`) needs no adaptation layer.
-   *
-   * arc's own MIGRATION-V2 notes claimed v2 "requires z.object(), raw shapes no
-   * longer accepted" and a wrap was written here on that basis. That was true of
-   * the PRE-ALPHA and is not true of 2.0.0 — checked against the shipped
-   * overloads. Wrapping anyway would have been arc maintaining an adapter for a
-   * conversion the SDK already owns.
-   */
-  if (tool.inputSchema) config.inputSchema = tool.inputSchema;
-  if (tool.outputSchema) config.outputSchema = tool.outputSchema;
-  if (tool.annotations) config.annotations = tool.annotations;
-
-  srv.registerTool(
-    tool.name,
-    config,
-    (input: Record<string, unknown>, mcpCtx: Record<string, unknown>) => {
-      const ctx: ToolContext = {
-        session: authRef?.current ?? null,
-        /**
-         * v2 exposes logging as `ctx.mcpReq.log(level, message)` — the SDK builds
-         * the `notifications/message` envelope and correlates it to the in-flight
-         * request. v1 handed over a raw `sendNotification` that arc had to frame
-         * itself; that hand-framed envelope carried no request id, so a log line
-         * from a tool arrived uncorrelated.
-         *
-         * Still best-effort: a transport that has already closed must not turn a
-         * successful tool call into a failed one.
-         */
-        log: async (level, message) => {
-          try {
-            const mcpReq = mcpCtx?.mcpReq as
-              | { log?: (level: string, message: string) => Promise<void> }
-              | undefined;
-            await mcpReq?.log?.(level, message);
-          } catch {
-            /* best-effort */
-          }
-        },
-        extra: mcpCtx,
-      };
-      return tool.handler(input, ctx);
-    },
-  );
+function toObjectSchema(schema: ToolInputSchema | undefined): z.ZodType | undefined {
+  if (schema === undefined) return undefined;
+  if ("~standard" in schema) return schema as z.ZodType;
+  return z.object(schema as Record<string, z.ZodType>);
 }
 
-/** Register a PromptDefinition using `server.registerPrompt()` */
-function registerPrompt(server: unknown, prompt: PromptDefinition): void {
-  const srv = server as McpServerInstance;
+/**
+ * Register a ToolDefinition using `server.registerTool()`.
+ *
+ * A tool WITHOUT an input schema is registered with a one-argument callback:
+ * the SDK calls such handlers as `(ctx)`, not `(args, ctx)`. Registering the
+ * two-argument form there handed the SDK context to the tool as its input and
+ * left `ctx.extra` / `ctx.log` unbound.
+ */
+function registerTool(
+  server: McpServer,
+  tool: ToolDefinition,
+  authRef?: AuthRef,
+  logger?: McpToolLogger,
+): void {
+  /**
+   * Server-side, not `ctx.mcpReq.log`: protocol 2026-07-28 deprecates logging
+   * to the client (SEP-2577 — "migrate to stderr or OpenTelemetry"), and the
+   * SDK drops those lines anyway unless the server declares `logging` and the
+   * request carries a `logLevel` envelope key.
+   */
+  const log: ToolContext["log"] = async (level, message) => {
+    logger?.[level === "warning" ? "warn" : level]({ mcpTool: tool.name }, message);
+  };
+  const run = (input: Record<string, unknown>, mcpCtx: ServerContext) => {
+    const ctx: ToolContext = {
+      session: authRef?.current ?? null,
+      log,
+      extra: mcpCtx,
+    };
+    return tool.handler(input, ctx) as Promise<SdkCallToolResult>;
+  };
 
-  const config: Record<string, unknown> = {};
-  if (prompt.title) config.title = prompt.title;
-  if (prompt.description) config.description = prompt.description;
-  // Passed through for the same reason as tool schemas above — `registerPrompt`
-  // has the matching `ZodRawShape` overload.
-  if (prompt.argsSchema) config.argsSchema = prompt.argsSchema;
+  const inputSchema = toObjectSchema(tool.inputSchema);
+  const config = {
+    ...(tool.title ? { title: tool.title } : {}),
+    ...(tool.description ? { description: tool.description } : {}),
+    ...(tool.outputSchema ? { outputSchema: z.object(tool.outputSchema) } : {}),
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
+  };
 
-  srv.registerPrompt(prompt.name, config, (args: Record<string, unknown>) => prompt.handler(args));
+  if (inputSchema) {
+    server.registerTool(tool.name, { ...config, inputSchema }, (input, mcpCtx) =>
+      run(input as Record<string, unknown>, mcpCtx),
+    );
+  } else {
+    server.registerTool(tool.name, config, (mcpCtx) => run({}, mcpCtx));
+  }
+}
+
+/**
+ * Register a PromptDefinition using `server.registerPrompt()`. Same arity rule
+ * as tools: an args-less prompt's callback receives only the SDK context.
+ */
+function registerPrompt(server: McpServer, prompt: PromptDefinition): void {
+  const config = {
+    ...(prompt.title ? { title: prompt.title } : {}),
+    ...(prompt.description ? { description: prompt.description } : {}),
+  };
+  const render = (args: Record<string, unknown>) =>
+    prompt.handler(args) as unknown as SdkGetPromptResult;
+
+  if (prompt.argsSchema) {
+    server.registerPrompt(
+      prompt.name,
+      { ...config, argsSchema: z.object(prompt.argsSchema) },
+      (args) => render(args as Record<string, unknown>),
+    );
+  } else {
+    server.registerPrompt(prompt.name, config, () => render({}));
+  }
 }

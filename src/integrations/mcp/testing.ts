@@ -3,21 +3,12 @@
  *
  * Helpers for testing MCP tool integration without raw JSON-RPC parsing.
  *
- * Runs the real Streamable HTTP transport over an ephemeral loopback port
- * (`127.0.0.1:0`) rather than an in-process shortcut. Two reasons, one forced
- * and one preferred:
- *
- *  - **Forced**: SDK v2 ships `InMemoryTransport` only in
- *    `@modelcontextprotocol/core-internal`, which is `private: true` and not
- *    published, and it exports no `Transport` interface — so there is no
- *    supported way to link a client and server in-process, and no contract to
- *    implement one against. The SDK's own guidance is to point a
- *    `StreamableHTTPClientTransport` at a local server.
- *  - **Preferred**: this exercises the transport arc actually ships in
- *    `mcpPlugin`, instead of a path no production request takes.
- *
- * The cost is a listening socket per harness instead of a linked pair. Always
- * `await close()` — it shuts the client and the HTTP server down together.
+ * The client speaks MCP 2026-07-28, the only revision `mcpPlugin` serves, over
+ * the SDK's in-memory linked pair: no port, no socket. The server side is the
+ * SDK's version-aware `serveStdio` entry with `legacy: 'reject'`, so the
+ * harness negotiates exactly as a production endpoint does. For tests about
+ * the HTTP leg (headers, 401s, 405s), register `mcpPlugin` and use
+ * `app.inject()` or a listening app.
  *
  * @example
  * ```typescript
@@ -36,84 +27,54 @@
 
 import type { Client } from "@modelcontextprotocol/client";
 import { createMcpServer, type McpServerInstance } from "./createMcpServer.js";
-import { filterResourcesForMcp } from "./mcpPlugin.js";
+import { filterResourcesForMcp, MCP_PROTOCOL_VERSION } from "./mcpPlugin.js";
 import { resourceToTools } from "./resourceToTools.js";
 import type { McpAuthResult, McpPluginOptions, ToolDefinition } from "./types.js";
 
 // ============================================================================
-// Loopback connection — the ONE place a test client is wired to a server
+// Connection — the ONE place a test client is wired to a server
 // ============================================================================
 
-/** An MCP client bound to a live loopback server, plus its teardown. */
+/** An MCP client bound to a server, plus its teardown. */
 export interface ConnectedMcpTestClient {
   /** The connected SDK client — full `listTools` / `callTool` / `listPrompts` surface. */
   client: Client;
-  /** Closes the client and the HTTP server. Always await it. */
+  /** Closes the client and the server's connection. Always await it. */
   close: () => Promise<void>;
 }
 
 /**
- * Serve an already-built `McpServer` on an ephemeral loopback port and connect
- * a client to it.
+ * Connect a 2026-07-28 client to an already-built `McpServer`.
  *
  * Split out from {@link createTestMcpClient} because arc's own MCP suites build
- * a server directly and only need the connection — five of them had each grown a
- * private copy of the same connect helper against the v1 in-memory transport.
- * One implementation, two entry points: this for a server you built, that for
- * one built from resources.
+ * a server directly and only need the connection. The server serves this one
+ * connection; build a fresh one per test.
  */
 export async function connectMcpTestClient(
-  server: McpServerInstance | unknown,
+  server: McpServerInstance,
 ): Promise<ConnectedMcpTestClient> {
-  const { randomUUID } = await import("node:crypto");
-  const { createServer } = await import("node:http");
-  const { NodeStreamableHTTPServerTransport } = await import("@modelcontextprotocol/node");
-  const { Client, StreamableHTTPClientTransport } = await import("@modelcontextprotocol/client");
+  const { Client, InMemoryTransport } = await import("@modelcontextprotocol/client");
+  const { serveStdio } = await import("@modelcontextprotocol/server/stdio");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
-  // Stateful (`sessionIdGenerator` set), matching `mcpPlugin`: the client picks
-  // the assigned id up from `mcp-session-id` itself, so no session plumbing here.
-  // `handleRequest`'s third argument is the PRE-PARSED body — omitted on purpose
-  // so the transport reads the raw stream, which is what bare `node:http` gives.
-  const serverTransport = new NodeStreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-  await (server as McpServerInstance).connect(serverTransport);
-
-  const httpServer = createServer((req, res) => {
-    void serverTransport.handleRequest(req, res);
-  });
-  // Port 0 = kernel-assigned, so parallel test files never collide. Bound to
-  // 127.0.0.1, never 0.0.0.0 — a test harness must not be reachable off-box.
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = httpServer.address();
-  if (address === null || typeof address === "string") {
-    httpServer.close();
-    throw new Error("[arc] MCP test harness: HTTP server did not bind a TCP port");
-  }
-
-  const client = new Client({ name: "test-client", version: "1.0" });
-  await client.connect(
-    new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/`)),
+  // `serveStdio` takes any Transport; with `legacy: 'reject'` it pins the
+  // connection to the modern era, calling the factory once.
+  const handle = serveStdio(() => server, { transport: serverTransport, legacy: "reject" });
+  const client = new Client(
+    { name: "test-client", version: "1.0" },
+    { versionNegotiation: { mode: { pin: MCP_PROTOCOL_VERSION } } },
   );
-
+  try {
+    await client.connect(clientTransport);
+  } catch (err) {
+    await handle.close();
+    throw err;
+  }
   return {
     client,
-    /**
-     * Client first, THEN the socket. Reversed, the client's in-flight request
-     * hangs on a dead server until its own timeout — which reads as a slow test
-     * rather than a teardown bug. `httpServer.close()` only stops NEW
-     * connections, so keep-alive sockets are destroyed explicitly; without that
-     * vitest hangs at end-of-file with no failing assertion.
-     */
     async close() {
       await client.close();
-      httpServer.closeAllConnections?.();
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((err) => (err ? reject(err) : resolve()));
-      });
+      await handle.close();
     },
   };
 }
@@ -158,10 +119,9 @@ export interface TestMcpClient {
 // ============================================================================
 
 /**
- * Create an in-process MCP test client connected to an Arc MCP server.
- *
- * Pass resources and tools directly — no running Fastify server needed.
- * For HTTP-level integration tests against a running server, use `app.inject()` instead.
+ * Create a 2026-07-28 MCP test client connected, in memory, to an Arc MCP
+ * server built from resources. No Fastify app needed; for plugin-level
+ * behaviour use `app.inject()`.
  *
  * @example
  * ```typescript

@@ -49,7 +49,11 @@ export interface ToolAnnotations {
 export interface ToolContext<TSession = McpAuthResult> {
   /** Session identity — `null` in no-auth mode */
   session: TSession | null;
-  /** Log to MCP client (best-effort, non-blocking) */
+  /**
+   * Server-side log line, tagged with the tool name — the host logger
+   * (`fastify.log` under `mcpPlugin`), a no-op without one. Never sent to the
+   * client: MCP 2026-07-28 deprecates protocol logging (SEP-2577).
+   */
   log: (level: "info" | "warning" | "error" | "debug", message: string) => Promise<void>;
   /** Raw MCP SDK extra context (for advanced use) */
   extra: Record<string, unknown>;
@@ -389,19 +393,9 @@ export interface McpPluginOptions {
   /** Custom prompts */
   extraPrompts?: PromptDefinition[];
   /**
-   * Session mode:
-   * - `false` (default) — stateless, fresh server per request. Best for production, scaling, serverless.
-   * - `true` — stateful, sessions cached with TTL. Use for server-initiated notifications or long-lived connections.
-   */
-  stateful?: boolean;
-  /** Session TTL in ms (default: 1800000 = 30 min). Only used when stateful: true. */
-  sessionTtlMs?: number;
-  /** Max concurrent sessions (default: 1000). Only used when stateful: true. */
-  maxSessions?: number;
-  /**
-   * Auth cache TTL in ms for stateless mode (default: 5000 = 5 sec).
-   * Caches auth resolver results briefly to avoid redundant DB lookups
-   * across initialize → tools/list → tools/call sequences.
+   * Auth cache TTL in ms (default: 5000 = 5 sec). Every MCP request is
+   * authenticated, so this spares the resolver repeated DB lookups across a
+   * client's `server/discover` → `tools/list` → `tools/call` burst.
    * Set to `0` to disable.
    */
   authCacheTtlMs?: number;
@@ -476,23 +470,6 @@ export interface McpAuthResult {
 }
 
 // ============================================================================
-// Session Cache
-// ============================================================================
-
-/** Internal session entry */
-export interface SessionEntry {
-  transport: {
-    handleRequest: (req: unknown, res: unknown, body?: unknown) => Promise<void>;
-    close: () => void;
-  };
-  lastAccessed: number;
-  organizationId: string;
-  auth: McpAuthResult | null;
-  /** Mutable ref updated per-request — tool handler closures read from this */
-  authRef: { current: McpAuthResult | null };
-}
-
-// ============================================================================
 // createMcpServer config
 // ============================================================================
 
@@ -521,6 +498,16 @@ export interface CreateMcpServerConfig {
   instructions?: string;
   tools?: ToolDefinition[];
   prompts?: PromptDefinition[];
+  /** Sink for tools' `ctx.log` — pino-shaped (`fastify.log` fits). Omitted: `ctx.log` is a no-op. */
+  logger?: McpToolLogger;
+}
+
+/** The pino-shaped subset `ctx.log` writes through. */
+export interface McpToolLogger {
+  info(obj: object, msg: string): void;
+  warn(obj: object, msg: string): void;
+  error(obj: object, msg: string): void;
+  debug(obj: object, msg: string): void;
 }
 
 /** CRUD operation type */

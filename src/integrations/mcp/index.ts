@@ -8,10 +8,13 @@
  * - Level 1: `mcpPlugin`        → Auto-generate tools from defineResource()
  * - Level 2: `createMcpServer`  → Declarative tool/resource/prompt config
  *
+ * `mcpPlugin` speaks MCP protocol revision 2026-07-28 only.
+ *
  * Peer dependencies (optional, loaded only when this module is imported):
- *   @modelcontextprotocol/server >= 2.0.0   (McpServer)
- *   @modelcontextprotocol/node   >= 2.0.0   (Streamable HTTP server transport)
- *   @modelcontextprotocol/client >= 2.0.0   (only for `@classytic/arc/mcp/testing`)
+ *   @modelcontextprotocol/server  (McpServer, createMcpHandler)
+ *   @modelcontextprotocol/node    (toNodeHandler)
+ *   @modelcontextprotocol/client  (only for `@classytic/arc/mcp/testing`)
+ *   Floors and their reasons: wiki/peer-deps.md.
  *   zod (any version already in your project)
  *
  * SDK v2 replaced the single `@modelcontextprotocol/sdk` package with this
@@ -129,6 +132,7 @@ export type {
   McpAuthResult,
   McpPluginOptions,
   McpResourceConfig,
+  McpToolLogger,
   PromptDefinition,
   PromptResult,
   ToolAnnotations,

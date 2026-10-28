@@ -2,7 +2,7 @@
  * MCP Auth & Multi-Tenancy E2E Tests
  *
  * Tests all auth modes and multi-tenancy through the full MCP pipeline:
- *   createMcpServer → loopback Streamable HTTP → tool call → BaseController → mock DB
+ *   createMcpServer → SDK client (in memory) → tool call → BaseController → mock DB
  *
  * Scenarios:
  *   1. No auth — anonymous access, all data visible
@@ -98,16 +98,7 @@ function createProjectResource(tenantField: string | false = "organizationId") {
   });
 }
 
-// Helper: connect server + client over the shared loopback harness
-/**
- * Connect a client to `server` over arc's shared loopback harness.
- *
- * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
- * of this. SDK v2 does not publish that transport, so all five now route through
- * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
- * socket — hence the teardown registry: without it vitest hangs at end-of-file
- * with no failing assertion.
- */
+/** Connect over arc's shared harness (in memory); each connection closed after its test. */
 const openMcpConnections: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of openMcpConnections.splice(0)) await close();

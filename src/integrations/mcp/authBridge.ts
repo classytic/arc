@@ -10,6 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
+import type { AuthInfo } from "@modelcontextprotocol/server";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assertCapacity, evictToSize, touch } from "../../collections/boundedMap.js";
 import type { BetterAuthHandler, McpAuthResolver, McpAuthResult } from "./types.js";
@@ -157,6 +158,52 @@ function hashForCache(value: string): string {
 // ============================================================================
 // OAuth Discovery Endpoints (Better Auth only)
 // ============================================================================
+
+// ============================================================================
+// SDK AuthInfo pass-through
+// ============================================================================
+
+/** Key under `AuthInfo.extra` carrying arc's resolved identity. */
+const ARC_AUTH_KEY = "arcAuth";
+
+/**
+ * Arc identity → the SDK's `AuthInfo`, the pass-through `createMcpHandler`
+ * hands to the server factory and to tools as `ctx.http.authInfo`. The full
+ * arc result rides in `extra` so the factory recovers it without a lossy
+ * round-trip through the OAuth-shaped fields.
+ */
+export function toSdkAuthInfo(
+  auth: McpAuthResult,
+  headers: Record<string, string | undefined>,
+): AuthInfo {
+  const bearer = /^Bearer\s+(.+)$/i.exec(headers.authorization ?? "")?.[1];
+  return {
+    token: bearer ?? "",
+    clientId: auth.clientId ?? "",
+    scopes: [...(auth.scopes ?? [])],
+    extra: { [ARC_AUTH_KEY]: auth },
+  };
+}
+
+/** Inverse of {@link toSdkAuthInfo}; `null` when the request carried no arc identity. */
+export function fromSdkAuthInfo(authInfo: AuthInfo | undefined): McpAuthResult | null {
+  const auth = authInfo?.extra?.[ARC_AUTH_KEY];
+  return auth && typeof auth === "object" ? (auth as McpAuthResult) : null;
+}
+
+/**
+ * `WWW-Authenticate` for a 401 under Better Auth: MCP's authorization spec has
+ * the server point clients at its RFC 9728 protected-resource metadata, which
+ * {@link registerOAuthDiscovery} serves. Custom resolvers get none — they are
+ * often API-key gates, and a Bearer challenge would send clients into OAuth.
+ */
+export function oauthChallengeHeader(
+  auth: BetterAuthHandler | McpAuthResolver | false | undefined,
+  req: FastifyRequest,
+): string | undefined {
+  if (!auth || !isBetterAuth(auth)) return undefined;
+  return `Bearer resource_metadata="${req.protocol}://${req.host}/.well-known/oauth-protected-resource"`;
+}
 
 /**
  * Register OAuth 2.1 discovery endpoints for MCP clients.

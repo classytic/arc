@@ -1,9 +1,9 @@
 /**
- * MCP Integration Tests — createMcpServer over loopback HTTP
+ * MCP Integration Tests — createMcpServer through a real SDK client
  *
  * Tests the full round-trip: create server → connect transport → call tools.
- * Connects through the shared loopback harness (`connectMcpTestClient`) — the real
- * Streamable HTTP transport, since SDK v2 publishes no in-memory transport.
+ * Connects through the shared harness (`connectMcpTestClient`): a 2026-07-28
+ * client, in memory.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +12,7 @@ import {
   createMcpServer,
   definePrompt,
   defineTool,
+  type McpServerInstance,
   resourceToTools,
 } from "../../../src/integrations/mcp/index.js";
 import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
@@ -26,28 +27,19 @@ const PUBLIC_CRUD = {
   delete: allowPublic(),
 };
 
-// Helper: connect server + client over the shared loopback harness
-/**
- * Connect a client to `server` over arc's shared loopback harness.
- *
- * Five suites each carried a private `InMemoryTransport.createLinkedPair()` copy
- * of this. SDK v2 does not publish that transport, so all five now route through
- * `connectMcpTestClient`. Unlike a linked pair each connection owns a listening
- * socket — hence the teardown registry: without it vitest hangs at end-of-file
- * with no failing assertion.
- */
+/** Connections closed after each test. */
 const openMcpConnections: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const close of openMcpConnections.splice(0)) await close();
 });
 
-async function connectMcpClient(server: unknown) {
+async function connectMcpClient(server: McpServerInstance) {
   const { client, close } = await connectMcpTestClient(server);
   openMcpConnections.push(close);
   return client;
 }
 
-describe("createMcpServer — loopback transport integration", () => {
+describe("createMcpServer — client round-trip", () => {
   it("initializes and lists tools", async () => {
     const server = await createMcpServer({
       name: "test",
@@ -219,6 +211,126 @@ describe("createMcpServer — loopback transport integration", () => {
     const info = client.getServerVersion();
 
     expect(info?.name).toBe("test");
+  });
+});
+
+describe("createMcpServer — SDK registration contract", () => {
+  it("an input-less tool gets {} as input and a live SDK context", async () => {
+    // The SDK calls a schema-less tool as `(ctx)`, not `(args, ctx)` — wiring the
+    // two-argument form handed the SDK context over as the tool's INPUT.
+    let seen: { input: unknown; hasMcpReq: boolean } | undefined;
+    const server = await createMcpServer({
+      name: "test",
+      tools: [
+        defineTool("whoami", {
+          description: "No input",
+          handler: async (input, ctx) => {
+            seen = { input, hasMcpReq: "mcpReq" in ctx.extra };
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+        }),
+      ],
+    });
+    const client = await connectMcpClient(server);
+    await client.callTool({ name: "whoami", arguments: {} });
+    expect(seen).toEqual({ input: {}, hasMcpReq: true });
+  });
+
+  it("an args-less prompt renders with {} rather than the SDK context", async () => {
+    let seenArgs: unknown;
+    const server = await createMcpServer({
+      name: "test",
+      prompts: [
+        definePrompt("hello", {
+          description: "No args",
+          handler: (args) => {
+            seenArgs = args;
+            return { messages: [{ role: "user", content: { type: "text", text: "hi" } }] };
+          },
+        }),
+      ],
+    });
+    const client = await connectMcpClient(server);
+    await client.getPrompt({ name: "hello" });
+    expect(seenArgs).toEqual({});
+  });
+
+  it("flat shapes are wrapped in an object schema; annotations reach tools/list", async () => {
+    const server = await createMcpServer({
+      name: "test",
+      tools: [
+        defineTool("add", {
+          description: "Add",
+          input: { a: z.number(), b: z.number() },
+          output: { sum: z.number() },
+          annotations: { readOnlyHint: true, openWorldHint: false },
+          handler: async ({ a, b }) => ({
+            content: [{ type: "text", text: String(a + b) }],
+            structuredContent: { sum: a + b },
+          }),
+        }),
+      ],
+    });
+    const client = await connectMcpClient(server);
+    const [tool] = (await client.listTools()).tools;
+    expect(tool.inputSchema).toMatchObject({ type: "object", required: ["a", "b"] });
+    expect(tool.outputSchema).toMatchObject({ type: "object", required: ["sum"] });
+    expect(tool.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+
+    const result = await client.callTool({ name: "add", arguments: { a: 2, b: 3 } });
+    expect(result.structuredContent).toEqual({ sum: 5 });
+  });
+});
+
+describe("connectMcpTestClient — protocol", () => {
+  it("speaks 2026-07-28, the revision mcpPlugin serves", async () => {
+    const server = await createMcpServer({
+      name: "test",
+      tools: [
+        defineTool("echo", {
+          description: "Echo",
+          input: { text: z.string() },
+          handler: async ({ text }) => ({ content: [{ type: "text", text }] }),
+        }),
+      ],
+    });
+    const client = await connectMcpClient(server);
+    expect(client.getProtocolEra()).toBe("modern");
+    expect(client.getNegotiatedProtocolVersion()).toBe("2026-07-28");
+    const result = await client.callTool({ name: "echo", arguments: { text: "hi" } });
+    expect((result.content[0] as { text: string }).text).toBe("hi");
+  });
+});
+
+describe("createMcpServer — ctx.log", () => {
+  it("writes to the server-side logger, tagged with the tool, never to the client", async () => {
+    const lines: Array<[string, object, string]> = [];
+    const at =
+      (level: string) =>
+      (obj: object, msg: string): void => {
+        lines.push([level, obj, msg]);
+      };
+    const server = await createMcpServer({
+      name: "test",
+      logger: { info: at("info"), warn: at("warn"), error: at("error"), debug: at("debug") },
+      tools: [
+        defineTool("noisy", {
+          description: "Logs",
+          handler: async (_input, ctx) => {
+            await ctx.log("warning", "careful");
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+        }),
+      ],
+    });
+    const client = await connectMcpClient(server);
+    const received: unknown[] = [];
+    client.setNotificationHandler("notifications/message", (n) => {
+      received.push(n);
+    });
+    await client.callTool({ name: "noisy", arguments: {} });
+    expect(lines).toEqual([["warn", { mcpTool: "noisy" }, "careful"]]);
+    expect(received).toEqual([]);
   });
 });
 

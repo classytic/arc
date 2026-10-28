@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * MCP E2E Test — validates MCP plugin works end-to-end with a real MongoDB
- * and the shipped loopback MCP test harness (no Claude CLI dependency).
+ * and the shipped MCP test harness (no Claude CLI dependency). Everything
+ * speaks protocol 2026-07-28, the only revision arc serves.
  *
  * Usage:
  *   node scripts/mcp-e2e.mjs               # uses localhost:27017
@@ -114,24 +115,36 @@ try {
   const hBody = JSON.parse(health.body);
   assert("status ok", hBody.status === "ok");
   assert("tools count", hBody.tools === 6, `got ${hBody.tools}`);
-  assert("mode stateless", hBody.mode === "stateless");
+  assert("protocol 2026-07-28", hBody.protocolVersion === "2026-07-28");
 
-  // ── 2. MCP initialize via JSON-RPC ──
-  console.log("\n[2/6] MCP initialize...");
-  const initResp = await app.inject({
+  // ── 2. MCP server/discover via JSON-RPC; a 2025 initialize is refused ──
+  console.log("\n[2/6] MCP server/discover...");
+  const rpcHeaders = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+  const discoverResp = await app.inject({
     method: "POST", url: "/mcp",
-    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
-    payload: { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "1.0" } } },
+    headers: { ...rpcHeaders, "mcp-protocol-version": "2026-07-28", "mcp-method": "server/discover" },
+    payload: {
+      jsonrpc: "2.0", id: 1, method: "server/discover",
+      params: { _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { name: "test", version: "1.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      } },
+    },
   });
-  assert("initialize 200", initResp.statusCode === 200, `got ${initResp.statusCode}`);
+  assert("discover 200", discoverResp.statusCode === 200, `got ${discoverResp.statusCode}`);
+  const initResp = await app.inject({
+    method: "POST", url: "/mcp", headers: rpcHeaders,
+    payload: { jsonrpc: "2.0", id: 2, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1.0" } } },
+  });
+  assert("2025 initialize refused", initResp.statusCode === 400 && JSON.parse(initResp.body).error?.code === -32022, `got ${initResp.statusCode}`);
 
-  // ── 3. Tool calls over the shipped loopback harness ──
+  // ── 3. Tool calls over the shipped harness ──
   //
   // Uses `connectMcpTestClient` from dist, so this smoke run also exercises the
   // harness arc publishes at `@classytic/arc/mcp/testing` rather than a private
-  // copy of the connect dance. (Was `InMemoryTransport.createLinkedPair()`; SDK
-  // v2 does not publish that transport.)
-  console.log("\n[3/6] Tool calls over loopback transport...");
+  // copy of the connect dance.
+  console.log("\n[3/6] Tool calls over the in-memory harness...");
   const { createMcpServer } = await import("../dist/integrations/mcp/index.mjs");
   const { resourceToTools } = await import("../dist/integrations/mcp/index.mjs");
   const { connectMcpTestClient } = await import("../dist/integrations/mcp/testing.mjs");
@@ -182,8 +195,7 @@ try {
   const status = JSON.parse(statusResult.content[0].text);
   assert("custom tool works", status.ok === true);
 
-  // Closes the client AND the harness's loopback socket — without the latter the
-  // script would not exit on its own.
+  // Closes the client AND the server side of the harness connection.
   await closeMcp();
   await app.close();
 } catch (err) {

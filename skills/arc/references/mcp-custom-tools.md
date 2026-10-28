@@ -35,7 +35,7 @@ await app.register(mcpPlugin, { resources, extraTools: [notifyTool], extraPrompt
 const server = await createMcpServer({ name: 'tools', version: '1.0.0', tools: [notifyTool], prompts: [planPrompt] });
 ```
 
-- `ToolContext`: `{ session, log(level, msg), extra }`. `session` is the `McpAuthResult` or `null` (no auth).
+- `ToolContext`: `{ session, log(level, msg), extra }`. `session` is the `McpAuthResult` or `null` (no auth). `log` writes server-side (`fastify.log`, or `createMcpServer({ logger })`), never to the client.
 - Handler returns `CallToolResult`: `{ content: [{ type: 'text', text }], isError? }`. `toCallToolResult`, `toCallToolSuccess`, `toCallToolError`, `permissionDeniedResult` build it.
 - `defineTool<MySession>(...)` widens `ctx.session` to a host type extending `McpAuthResult`.
 - Custom tools bypass resource permissions: guard them explicitly.

@@ -67,17 +67,73 @@ describe("resourceToTools", () => {
     const tools = resourceToTools(mockResource());
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
 
-    expect(byName.list_products.annotations).toEqual({ readOnlyHint: true });
-    expect(byName.get_product.annotations).toEqual({ readOnlyHint: true });
-    expect(byName.create_product.annotations).toEqual({ destructiveHint: false });
+    // Every hint explicit: the spec defaults (destructive, open-world) are the
+    // cautious ones, so an omitted hint reads as "may destroy, may reach out".
+    expect(byName.list_products.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+    expect(byName.get_product.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+    expect(byName.create_product.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
     expect(byName.update_product.annotations).toEqual({
+      readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: true,
+      openWorldHint: false,
     });
     expect(byName.delete_product.annotations).toEqual({
+      readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: true,
+      openWorldHint: false,
     });
+  });
+
+  it("derives custom-route annotations from the HTTP method; an author's own hints win", () => {
+    const route = (method: string, operation: string, extra: Record<string, unknown> = {}) =>
+      ({
+        method,
+        path: `/${operation}`,
+        rawHandler: () => {},
+        mcpHandler: vi.fn(),
+        permissions: () => ({ allowed: true }),
+        operation,
+        ...extra,
+      }) as any;
+    const tools = resourceToTools(
+      mockResource({
+        routes: [
+          route("GET", "stats"),
+          route("PUT", "replace"),
+          route("DELETE", "purge"),
+          route("POST", "sync"),
+          route("PATCH", "touch"),
+          route("POST", "preview", { mcp: { annotations: { readOnlyHint: true } } }),
+        ],
+      }),
+    );
+    const hints = (name: string) => tools.find((t) => t.name === name)?.annotations;
+
+    expect(hints("stats_product")).toEqual({ readOnlyHint: true });
+    for (const name of ["replace_product", "purge_product"]) {
+      expect(hints(name)).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      });
+    }
+    for (const name of ["sync_product", "touch_product"]) {
+      expect(hints(name)).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+      });
+    }
+    // openWorldHint stays unset on routes — a handler may call anything.
+    expect(hints("sync_product")).not.toHaveProperty("openWorldHint");
+    expect(hints("preview_product")).toEqual({ readOnlyHint: true });
   });
 
   it("skips disabled routes", () => {

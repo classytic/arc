@@ -1,11 +1,11 @@
 # MCP (AI Agent Tools)
 
-Expose Arc resources as [Model Context Protocol](https://modelcontextprotocol.io) tools for AI agents. Stateless by default — fresh server per request, zero session overhead.
+Expose Arc resources as [Model Context Protocol](https://modelcontextprotocol.io) tools for AI agents. The endpoint speaks MCP protocol revision **2026-07-28 only**: a fresh server per request, no sessions.
 
-**Requires:** `@modelcontextprotocol/sdk` and `zod` as peer dependencies.
+**Requires:** `@modelcontextprotocol/server`, `@modelcontextprotocol/node` and `zod` as peer dependencies (`@modelcontextprotocol/client` too, for `@classytic/arc/mcp/testing`).
 
 ```bash
-npm install @modelcontextprotocol/sdk zod
+npm install @modelcontextprotocol/server @modelcontextprotocol/node zod
 ```
 
 ## Quick Start
@@ -23,11 +23,15 @@ This auto-generates up to 5 CRUD tools per resource. Tool handlers call `BaseCon
 
 | Tool | Input | Annotations |
 |------|-------|-------------|
-| `list_{plural}` | Pagination + filterable fields | `readOnlyHint: true` |
-| `get_{name}` | `{ id }` | `readOnlyHint: true` |
-| `create_{name}` | Required + optional fields from `fieldRules` | `destructiveHint: false` |
-| `update_{name}` | `{ id }` + optional fields | `destructiveHint: true, idempotentHint: true` |
-| `delete_{name}` | `{ id }` | `destructiveHint: true, idempotentHint: true` |
+| `list_{plural}` | Pagination + filterable fields | read-only |
+| `get_{name}` | `{ id }` | read-only |
+| `create_{name}` | Required + optional fields from `fieldRules` | not destructive, not idempotent |
+| `update_{name}` | `{ id }` + optional fields | destructive, idempotent |
+| `delete_{name}` | `{ id }` | destructive, idempotent |
+
+Every CRUD tool also carries `openWorldHint: false` — it reaches only the resource's own repository. Hints are always explicit, because the MCP defaults are the cautious ones (an omitted `destructiveHint` or `openWorldHint` means `true`).
+
+Custom routes take their hints from the HTTP method: `GET` / `HEAD` / `OPTIONS` are read-only; `PUT` and `DELETE` are destructive and idempotent; `POST` and `PATCH` are destructive and not idempotent. `openWorldHint` stays unset on routes, since a handler may call anything. Set `mcp: { annotations }` on a route or action to override.
 
 Connect an AI agent:
 
@@ -50,10 +54,7 @@ echo "List all products" | claude -p --allowedTools "mcp__my-api__*"
 | `extraTools` | `ToolDefinition[]` | — | Custom tools alongside auto-generated |
 | `extraPrompts` | `PromptDefinition[]` | — | Custom prompts |
 | `instructions` | `string` | — | LLM guidance text |
-| `authCacheTtlMs` | `number` | — | Cache auth results for N ms (stateless mode) |
-| `stateful` | `boolean` | `false` | Enable session persistence |
-| `sessionTtlMs` | `number` | `1800000` | Session TTL (stateful only) |
-| `maxSessions` | `number` | `1000` | Max concurrent sessions (stateful only) |
+| `authCacheTtlMs` | `number` | `5000` | Cache auth results for N ms; `0` disables |
 
 ## Per-Resource Overrides
 
@@ -273,41 +274,36 @@ src/resources/
 
 Generate with CLI: `arc generate resource order --mcp`
 
-## Transport Modes
+## Protocol
 
-### Stateless (default)
+Arc's MCP endpoint serves protocol revision **2026-07-28** and nothing older. It runs on the MCP SDK's `createMcpHandler` with `legacy: 'reject'`: every `POST /mcp` gets a fresh server, there are no sessions, and it scales horizontally and on serverless without sticky routing.
 
-Fresh server per request. No session tracking. Best for horizontal scaling, serverless, edge.
+- A client must negotiate 2026-07-28 (the SDK `Client` with `versionNegotiation: { mode: 'auto' }` or `{ pin: '2026-07-28' }`).
+- A 2025-era client's `initialize` is answered `400` with JSON-RPC error `-32022`, whose `data.supported` is `["2026-07-28"]`.
+- `GET` and `DELETE` answer `405` with `Allow: POST`.
+- Tool handlers see the caller's identity as `ctx.session` and, through the SDK's pass-through, as `ctx.extra.http.authInfo`.
+- `ctx.log(level, message)` writes to the app logger (`fastify.log`), tagged with the tool name. Nothing is sent to the client: 2026-07-28 deprecates protocol logging.
 
 ```typescript
 await app.register(mcpPlugin, { resources, auth: false });
 ```
 
-### Stateful
-
-Sessions cached with TTL. Use when you need server-initiated notifications.
-
-```typescript
-await app.register(mcpPlugin, {
-  resources,
-  stateful: true,
-  sessionTtlMs: 600000,
-  maxSessions: 500,
-});
-```
+`stateful: true` was removed with 2025-era support; passing it fails the boot. Delete `stateful`, `sessionTtlMs` and `maxSessions`.
 
 ## Health Endpoint
 
-Both modes expose `GET /mcp/health` (no MCP protocol needed):
+`GET /mcp/health` needs no MCP protocol:
 
 ```bash
 curl http://localhost:3000/mcp/health
-# {"status":"ok","mode":"stateless","tools":10,"resources":2,"toolNames":[...]}
+# {"status":"ok","protocolVersion":"2026-07-28","tools":10,"resources":2,"toolNames":[...]}
 ```
+
+With auth configured, an unauthenticated caller gets only `status` and `protocolVersion`.
 
 ## Testing
 
-### Unit Tests with InMemoryTransport
+### Unit Tests
 
 ```typescript
 import { createTestMcpClient } from '@classytic/arc/mcp/testing';
@@ -328,6 +324,8 @@ expect(result.isError).toBeFalsy();
 
 await client.close();
 ```
+
+The client speaks 2026-07-28 and connects in memory: no port, no socket. The server side runs through the SDK's version-aware entry with 2025 serving off, so the test negotiates exactly as a production client does. To connect a server you built with `createMcpServer`, use `connectMcpTestClient(server)`, which returns `{ client, close }`. For the HTTP leg itself (status codes, headers, auth challenges), register `mcpPlugin` and use `app.inject()`.
 
 ### E2E with Claude CLI
 

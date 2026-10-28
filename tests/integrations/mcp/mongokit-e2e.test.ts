@@ -6,7 +6,7 @@
  * 2. Arc defineResource stores the queryParser
  * 3. resourceToTools auto-derives filterableFields from the parser
  * 4. MCP tools get correct input schemas and enriched descriptions
- * 5. createTestMcpClient can call the tools over loopback HTTP
+ * 5. createTestMcpClient can call the tools through a real SDK client
  */
 
 import { QueryParser } from "@classytic/mongokit";

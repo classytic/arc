@@ -27,13 +27,54 @@ import type {
 
 export const ALL_CRUD_OPS: CrudOperation[] = ["list", "get", "create", "update", "delete"];
 
+/**
+ * CRUD tool hints. `openWorldHint: false` because a CRUD tool reaches only the
+ * resource's own repository. Every hint is explicit: the spec defaults are
+ * the cautious ones (`destructiveHint` and `openWorldHint` default TRUE), so an
+ * omitted hint reads as "may destroy, may reach the internet".
+ */
 export const CRUD_ANNOTATIONS: Record<CrudOperation, ToolAnnotations> = {
-  list: { readOnlyHint: true },
-  get: { readOnlyHint: true },
-  create: { destructiveHint: false },
-  update: { destructiveHint: true, idempotentHint: true },
-  delete: { destructiveHint: true, idempotentHint: true },
+  list: { readOnlyHint: true, openWorldHint: false },
+  get: { readOnlyHint: true, openWorldHint: false },
+  create: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: false,
+  },
+  update: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
+  delete: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
 };
+
+/**
+ * Hints for a custom route, from its HTTP method's RFC 9110 semantics: GET /
+ * HEAD / OPTIONS are safe (read-only), PUT and DELETE idempotent, DELETE / PUT /
+ * PATCH / POST may overwrite or remove. `openWorldHint` is left unset — a
+ * route handler may call anything, so the spec's cautious default stands.
+ */
+export function routeAnnotations(method: string): ToolAnnotations {
+  switch (method.toUpperCase()) {
+    case "GET":
+    case "HEAD":
+    case "OPTIONS":
+      return { readOnlyHint: true };
+    case "PUT":
+    case "DELETE":
+      return { readOnlyHint: false, destructiveHint: true, idempotentHint: true };
+    default:
+      return { readOnlyHint: false, destructiveHint: true, idempotentHint: false };
+  }
+}
 
 /**
  * Build a handler that dispatches to the controller method for `op` via

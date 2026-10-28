@@ -1925,7 +1925,7 @@
       "WorkflowLike",
       "WorkflowRunLike"
     ],
-    "typesHash": "d2460d7d88cf517f"
+    "typesHash": "df3ef4bffa166e80"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -2112,7 +2112,7 @@
     "typesHash": "227200243c9f33b0"
   },
   "./http-cache": {
-    "stability": "beta",
+    "stability": "experimental",
     "runtime": [
       "CachePurgeError",
       "DEFAULT_IGNORED_QUERY",
@@ -2180,7 +2180,7 @@
     "typesHash": "7bf0af9347cfb286"
   },
   "./http-cache/cloudflare": {
-    "stability": "beta",
+    "stability": "experimental",
     "runtime": [
       "createCloudflarePurger"
     ],
@@ -2191,7 +2191,7 @@
     "typesHash": "c7716dcb33381ef6"
   },
   "./http-cache/fastly": {
-    "stability": "beta",
+    "stability": "experimental",
     "runtime": [
       "createFastlyPurger"
     ],
@@ -2202,7 +2202,7 @@
     "typesHash": "8660cf42da3f7ac5"
   },
   "./http-cache/testing": {
-    "stability": "beta",
+    "stability": "experimental",
     "runtime": [
       "createFakeCdn",
       "edgeFreshness",
@@ -2369,6 +2369,7 @@
       "McpPluginOptions",
       "McpResourceConfig",
       "McpServerInstance",
+      "McpToolLogger",
       "PromptDefinition",
       "PromptResult",
       "RealtimeToolCall",
@@ -2413,7 +2414,7 @@
       "toCallToolSuccess",
       "toolInputShape"
     ],
-    "typesHash": "d0410312be25f7b0"
+    "typesHash": "fad01745b171fe89"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2428,7 +2429,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "9cc7e9c7755832a1"
+    "typesHash": "8e437549b071f788"
   },
   "./scim": {
     "stability": "stable",

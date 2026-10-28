@@ -39,6 +39,7 @@ import {
   createCrudHandler,
   defaultCrudDescription,
   resolveCrudDescription,
+  routeAnnotations,
 } from "./crud-tools.js";
 import type { FieldRuleEntry } from "./fieldRulesToZod.js";
 import {
@@ -302,12 +303,10 @@ export function resourceToTools(
       route.summary ??
       route.description ??
       `${opName} on ${resource.displayName}`;
-    // A GET route is a read: advertise it as one unless the author says otherwise.
+    // Derived from the HTTP method unless the author declares their own.
     const toolAnnotations: ToolAnnotations = mcpConfig?.annotations
       ? { ...mcpConfig.annotations }
-      : route.method.toUpperCase() === "GET"
-        ? { readOnlyHint: true }
-        : { openWorldHint: true };
+      : routeAnnotations(route.method);
 
     // The route's own schema is the tool's input contract — see route-input-schema.ts.
     const inputShape = buildRouteInputSchema(route, hasId);

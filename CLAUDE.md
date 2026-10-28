@@ -84,7 +84,6 @@ Run the minimum that covers your change. **Default: `src/X/*` → `npx vitest ru
 Non-obvious design choices that won't be caught by tests. Release-tagged changes live in [CHANGELOG.md](CHANGELOG.md); only keep entries here if they'd bite a contributor walking in cold.
 
 - **CRLF in the working tree is invisible to git** — `.gitattributes` keeps the BLOB at LF, so a tool that rewrites a checked-out file leaves `git status` and `git diff` empty while `biome` fails with a whole-file character diff that never says "line endings". `check:line-endings` (first step of the gate) names the files; `npm run fix:line-endings` fixes them.
-- **Both `overrides` entries in package.json are load-bearing — deleting either breaks `npm install`.** Verified by removing each and re-resolving. `better-auth` declares `peerOptional` on `vitest` (`^2||^3||^4`) and `better-sqlite3` (`^12`); arc runs vitest 5 and better-sqlite3 13. `peerOptional` is NOT advisory — `optional` silences only the MISSING case, while npm still hard-fails ERESOLVE on a version MISMATCH. Arc imports neither `better-auth/test-utils` nor its sqlite adapter, so the constraints are irrelevant here and the overrides say so explicitly. They are inert for consumers (npm applies `overrides` only in the ROOT project). Remove them when better-auth drops those peers, not before.
 - **`request.user` is `undefined` on public routes** — always guard.
 - **`isRevoked` is fail-closed** — errors = access denied. Security design choice.
 - **Redis Streams are at-least-once** — handlers must be idempotent.
@@ -129,11 +128,11 @@ Arc's boot order is **fixed** (do not reorder; do not skip slots):
 |------|-----|-----------|
 | fastify | >=5.12.7 | **Yes** |
 | @classytic/primitives | >=0.35.0 | **Yes** |
-| @classytic/repo-core | >=0.34.0 | **Yes** |
+| @classytic/repo-core | >=0.35.0 | **Yes** |
 | better-auth | >=1.7.14 | No |
 | ioredis | >=6.0.0 | No |
-| bullmq | >=6.5.0 | No |
-| @modelcontextprotocol/server · /node · /client | >=2.0.0 | No |
+| bullmq | >=6.5.1 | No |
+| @modelcontextprotocol/server · /node · /client | >=2.4.0 · >=2.1.2 · >=2.4.0 | No |
 
 **Removed in arc 2.12:** `@classytic/mongokit`, `@classytic/sqlitekit`, `mongoose`, `@prisma/client`. Every kit-specific adapter — Mongoose, Drizzle, AND Prisma — ships from its kit (`@classytic/mongokit/adapter@>=3.13.0`, `@classytic/sqlitekit/adapter@>=0.3.0`, `@classytic/prismakit/adapter@>=0.1.0`); hosts depend on the kit directly. The kit owns the driver peer. Custom kits implementing `DataAdapter<TDoc>` from `@classytic/repo-core/adapter` plug in identically.
 

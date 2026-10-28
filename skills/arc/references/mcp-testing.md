@@ -1,6 +1,6 @@
 # MCP: testing
 
-`@classytic/arc/mcp/testing` serves the real Streamable HTTP transport on an ephemeral loopback port (needs `@modelcontextprotocol/client`). Always `await client.close()`.
+`@classytic/arc/mcp/testing` connects an SDK client speaking MCP 2026-07-28 (the only revision arc serves) in memory: no port. Needs `@modelcontextprotocol/client`. Always `await client.close()`. For HTTP status codes and headers, register `mcpPlugin` and use `app.inject()`.
 
 ## createTestMcpClient
 
@@ -25,7 +25,7 @@ await client.close();
 | Option | Notes |
 |---|---|
 | `pluginOptions` | `resources`, `overrides`, `expose`, `exclude`, `toolNamePrefix`, `extraTools`, `extraPrompts`, `instructions` |
-| `auth` | `McpAuthResult` for the session; `null` or omitted runs anonymous |
+| `auth` | `McpAuthResult` for the session; `null` runs anonymous; omitted is `{ userId: 'test-user' }` |
 | `serverName` | default `test-mcp` |
 
 `callTool` returns `{ content: [{ type, text }], isError? }`; parse `content[0].text` as JSON.
@@ -38,7 +38,7 @@ For a server you built with `createMcpServer`:
 import { connectMcpTestClient } from '@classytic/arc/mcp/testing';
 
 const server = await createMcpServer({ name: 't', tools: [notifyTool] });
-const { client, close } = await connectMcpTestClient(server);
+const { client, close } = await connectMcpTestClient(server); // one connection per server
 const result = await client.callTool({ name: 'send_notification', arguments: { /* ... */ } });
 await close();
 ```

@@ -111,6 +111,8 @@ export function buildAggregationTools(args: {
           // Aggregations are read-shape — no destructive hint.
           readOnlyHint: true,
           idempotentHint: true,
+          // Reads the resource's own repository only.
+          openWorldHint: false,
         };
 
     const toolName = prefix

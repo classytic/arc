@@ -21,11 +21,12 @@ const app = await createApp({
 |---|---|---|
 | `list` | `list_{plural}` | `readOnlyHint` |
 | `get` | `get_{name}` | `readOnlyHint` |
-| `create` | `create_{name}` | `destructiveHint: false` |
+| `create` | `create_{name}` | not destructive, not idempotent |
 | `update`, `delete` | `update_{name}`, `delete_{name}` | `destructiveHint`, `idempotentHint` |
 | `actions` | `{action}_{name}` (input: `id` + action schema) | `destructiveHint` |
-| custom routes (function or string handler) | `{operation or slug}_{name}` | GET: `readOnlyHint`, else `openWorldHint` |
+| custom routes (function or string handler) | `{operation or slug}_{name}` | by HTTP method: GET/HEAD read-only; PUT/DELETE destructive + idempotent; POST/PATCH destructive |
 
+- CRUD hints are all explicit and include `openWorldHint: false`; an omitted hint means the cautious spec default.
 - A CRUD op becomes a tool only when `permissions.<op>` is declared and the op is not in `disabledRoutes`.
 - Tools run the same controller pipeline as REST: auth, tenant scope, permission policy, hooks, field masking, events.
 - `list_*` accepts `page`, `limit`, `cursor` (keyset; `page` ignored when set), `sort`, `search`, `select`, `populate`, filters. `get_*` accepts `id`, `select`. `limit` max follows the resource `queryParser.maxLimit`.
@@ -46,8 +47,7 @@ const app = await createApp({
 | `toolNamePrefix` | none | `'crm'` gives `crm_list_products` |
 | `overrides` | none | Per-resource `McpResourceConfig` |
 | `extraTools`, `extraPrompts` | none | Hand-written tools/prompts |
-| `stateful`, `sessionTtlMs`, `maxSessions` | `false`, 1800000, 1000 | Session mode |
-| `authCacheTtlMs` | 5000 | Stateless auth-result cache; `0` disables |
+| `authCacheTtlMs` | 5000 | Auth-result cache; `0` disables |
 | `dnsRebindingProtection` | on if `auth: false` | See below |
 
 ## Per-resource overrides
@@ -95,14 +95,15 @@ mcpPlugin({ resources, auth: false, dnsRebindingProtection: false });           
 
 Absent `Origin` passes; present-but-unlisted is refused. `${prefix}/health` is exempt.
 
-## Endpoints and modes
+## Protocol and endpoints
 
-| Mode | Behavior |
-|---|---|
-| Stateless (default) | `POST /mcp` fresh server per request; `GET` returns 405; `DELETE` no-op. Use for scaling/serverless |
-| `stateful: true` | `POST` reuses `Mcp-Session-Id`; `GET` is SSE; `DELETE` ends session. TTL cache, LRU eviction at `maxSessions` |
+The endpoint speaks MCP **2026-07-28 only** (SDK `createMcpHandler` with 2025 serving off): fresh server per request, no sessions.
 
-- `GET /mcp/health` returns `{ status, mode }`; with valid auth (or `auth: false`) it also returns `tools`, `resources`, `toolNames`, `sessions`.
+- `POST /mcp` serves 2026-07-28. A 2025-era `initialize` gets `400`, JSON-RPC `-32022`, `data.supported: ["2026-07-28"]`.
+- `GET`/`DELETE /mcp` return 405 with `Allow: POST`.
+- `stateful: true` is removed and throws at boot; delete `stateful`, `sessionTtlMs`, `maxSessions`.
+- `ctx.log` writes to `fastify.log` tagged `{ mcpTool }`, never to the client.
+- `GET /mcp/health` returns `{ status, protocolVersion }`; with valid auth (or `auth: false`) it also returns `tools`, `resources`, `toolNames`.
 - Resources `arc://schemas` and `arc://schemas/{name}` expose resource schemas to agents.
 - Multiple endpoints: register `mcpPlugin` repeatedly with different `resources` and `prefix`.
 

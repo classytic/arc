@@ -2,7 +2,7 @@
 
 **Summary**: Model Context Protocol integration — auto-generates AI tool schemas from `defineResource()` configs. Tools enforce same permissions as REST.
 **Sources**: src/integrations/mcp/.
-**Last updated**: 2026-10-10 (tenant preparation, scoped fenced replay and shared rate budgets).
+**Last updated**: 2026-10-28 (2026-07-28 only: 2025 era and stateful mode removed; `ctx.log` server-side).
 
 ---
 
@@ -14,7 +14,19 @@
 - `resourceToTools(resource)` — inspects resource → CRUD tool definitions (list, get, create, update, delete) + custom routes + actions + aggregations.
 - `defineTool(...)`, `definePrompt(...)` — custom tools/prompts alongside auto-generated ones.
 - `buildMcpToolsFromBridges([...])` — expose AI SDK `tool()` defs over MCP without duplicating glue.
-- Stateless (default) and stateful modes; session cache for stateful.
+- One mode: protocol **2026-07-28 only**, a fresh server per request, no sessions.
+
+## SDK contract (`@modelcontextprotocol/*` 2.x)
+
+- **`createMcpHandler(factory, { legacy: 'reject' })` + `toNodeHandler`.** Only 2026-07-28 is served (per-request `_meta` envelope, `server/discover`); a 2025 `initialize` gets the SDK's `400` / `-32022` naming the supported revision. Arc resolves auth FIRST, then hands identity to the factory as `AuthInfo` (`toSdkAuthInfo` / `fromSdkAuthInfo`, full result under `extra.arcAuth`) — never via a shared ref. GET/DELETE → arc's own 405 + `Allow: POST`.
+- **No sessions, so no stateful mode.** It only ever served 2025 clients; `stateful: true` throws at boot. Nothing arc does needs server→client push: it sends no list-changed or resource-updated notifications, and `realtimeBridge` is an in-process dispatcher, not a transport. Change events, if ever needed, go through `handler.notify` (`subscriptions/listen`), not sessions.
+- **Registration arity.** The SDK calls a schema-less tool as `(ctx)` and a schema-less prompt as `(ctx)`. `createMcpServer` registers one-argument callbacks there; the two-argument form fed the SDK context in as the tool's INPUT.
+- **Flat shapes are wrapped by arc** (`z.object`) — the SDK's raw-shape overloads are `@deprecated`. A whole schema (`~standard`) passes through.
+- **Annotations are explicit.** Spec defaults are cautious (`destructiveHint`/`openWorldHint` default TRUE), so CRUD sets every hint (`openWorldHint: false`); custom routes map by HTTP method (`routeAnnotations`), leaving `openWorldHint` unset.
+- **401 under Better Auth** carries `WWW-Authenticate: Bearer resource_metadata=…`; custom resolvers get none (often API-key gates).
+- **`ctx.log` is server-side** (`createMcpServer({ logger })`; `mcpPlugin` passes `fastify.log`), tagged `{ mcpTool }`. SEP-2577 deprecates protocol logging; `ctx.mcpReq.log` was a silent no-op anyway — arc never declares the `logging` capability.
+- **Test harness** (`./mcp/testing`): the SDK `InMemoryTransport` pair, server side through `serveStdio(() => server, { transport, legacy: 'reject' })`, client pinned to 2026-07-28. One connection per server instance. HTTP-leg behaviour (401, 405, -32022) lives in `mcp-protocol-version.test.ts`.
+- **Deliberately not adopted**: no `structuredContent` on CRUD results (no `outputSchema` to validate it, and it doubles the payload); no `inputRequired` — arc never asks the client for input.
 
 ## Tool input schemas — REST parity (2.20)
 
