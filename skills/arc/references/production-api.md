@@ -84,6 +84,10 @@ createApp({
 
 Pre-auth paths see the public scope and key by IP: exempt them with `skipPaths`. Per-resource budgets: `defineResource({ rateLimit })`.
 
+Shared store down (`redis`/`store`): every call is bounded (`storeFallback.timeoutMs`, 250) and an error or timeout is answered from per-instance memory counters (still limited, never hangs or 500s); one warning per outage, probed every `retryAfterMs` (5000), resumes on its first answer; `storeFallback.onStatus` reports each switch for a health/metrics signal. `storeFallback: false` = the plugin's own behaviour.
+
+A route's raw `config: { rateLimit: { max, timeWindow, keyGenerator, groupId, allowList } }` runs on arc's resource limiter (same headers, same 429 `arc.rate_limited`). `keyGenerator(req)` replaces the scope/IP key (per device behind one NAT address); `allowList` (keys or `(req, key) => boolean`) skips the limit; `groupId` shares one budget across routes and resources (one group, one `max`/`timeWindow`). Any other option refuses to register.
+
 ## Bulk preset
 
 ```typescript

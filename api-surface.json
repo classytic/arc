@@ -222,7 +222,7 @@
       "version",
       "when"
     ],
-    "typesHash": "74a956a9c0f0a4a6"
+    "typesHash": "2dc83751762b3dc1"
   },
   "./permissions": {
     "stability": "stable",
@@ -380,7 +380,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "56f93345cb6b3ed2"
+    "typesHash": "b5a0320313be0954"
   },
   "./cache": {
     "stability": "stable",
@@ -424,7 +424,7 @@
       "upstashAsCacheClient",
       "versionKey"
     ],
-    "typesHash": "57a2fb8b39da5dbf"
+    "typesHash": "fd44e9edd06fd136"
   },
   "./types": {
     "stability": "stable",
@@ -524,7 +524,7 @@
       "WriteContext",
       "WriteVerbKey"
     ],
-    "typesHash": "55507ab6bcb02c91"
+    "typesHash": "5bddd5e34d93effb"
   },
   "./types/storage": {
     "stability": "stable",
@@ -606,6 +606,8 @@
       "AggregationCacheConfig",
       "AggregationConfig",
       "AggregationDateRangeRequirement",
+      "AggregationFieldType",
+      "AggregationFieldTypes",
       "AggregationIndexHint",
       "AggregationMaterializedContext",
       "AggregationMaterializedResult",
@@ -622,6 +624,7 @@
       "ConfigError",
       "ControllerConfigurableOptions",
       "ControllerConstructionOptions",
+      "CrudInput",
       "CrudOperation",
       "DEFAULT_ID_FIELD",
       "DEFAULT_LIMIT",
@@ -651,6 +654,8 @@
       "RESERVED_QUERY_PARAMS",
       "ResourceDefinition",
       "ResourceSeams",
+      "RouteInputIssue",
+      "RouteInputOptions",
       "RouteInputSlots",
       "SYSTEM_FIELDS",
       "SeamedResourceConfig",
@@ -692,7 +697,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "111bead6acabebb6"
+    "typesHash": "50f59e12e054a782"
   },
   "./presets": {
     "stability": "stable",
@@ -748,7 +753,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "cf71dda043f3ad8a"
+    "typesHash": "4156dcb0f96a361a"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -760,7 +765,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "42b8ae2c692f28f6"
+    "typesHash": "aab93f94e34c0a2e"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -780,7 +785,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "952a3307bc8734a7"
+    "typesHash": "1c2f0bc68620d5f8"
   },
   "./presets/search": {
     "stability": "stable",
@@ -795,7 +800,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "5c5b1a984e1c8648"
+    "typesHash": "3346c17d3dc2cb13"
   },
   "./auth": {
     "stability": "stable",
@@ -829,7 +834,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "3f939852cb285c1f"
+    "typesHash": "4e165e3152818895"
   },
   "./hooks": {
     "stability": "stable",
@@ -863,7 +868,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "b74acfdcff95b7d9"
+    "typesHash": "e1c2fd6775fff154"
   },
   "./middleware": {
     "stability": "stable",
@@ -881,7 +886,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "80906c4352d73fcd"
+    "typesHash": "05eaf5bd4a0a9592"
   },
   "./pipeline": {
     "stability": "stable",
@@ -910,7 +915,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "e553a96622d8420a"
+    "typesHash": "83d2b1e39aee2b8d"
   },
   "./context": {
     "stability": "stable",
@@ -998,7 +1003,7 @@
       "getCascadingResourcesWithMetadata",
       "introspectionPlugin"
     ],
-    "typesHash": "9c46eb3d7dfa10e4"
+    "typesHash": "5040082925e15a88"
   },
   "./utils": {
     "stability": "stable",
@@ -1018,6 +1023,9 @@
       "OrgRequiredError",
       "RateLimitError",
       "RedisCircuitBreakerState",
+      "SSE_DEFAULT_DRAIN_TIMEOUT_MS",
+      "SSE_DEFAULT_MAX_BUFFERED_BYTES",
+      "STREAM_FRAMES",
       "ServiceUnavailableError",
       "UI_MESSAGE_STREAM_HEADERS",
       "UnauthorizedError",
@@ -1031,6 +1039,8 @@
       "createDomainError",
       "createError",
       "createQueryParser",
+      "createReplayHub",
+      "createSseConnectionGauge",
       "createStateMachine",
       "declareRuntimeCapability",
       "defineCompensation",
@@ -1051,6 +1061,7 @@
       "isReadableStream",
       "isZodSchema",
       "keysetListResponse",
+      "lastEventIdOf",
       "listResponse",
       "normalizeRoles",
       "offsetListResponse",
@@ -1060,6 +1071,7 @@
       "promoteStreamTokenToHeader",
       "queryParams",
       "registerShutdownParticipant",
+      "registerSseStats",
       "requireSingleHeaderValue",
       "responses",
       "runAdmittedWork",
@@ -1102,15 +1114,34 @@
       "OrgRequiredError",
       "PipeUIMessageStreamOptions",
       "RateLimitError",
+      "ReadyFrame",
       "RedisCircuitBreakerState",
       "RedisCircuitBreakerStateOptions",
+      "ReplayCloseVerdict",
+      "ReplayHub",
+      "ReplayHubOptions",
+      "ReplayHubStats",
+      "ReplayHubTimers",
+      "ReplayReadScope",
+      "ReplaySubscription",
+      "ResyncFrame",
+      "ResyncReason",
+      "RetryFrame",
+      "RevokeTarget",
+      "RevokedFrame",
       "RuntimeCapabilityDeclaration",
+      "SSEStats",
+      "SSE_DEFAULT_DRAIN_TIMEOUT_MS",
+      "SSE_DEFAULT_MAX_BUFFERED_BYTES",
+      "STREAM_FRAMES",
       "SchemaIo",
       "ServiceUnavailableError",
       "ShutdownParticipant",
+      "SseConnectionGauge",
       "SseStream",
       "SseStreamOptions",
       "StateMachine",
+      "StreamFrameName",
       "TransitionConfig",
       "UI_MESSAGE_STREAM_HEADERS",
       "UnauthorizedError",
@@ -1125,6 +1156,8 @@
       "createDomainError",
       "createError",
       "createQueryParser",
+      "createReplayHub",
+      "createSseConnectionGauge",
       "createStateMachine",
       "declareRuntimeCapability",
       "defineCompensation",
@@ -1145,6 +1178,7 @@
       "isReadableStream",
       "isZodSchema",
       "keysetListResponse",
+      "lastEventIdOf",
       "listResponse",
       "normalizeRoles",
       "offsetListResponse",
@@ -1154,6 +1188,7 @@
       "promoteStreamTokenToHeader",
       "queryParams",
       "registerShutdownParticipant",
+      "registerSseStats",
       "requireSingleHeaderValue",
       "responses",
       "runAdmittedWork",
@@ -1161,7 +1196,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "334076774b3a217c"
+    "typesHash": "430bbd3e1c37f548"
   },
   "./cli": {
     "stability": "stable",
@@ -1192,6 +1227,7 @@
       "createMemoryDailyLedger",
       "createPlugin",
       "createRequestIdGenerator",
+      "createSseConnectionGauge",
       "defaultIsDuplicateKeyError",
       "errorHandlerPlugin",
       "gracefulShutdownPlugin",
@@ -1199,6 +1235,7 @@
       "metricsPlugin",
       "pressurePlugin",
       "realtimePlugin",
+      "registerSseStats",
       "replyHelpersPlugin",
       "requestIdPlugin",
       "sanitizeRequestId",
@@ -1247,6 +1284,7 @@
       "ScheduleStats",
       "SchedulesPluginOptions",
       "ShutdownState",
+      "SseConnectionGauge",
       "TracingOptions",
       "VersioningOptions",
       "arcCorePlugin",
@@ -1255,6 +1293,7 @@
       "createMemoryDailyLedger",
       "createPlugin",
       "createRequestIdGenerator",
+      "createSseConnectionGauge",
       "defaultIsDuplicateKeyError",
       "errorHandlerPlugin",
       "gracefulShutdownPlugin",
@@ -1262,6 +1301,7 @@
       "metricsPlugin",
       "pressurePlugin",
       "realtimePlugin",
+      "registerSseStats",
       "replyHelpersPlugin",
       "requestIdPlugin",
       "sanitizeRequestId",
@@ -1269,7 +1309,7 @@
       "ssePlugin",
       "versioningPlugin"
     ],
-    "typesHash": "4b36ceaad0978c63"
+    "typesHash": "80a714c2df694dcf"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1316,7 +1356,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "7fe98e63e5a4745c"
+    "typesHash": "08ea6faafedd4b2d"
   },
   "./docs": {
     "stability": "stable",
@@ -1335,7 +1375,7 @@
       "openApiPlugin",
       "scalarPlugin"
     ],
-    "typesHash": "6882c0b501563f3e"
+    "typesHash": "523e0192fd7cde19"
   },
   "./encryption": {
     "stability": "stable",
@@ -1390,7 +1430,7 @@
       "idempotencyPlugin",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "f41660e98f49120f"
+    "typesHash": "5d4ad78db38b54ae"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1464,6 +1504,7 @@
       "MemoryEventTransport",
       "MemoryEventTransportOptions",
       "MemoryOutboxStore",
+      "OutboxDrainRequest",
       "OutboxDrainResult",
       "OutboxHealth",
       "OutboxHealthStore",
@@ -1476,6 +1517,7 @@
       "RedisLike",
       "RedisStreamLike",
       "RedisStreamTransportOptions",
+      "RelayBatchOptions",
       "RelayResult",
       "RepositoryOutboxStore",
       "RepositoryOutboxStoreOptions",
@@ -1500,19 +1542,21 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "9fc74e876f83e6c7"
+    "typesHash": "415c131688da8740"
   },
   "./events/redis": {
     "stability": "stable",
     "runtime": [
-      "RedisEventTransport"
+      "RedisEventTransport",
+      "TRANSPORT_UNAVAILABLE"
     ],
     "types": [
       "RedisEventTransport",
       "RedisEventTransportOptions",
-      "RedisLike"
+      "RedisLike",
+      "TRANSPORT_UNAVAILABLE"
     ],
-    "typesHash": "d5a0deec7014c310"
+    "typesHash": "126e1fddec1e3379"
   },
   "./events/redis-stream": {
     "stability": "stable",
@@ -1635,7 +1679,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "2bfa091c5ffd54fc"
+    "typesHash": "09ee56fffb27c62f"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1725,6 +1769,7 @@
       "BootDisposer",
       "ClosureNode",
       "CompositionProblem",
+      "CreateAppHttpOptions",
       "CreateAppOptions",
       "CreateWorkerOptions",
       "CrudSurface",
@@ -1814,7 +1859,7 @@
       "verifyModuleGraph",
       "withRelayNudge"
     ],
-    "typesHash": "9f2020d2bd4ea765"
+    "typesHash": "ba3d264c1091a6ed"
   },
   "./schemas": {
     "stability": "stable",
@@ -1925,7 +1970,7 @@
       "WorkflowLike",
       "WorkflowRunLike"
     ],
-    "typesHash": "df3ef4bffa166e80"
+    "typesHash": "a710eb07699602fe"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -2084,7 +2129,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "840d2e230ecb3bce"
+    "typesHash": "99bf6ee29369bbf4"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -2177,7 +2222,7 @@
       "resourceTags",
       "tagsForCrudEvent"
     ],
-    "typesHash": "7bf0af9347cfb286"
+    "typesHash": "562a589441bd2724"
   },
   "./http-cache/cloudflare": {
     "stability": "experimental",
@@ -2304,7 +2349,7 @@
       "resolveOrgFromHeader",
       "scopeFirstCtx"
     ],
-    "typesHash": "0f9b9e321104e4c7"
+    "typesHash": "472dd2dac1416cab"
   },
   "./mcp": {
     "stability": "stable",
@@ -2414,7 +2459,7 @@
       "toCallToolSuccess",
       "toolInputShape"
     ],
-    "typesHash": "fad01745b171fe89"
+    "typesHash": "3f89a4145761d2fd"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2429,7 +2474,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "8e437549b071f788"
+    "typesHash": "7411f2098ad2ac31"
   },
   "./scim": {
     "stability": "stable",
@@ -2513,7 +2558,7 @@
       "usagePeriod",
       "usagePlugin"
     ],
-    "typesHash": "49c757dca5970446"
+    "typesHash": "58ebaf45787bda7a"
   },
   "./cleanup": {
     "stability": "stable",
@@ -2597,7 +2642,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "602b7d4b54294998"
+    "typesHash": "f3961ec3ef921974"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2610,7 +2655,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "ffcbe7d87bd7b614"
+    "typesHash": "82c86bb882975019"
   },
   "./testing/outbox": {
     "stability": "stable",

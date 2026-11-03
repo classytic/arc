@@ -99,6 +99,26 @@ export interface MutationWriteContext<TDoc = AnyRecord> extends WriteContext<TDo
    * against.
    */
   existing: TDoc;
+  /**
+   * `update` only, and only when the resource declares `concurrency` and
+   * `existing` carries a numeric version: the version this write must apply
+   * at. CAS with it so a concurrent write in between fails instead of being
+   * overwritten (mongokit:
+   * `repo.claimVersion(id, { from: ctx.expectedVersion }, update, session)`;
+   * a null result → throw repo-core's `VersionConflictError`).
+   *
+   * Arc has already rejected a stale `If-Match` with 412 before the verb ran.
+   * A `version_conflict` the verb throws answers 412 when the version came
+   * from `If-Match`, and 409 otherwise. A conflict whose `id` names a
+   * different document (another aggregate the verb CASes) always stays 409.
+   */
+  expectedVersion?: number;
+  /**
+   * Where {@link expectedVersion} came from: `'if-match'` — the client named
+   * it and arc verified it against `existing`; `'loaded'` — no `If-Match` (or
+   * `*`), so it is the version arc just loaded.
+   */
+  expectedVersionSource?: "if-match" | "loaded";
 }
 
 /**

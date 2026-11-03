@@ -109,8 +109,10 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   transactional?: boolean;
   /**
    * Optimistic concurrency over HTTP (RFC 9110). Reads send `ETag: "<version>"`; an update
-   * with `If-Match` applies only at that version (else 412), and EVERY update is a CAS write on
-   * the version it loaded (else 409) — so the version, and the ETag, change on every write.
+   * with `If-Match` applies only at that version (else 412), and EVERY default update is a CAS
+   * write on the version it loaded (else 409) — so the version, and the ETag, change on every
+   * write. With `writes.update` declared, arc still answers a stale `If-Match` with 412, but the
+   * CAS is the verb's job: it receives `ctx.expectedVersion` (see `MutationWriteContext`).
    * `versionField` defaults to `'__v'`. Boot-fatal on a repository without the
    * `optimisticConcurrency` capability.
    */

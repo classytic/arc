@@ -638,6 +638,9 @@ export class BaseCrudController<
    * `existing` is the document the request was AUTHORISED against — handed over
    * so the verb does not re-fetch and possibly observe a different document.
    * `id` is the REPOSITORY PRIMARY KEY (`resolveRepoId` output), never the route param.
+   * `cas` (update only, from {@link expectedVersion}) becomes `expectedVersion` /
+   * `expectedVersionSource` when the resource declares `concurrency` and the loaded
+   * document has a numeric version.
    */
   protected mutationWriteContext(
     req: IRequestContext,
@@ -645,6 +648,7 @@ export class BaseCrudController<
     existing: unknown,
     repo: TRepository = this.repository,
     uow?: TransactionHandle,
+    cas?: { version?: number; fromClient: boolean },
   ): MutationWriteContext {
     return {
       req,
@@ -652,6 +656,12 @@ export class BaseCrudController<
       id,
       existing: existing as AnyRecord,
       ...(uow !== undefined ? { uow } : {}),
+      ...(cas?.version !== undefined
+        ? {
+            expectedVersion: cas.version,
+            expectedVersionSource: cas.fromClient ? ("if-match" as const) : ("loaded" as const),
+          }
+        : {}),
     };
   }
 
@@ -1055,7 +1065,10 @@ export class BaseCrudController<
 
     const { id, existing, repoId } = await this.loadMutableTarget(req);
     const hookMeta = { id, existing };
-    const cas = this._writes?.update ? { fromClient: false } : this.expectedVersion(req, existing);
+    // ALWAYS evaluated, verb or not: a stale If-Match answers 412 here, before the
+    // verb runs. A declared verb receives the version on `ctx.expectedVersion` to
+    // CAS with; the default path passes it to `repo.update` as `ifVersion`.
+    const cas = this.expectedVersion(req, existing);
 
     const item = await this.runHookedOpUntilResult<AnyRecord, unknown>(
       req,
@@ -1068,7 +1081,7 @@ export class BaseCrudController<
               this._writes.update(
                 repoId,
                 processed as Partial<AnyRecord>,
-                this.mutationWriteContext(req, repoId, existing, repo, uow),
+                this.mutationWriteContext(req, repoId, existing, repo, uow, cas),
               )
             : repo.update(repoId, processed as Partial<TDoc>, {
                 user,
@@ -1079,7 +1092,16 @@ export class BaseCrudController<
         ),
     ).catch((err: unknown) => {
       // A conflict on the client's own If-Match is a failed precondition, not a domain conflict.
-      if (cas.fromClient && (err as { code?: unknown })?.code === "version_conflict") {
+      // Covers the default `repo.update` AND a declared verb that CAS'd on `ctx.expectedVersion`.
+      // A verb's conflict that names ANOTHER document (a related aggregate it also CASes) is not
+      // this request's failed precondition: it stays the verb's own 409.
+      const conflict = err as { code?: unknown; id?: unknown } | null;
+      const onOtherDoc =
+        this._writes?.update !== undefined &&
+        conflict?.id !== undefined &&
+        conflict.id !== null &&
+        String(conflict.id) !== String(repoId);
+      if (cas.fromClient && conflict?.code === "version_conflict" && !onOtherDoc) {
         throw createDomainError(
           ARC_ERROR_CODES.PRECONDITION_FAILED,
           "The resource changed since it was read — re-read and retry.",

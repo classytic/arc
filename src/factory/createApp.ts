@@ -21,7 +21,11 @@ import Fastify, {
   type RawServerDefault,
 } from "fastify";
 import qs from "qs";
-import { arcAjvCustomOptions, markArcRootValidator } from "../core/routeValidator.js";
+import {
+  arcAjvCustomOptions,
+  arcValidatorBuilder,
+  markArcRootValidator,
+} from "../core/routeValidator.js";
 import {
   type ArcLoggerOptions,
   arcLog,
@@ -389,6 +393,9 @@ async function buildApp(
       ? { connectionTimeout: config.connectionTimeout }
       : {}),
     ...(config.keepAliveTimeout !== undefined ? { keepAliveTimeout: config.keepAliveTimeout } : {}),
+    // Node server options (socket write mark, header limits): pass-through, copied
+    // so a later mutation of the host's object cannot reach the live server.
+    ...(config.http !== undefined ? { http: { ...config.http } } : {}),
     // Arc intentionally replaces the default error handler; `true` silences
     // Fastify's FSTWRN004 for that override.
     allowErrorHandlerOverride: true,
@@ -406,6 +413,12 @@ async function buildApp(
     },
     // The same options arc compiles its own routes with on a bare host (see routeValidator.ts).
     ajv: { customOptions: arcAjvCustomOptions(config.ajv?.keywords) },
+    // Query/params/headers coerce; JSON bodies do not (unless `ajv.coerceBody`).
+    schemaController: {
+      compilersFactory: {
+        buildValidator: arcValidatorBuilder({ coerceBody: config.ajv?.coerceBody === true }),
+      },
+    },
   });
   markArcRootValidator(fastify);
 

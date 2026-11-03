@@ -18,6 +18,7 @@
  */
 
 export { defineAggregation } from "./defineAggregation.js";
+export type { AggregationFieldType, AggregationFieldTypes } from "./fieldTypes.js";
 export type {
   AggMeasureInput,
   AggMeasureShorthand,

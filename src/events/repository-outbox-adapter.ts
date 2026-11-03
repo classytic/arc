@@ -47,6 +47,7 @@ import {
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { and, anyOf, eq as eqFilter, lte, ne, or } from "@classytic/repo-core/filter";
 import { update } from "@classytic/repo-core/update";
+import { arcLog } from "../logger/index.js";
 import { createIsDuplicateKeyError, createSafeGetOne } from "../utils/store-helpers.js";
 import type { DeadLetteredEvent, DomainEvent } from "./EventTransport.js";
 
@@ -125,7 +126,15 @@ export type RepositoryOutboxStore = OutboxStore &
       OutboxStore,
       "fail" | "getDeadLettered" | "purge" | "requeue" | "countByStatus" | "oldestPendingAgeMs"
     >
-  >;
+  > & {
+    /**
+     * The most rows the repository returned for one claim read, once a read came back
+     * clamped (its page `limit` below the one asked, e.g. a page `maxLimit`); `undefined`
+     * until then. `EventOutbox` lowers its effective `batchSize` to it, so a clamped page
+     * never reads as "backlog empty". Warned once (`OUTBOX_CLAIM_CAPPED`).
+     */
+    readonly claimCap?: number | undefined;
+  };
 
 export function repositoryAsOutboxStore(
   repository: RepositoryLike,
@@ -164,6 +173,25 @@ export function repositoryAsOutboxStore(
     if (Array.isArray(result)) return result as T[];
     const envelope = result as { data?: T[] } | null | undefined;
     return envelope?.data ?? [];
+  };
+
+  /** Learnt from a claim read whose page envelope carries a `limit` below the one asked. */
+  let claimCap: number | undefined;
+  const noteClaimPage = (result: unknown, asked: number): void => {
+    if (Array.isArray(result) || typeof result !== "object" || result === null) return;
+    const pageLimit = (result as { limit?: unknown }).limit;
+    if (typeof pageLimit !== "number" || !(pageLimit > 0) || pageLimit >= asked) return;
+    if (claimCap !== undefined && claimCap <= pageLimit) return;
+    const first = claimCap === undefined;
+    claimCap = pageLimit;
+    if (first) {
+      arcLog("events").warn(
+        `OUTBOX_CLAIM_CAPPED: the outbox repository returned at most ${pageLimit} rows for one claim ` +
+          `(asked ${asked}, got ${pageLimit}); the relay's batchSize is lowered to ${pageLimit}. ` +
+          "Raise the repository's page maxLimit (mongokit createOutboxRepository: { pagination: { maxLimit } }) " +
+          "or lower batchSize to silence this.",
+      );
+    }
   };
 
   const isDuplicateKeyError = createIsDuplicateKeyError(repository);
@@ -221,14 +249,14 @@ export function repositoryAsOutboxStore(
     const candidateFilter = typeFilter
       ? and(claimableFilter(now), typeFilter)
       : claimableFilter(now);
-    const candidates = unwrapDocs<OutboxDoc>(
-      await r.getAll({
-        filters: candidateFilter,
-        sort: { createdAt: 1 },
-        page: 1,
-        limit,
-      }),
-    );
+    const page = await r.getAll({
+      filters: candidateFilter,
+      sort: { createdAt: 1 },
+      page: 1,
+      limit,
+    });
+    noteClaimPage(page, limit);
+    const candidates = unwrapDocs<OutboxDoc>(page);
     if (candidates.length === 0) return [];
 
     const results = await Promise.all(
@@ -305,6 +333,10 @@ export function repositoryAsOutboxStore(
      */
     transactionalSave: true,
 
+    get claimCap(): number | undefined {
+      return claimCap;
+    },
+
     async save(event: DomainEvent, options?: OutboxWriteOptions): Promise<void> {
       if (!event?.type || typeof event.type !== "string") {
         throw new InvalidOutboxEventError("event.type is required");
@@ -362,6 +394,7 @@ export function repositoryAsOutboxStore(
         page: 1,
         limit,
       });
+      noteClaimPage(result, limit);
       const data = unwrapDocs<OutboxDoc>(result);
       return data.map((d) => d.event).filter(isWellFormed);
     },

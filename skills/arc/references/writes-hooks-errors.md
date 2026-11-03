@@ -21,6 +21,7 @@ defineResource({
 - Retry belongs to the kit (`transactionRetry`); arc never stacks a second policy.
 - Boot fails without `withTransaction`, and at registration when `capabilities.transactions !== true` (standalone Mongo, D1).
 - `ctx.uow.session` is empty on connection-bound backends (SQLite): use the tx-bound repository.
+- With `concurrency` set, a stale `If-Match` is 412 before `writes.update` runs. The verb gets `ctx.expectedVersion` (`ctx.expectedVersionSource`: `'if-match'` or `'loaded'`) and must CAS with it, e.g. mongokit `repo.claimVersion(id, { from: ctx.expectedVersion }, update, session)`; on a miss throw `VersionConflictError` (412 under If-Match, else 409). A conflict whose `id` names another document stays 409.
 
 ## Hooks
 

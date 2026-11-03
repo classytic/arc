@@ -262,7 +262,7 @@ export function normalizeActionsToRouterConfig(
       handlers[name] = entry;
     } else {
       const def = entry as ActionDefinition;
-      handlers[name] = def.parse ? withParsedInput(def.handler, def.schema) : def.handler;
+      handlers[name] = def.parse ? withParsedInput(def.handler, def.schema, name) : def.handler;
       if (def.schema) schemas[name] = def.schema as Record<string, unknown>;
       if (def.id === false) idLessActionNames.push(name);
       if (def.idempotency?.required === true) idempotentActionNames.push(name);
@@ -608,9 +608,11 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
           const [
             { createAggregationRouter },
             { adapterSupportsAggregate, ArcAggregationConfigError },
+            { fieldTypesFromOpenApiSchemas },
           ] = await Promise.all([
             import("../aggregation/createAggregationRouter.js"),
             import("../aggregation/validate.js"),
+            import("../aggregation/fieldTypes.js"),
           ]);
           // Falls back to the adapter's repository: aggregation-only resources
           // (no CRUD routes) have no controller.
@@ -657,6 +659,9 @@ export function buildResourcePlugin<TDoc>(resource: ResourceDefinition<TDoc>): F
             // SECURITY: carries multiTenantPreset's tenant filter; dropping it leaks
             // aggregated rows across orgs.
             middlewares: resource.middlewares?.aggregations,
+            // URL filter operands are coerced by the DECLARED field type (generated entity
+            // schema), not guessed from the value's shape.
+            fieldTypes: fieldTypesFromOpenApiSchemas(resource._registryMeta?.openApiSchemas),
           });
         }
 

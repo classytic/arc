@@ -135,7 +135,7 @@ export class RedisUsageStore implements UsageStore {
 
   async summary(actor: string, period: string): Promise<Record<string, number>> {
     const raw = await this.#redis.hgetall(this.#key(actor, period));
-    const out: Record<string, number> = {};
+    const entries: [string, number][] = [];
     // `HGETALL` on a missing key is `{}`, which is the contract's answer for an
     // unknown actor/period — no special case needed.
     for (const [kind, value] of Object.entries(raw ?? {})) {
@@ -143,8 +143,10 @@ export class RedisUsageStore implements UsageStore {
       // A non-numeric field means something else wrote to this key. Skip it
       // rather than reporting `NaN` into a quota comparison, where `NaN > max`
       // is `false` and the quota silently stops enforcing.
-      if (Number.isFinite(n)) out[kind] = n;
+      if (Number.isFinite(n)) entries.push([kind, n]);
     }
-    return out;
+    // fromEntries defines own properties: `out[kind] = n` would hit the
+    // `__proto__` setter and drop a counter named like it.
+    return Object.fromEntries(entries);
   }
 }

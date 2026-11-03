@@ -65,7 +65,15 @@ const queryCachePluginImpl: FastifyPluginAsync<QueryCachePluginOptions> = async 
   // with other apps in the process. Same rule as the events transport.
   const ownsStore = opts.store === undefined;
   const store = opts.store ?? new MemoryCacheStore();
-  const queryCache = new QueryCache(store);
+  // A failing shared store (Redis down) degrades to the source instead of failing requests;
+  // one warning per outage, invalidations replayed on recovery (QueryCache).
+  const queryCache = new QueryCache(store, {
+    onStoreError: (err, operation) =>
+      fastify.log.warn(
+        { err: err instanceof Error ? err.message : String(err), operation },
+        "[arc] query cache store unavailable: reading from the source until it answers again",
+      ),
+  });
 
   // Runtime capability: a memory store (defaulted here, or the one createApp
   // builds when `stores.queryCache` is absent) caches AND versions per

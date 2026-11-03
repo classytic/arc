@@ -490,6 +490,16 @@ const app = await createApp({
 });
 ```
 
+### Type coercion
+
+Querystring, params and headers are coerced to their schema types (`?limit=5` becomes `5`). JSON bodies are **not**: they are validated as sent, so `{ "value": false }` against `anyOf: [number, boolean, string]` stays `false`, and `{ "qty": "5" }` for `qty: number` is a 400. A client that cannot send typed values (urlencoded forms, legacy apps) can opt back in:
+
+```typescript
+const app = await createApp({
+  ajv: { coerceBody: true }, // coerces bodies too; union fields coerce by their FIRST branch
+});
+```
+
 ## Lifecycle Hooks
 
 ```typescript

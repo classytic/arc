@@ -43,6 +43,14 @@ const DEFAULT_LEASE_MS = 30_000;
  * the store).
  */
 const MAX_TRACKED_ATTEMPTS = 10_000;
+/**
+ * Share of the lease a pass may spend before it stops publishing claimed rows.
+ * The rest absorbs the last publish + ack and clock skew between claimants: a
+ * row published after its lease expired may already be re-claimed elsewhere.
+ */
+const LEASE_PUBLISH_FRACTION = 0.8;
+/** Share of the lease the adaptive claim sizes a batch to, from the measured per-event time. */
+const LEASE_CLAIM_FRACTION = 0.5;
 
 // ============================================================================
 // EventOutbox
@@ -63,6 +71,15 @@ export type OutboxRelayErrorKind =
  * The simpler {@link EventOutbox.relay} returns just the `relayed` count for
  * backward compatibility.
  */
+/** Options for one {@link EventOutbox.relayBatch} pass. */
+export interface RelayBatchOptions {
+  /**
+   * Claim only events of these types (exact names). A priority pass: rows of
+   * other types stay pending for the next untyped pass. Empty = all types.
+   */
+  readonly types?: readonly string[];
+}
+
 export interface RelayResult {
   /** Number of events successfully published AND acknowledged */
   readonly relayed: number;
@@ -94,6 +111,12 @@ export interface RelayResult {
   readonly claimMs?: number;
   /** Wall-clock ms spent publishing + acknowledging the batch. */
   readonly publishMs?: number;
+  /**
+   * Claimed rows NOT published because the lease budget ran out first. They
+   * stay leased to this relay and are re-claimed (unpublished) after expiry;
+   * counted in `attempted`.
+   */
+  readonly leaseDeferred?: number;
 }
 
 /**
@@ -136,6 +159,10 @@ export interface EventOutboxOptions {
   /**
    * Lease duration in ms for claimed events. Only used when the store
    * supports `claimPending`. Default: 30 seconds.
+   *
+   * A pass publishes a claimed row only while its lease has budget left, and
+   * sizes later claims to fit the lease from the measured per-event time, so
+   * this must exceed the slowest SINGLE publish + ack, not a whole batch.
    */
   readonly leaseMs?: number;
   /**
@@ -236,6 +263,11 @@ export class EventOutbox {
    * durable count wins — see the failure path in `relayBatch`.
    */
   private readonly _attempts = new Map<string, number>();
+  /**
+   * Measured ms per event (publish + ack), rising at once on a slower batch and
+   * decaying slowly. Undefined until a batch has published something.
+   */
+  private _perEventMs: number | undefined;
 
   constructor(opts: EventOutboxOptions) {
     // Resolve store: repository takes precedence; fall back to explicit
@@ -268,6 +300,16 @@ export class EventOutbox {
   /** Unique consumer ID used for lease ownership when the store supports claims */
   get consumerId(): string {
     return this._consumerId;
+  }
+
+  /**
+   * Rows claimed per {@link relayBatch} (the `batchSize` option, default 100), lowered to
+   * the store's `claimCap` once a claim came back clamped (`repositoryAsOutboxStore`).
+   * A pass that attempted this many rows hit the limit, so more may be pending.
+   */
+  get batchSize(): number {
+    const cap = (this._store as { readonly claimCap?: unknown }).claimCap;
+    return typeof cap === "number" && cap > 0 ? Math.min(this._batchSize, cap) : this._batchSize;
   }
 
   /**
@@ -383,9 +425,22 @@ export class EventOutbox {
    *   claimed the event), the event is NOT counted as relayed. The other
    *   worker will re-publish — at-least-once semantics preserved.
    *
+   * - **Types**: `options.types` claims only events of those types (exact
+   *   names, oldest first), so a priority pass is not queued behind a backlog
+   *   of other types. Needs a store with `claimPending` / `claimPendingFenced`
+   *   (both honour `OutboxClaimOptions.types`); on the single-worker
+   *   `getPending` fallback the filter is ignored and the oldest rows go out.
+   *
+   * - **Lease budget**: on a leasing store each row is published only while
+   *   the claim's lease has budget left, and acked right after its publish.
+   *   Rows past the budget are not published (`leaseDeferred`); they are
+   *   re-claimed after expiry. The claim size adapts to the measured per-event
+   *   time so a batch fits the lease. See wiki/delivery-guarantees.md.
+   *
    * @returns Per-kind outcome counts for the batch
    */
-  async relayBatch(): Promise<RelayResult> {
+  async relayBatch(options?: RelayBatchOptions): Promise<RelayResult> {
+    const types = options?.types?.length ? options.types : undefined;
     const empty: RelayResult = {
       relayed: 0,
       attempted: 0,
@@ -400,6 +455,10 @@ export class EventOutbox {
     if (!this._transport) return empty;
 
     const claimStartedAt = Date.now();
+    const leased =
+      typeof this._store.claimPendingFenced === "function" ||
+      typeof this._store.claimPending === "function";
+    const limit = leased ? this._claimLimit() : this.batchSize;
     // Fencing (feature-detected end to end): prefer the fenced claim and
     // carry each event's store-minted token into ack/fail, where a fencing
     // store rejects a stale epoch — the overlap consumer-id ownership
@@ -411,9 +470,10 @@ export class EventOutbox {
     let pending: DomainEvent[];
     if (typeof this._store.claimPendingFenced === "function") {
       const claimed = await this._store.claimPendingFenced({
-        limit: this._batchSize,
+        limit,
         consumerId: this._consumerId,
         leaseMs: this._leaseMs,
+        ...(types ? { types } : {}),
       });
       pending = claimed.map((c) => {
         if (c.event?.meta?.id) {
@@ -425,15 +485,22 @@ export class EventOutbox {
       });
     } else if (this._store.claimPending) {
       pending = await this._store.claimPending({
-        limit: this._batchSize,
+        limit,
         consumerId: this._consumerId,
         leaseMs: this._leaseMs,
+        ...(types ? { types } : {}),
       });
     } else {
-      pending = await this._store.getPending(this._batchSize);
+      pending = await this._store.getPending(this.batchSize);
     }
     const claimMs = Date.now() - claimStartedAt;
     const publishStartedAt = Date.now();
+    // The ownership check before each publish. Measured from BEFORE the claim,
+    // so it is never later than the store's own expiry: until it passes, no
+    // other claimant can hold these rows. `getPending` has no lease to keep.
+    const leaseDeadline = leased
+      ? claimStartedAt + this._leaseMs * LEASE_PUBLISH_FRACTION
+      : Number.POSITIVE_INFINITY;
 
     // Split pending into malformed (abort-inducing) and valid events.
     // A malformed event aborts the batch — we drop everything after it.
@@ -468,140 +535,65 @@ export class EventOutbox {
       this._usePublishMany && typeof this._transport.publishMany === "function";
     const canFail = typeof this._store.fail === "function";
 
-    // Outcome map: eventId → null (success) or Error (failure)
-    let publishOutcomes: Map<string, Error | null>;
+    const settleCtx: SettleContext = { canFail, counts, fenceTokens, durableAttempts };
+    /** Rows published and settled (ack/fail) this batch, and their summed time. */
+    let settled = 0;
+    let settleMs = 0;
+    let leaseDeferred = 0;
 
     if (canPublishMany && valid.length > 0) {
-      try {
-        const result = await this._transport.publishMany?.(valid);
-        publishOutcomes = batchOutcomes(valid, result);
-      } catch (batchErr) {
-        // Whole-batch failure — synthesize a uniform failure outcome so the
-        // downstream fail/ack logic still runs per event.
-        publishOutcomes = new Map();
-        const err = batchErr instanceof Error ? batchErr : new Error(String(batchErr));
-        for (const ev of valid) publishOutcomes.set(ev.meta.id, err);
+      if (Date.now() >= leaseDeadline) {
+        leaseDeferred = valid.length;
+      } else {
+        const startedAt = Date.now();
+        // Outcome map: eventId → null (success) or Error (failure)
+        let publishOutcomes: Map<string, Error | null>;
+        try {
+          const result = await this._transport.publishMany?.(valid);
+          publishOutcomes = batchOutcomes(valid, result);
+        } catch (batchErr) {
+          // Whole-batch failure — synthesize a uniform failure outcome so the
+          // downstream fail/ack logic still runs per event.
+          publishOutcomes = new Map();
+          const err = batchErr instanceof Error ? batchErr : new Error(String(batchErr));
+          for (const ev of valid) publishOutcomes.set(ev.meta.id, err);
+        }
+        for (const event of valid) {
+          if (publishOutcomes.get(event.meta.id) === null) this._notifyPublished(event);
+        }
+        for (const event of valid) {
+          if (await this._settle(event, publishOutcomes.get(event.meta.id) ?? null, settleCtx)) {
+            break;
+          }
+        }
+        settled = valid.length;
+        settleMs = Date.now() - startedAt;
       }
     } else {
-      // Per-event publish path — respects legacy "stop on first failure"
-      // behavior when the store has no `fail` method, because remaining
-      // events need to stay pending in FIFO order.
-      publishOutcomes = new Map();
-      for (const event of valid) {
+      // Per-event path: publish, then ack/fail AT ONCE, so each row is settled
+      // inside its lease rather than after the whole batch. Without `fail()`
+      // the batch stops at the first failure: later rows stay pending in order.
+      for (const [index, event] of valid.entries()) {
+        const nextMs = Math.max(settled > 0 ? settleMs / settled : 0, this._perEventMs ?? 0);
+        if (Date.now() + nextMs > leaseDeadline) {
+          leaseDeferred = valid.length - index;
+          break;
+        }
+        const startedAt = Date.now();
+        let publishErr: Error | null = null;
         try {
           await this._transport.publish(event);
-          publishOutcomes.set(event.meta.id, null);
         } catch (err) {
-          publishOutcomes.set(event.meta.id, err instanceof Error ? err : new Error(String(err)));
-          // Without fail(), don't publish events after the failed one —
-          // they must stay pending so relay retries in order next time.
-          if (!canFail) break;
+          publishErr = err instanceof Error ? err : new Error(String(err));
         }
+        if (publishErr === null) this._notifyPublished(event);
+        const stop = await this._settle(event, publishErr, settleCtx);
+        settled++;
+        settleMs += Date.now() - startedAt;
+        if (stop) break;
       }
     }
-
-    if (this._onPublished) {
-      for (const event of valid) {
-        if (publishOutcomes.get(event.meta.id) !== null) continue;
-        try {
-          this._onPublished(event);
-        } catch {
-          /* observation never affects the batch */
-        }
-      }
-    }
-
-    let stopBatch = false;
-
-    // Apply ack/fail per event based on publish outcome. Order of `valid`
-    // is preserved so legacy "stop on first failure" behavior works.
-    for (const event of valid) {
-      if (stopBatch) break;
-
-      const publishErr = publishOutcomes.get(event.meta.id);
-      if (publishErr instanceof Error) {
-        counts.publishFailed++;
-        this._reportError("publish_failed", publishErr, event);
-        if (!canFail) {
-          // Legacy: stop the batch on the first failure
-          stopBatch = true;
-          continue;
-        }
-
-        // Track attempts in-process; pass to the policy if configured. First
-        // failure = attempts: 1, second = 2, etc. Cleared on ack or when the
-        // event is dead-lettered (terminal state).
-        //
-        // The in-process count is only a FALLBACK. It restarts at 1 on every
-        // relay boot — so a poison event that crashes the relay never reaches
-        // `attempts >= N → deadLetter` — and every relay on a shared store keeps
-        // its own, so N means N × relays. When the store reports the durable
-        // count on the fenced claim, that one wins; `max` covers a store whose
-        // counter lags (e.g. one that only bumps it on `fail`).
-        const localAttempts = (this._attempts.get(event.meta.id) ?? 0) + 1;
-        const attempts = Math.max(localAttempts, durableAttempts.get(event.meta.id) ?? 0);
-        // delete-then-set keeps actively-failing ids at the tail of the
-        // Map's insertion order, so the cap below evicts the STALEST entry
-        // (most likely already acked by another worker after lease expiry).
-        touch(this._attempts, event.meta.id, attempts);
-        evictToSize(this._attempts, MAX_TRACKED_ATTEMPTS);
-
-        const fenceToken = fenceTokens.get(event.meta.id);
-        let failOpts: OutboxFailOptions = {
-          consumerId: this._consumerId,
-          ...(fenceToken !== undefined ? { fencingToken: fenceToken } : {}),
-        };
-        if (this._failurePolicy) {
-          try {
-            const decision = await this._failurePolicy({
-              event,
-              error: publishErr,
-              attempts,
-            });
-            failOpts = { ...failOpts, ...decision };
-          } catch (policyErr) {
-            // Policy must not break the relay — fall back to default fail() call
-            this._reportError("fail_failed", policyErr, event);
-          }
-        }
-
-        try {
-          await this._store.fail?.(event.meta.id, normalizeError(publishErr), failOpts);
-          if (failOpts.deadLetter) {
-            counts.deadLettered++;
-            this._attempts.delete(event.meta.id);
-          }
-        } catch (failErr) {
-          if (failErr instanceof OutboxOwnershipError) {
-            counts.ownershipMismatches++;
-            this._reportError("ownership_mismatch", failErr, event);
-          } else {
-            counts.failHookErrors++;
-            this._reportError("fail_failed", failErr, event);
-          }
-        }
-        continue;
-      }
-
-      // Published successfully — acknowledge
-      try {
-        const ackFenceToken = fenceTokens.get(event.meta.id);
-        await this._store.acknowledge(event.meta.id, {
-          consumerId: this._consumerId,
-          ...(ackFenceToken !== undefined ? { fencingToken: ackFenceToken } : {}),
-        });
-        counts.relayed++;
-        this._attempts.delete(event.meta.id);
-      } catch (ackErr) {
-        counts.ackFailed++;
-        if (ackErr instanceof OutboxOwnershipError) {
-          counts.ownershipMismatches++;
-          this._reportError("ownership_mismatch", ackErr, event);
-        } else {
-          this._reportError("acknowledge_failed", ackErr, event);
-        }
-      }
-    }
+    if (settled > 0) this._recordPerEventMs(settleMs / settled);
 
     return {
       relayed: counts.relayed,
@@ -612,10 +604,130 @@ export class EventOutbox {
       malformed,
       failHookErrors: counts.failHookErrors,
       deadLettered: counts.deadLettered,
-      usedPublishMany: canPublishMany && valid.length > 0,
+      usedPublishMany: canPublishMany && valid.length > 0 && leaseDeferred < valid.length,
       claimMs,
       publishMs: Date.now() - publishStartedAt,
+      ...(leaseDeferred > 0 ? { leaseDeferred } : {}),
     };
+  }
+
+  /**
+   * Rows to claim: `batchSize`, or fewer when the measured per-event time says a
+   * full batch would outlive {@link LEASE_CLAIM_FRACTION} of the lease.
+   */
+  private _claimLimit(): number {
+    const batchSize = this.batchSize;
+    if (this._perEventMs === undefined || this._perEventMs <= 0) return batchSize;
+    const fit = Math.floor((this._leaseMs * LEASE_CLAIM_FRACTION) / this._perEventMs);
+    return Math.max(1, Math.min(batchSize, fit));
+  }
+
+  private _recordPerEventMs(sample: number): void {
+    const prev = this._perEventMs;
+    this._perEventMs = prev === undefined ? sample : Math.max(sample, prev * 0.7 + sample * 0.3);
+  }
+
+  private _notifyPublished(event: DomainEvent): void {
+    if (!this._onPublished) return;
+    try {
+      this._onPublished(event);
+    } catch {
+      /* observation never affects the batch */
+    }
+  }
+
+  /**
+   * Ack a published event, or `fail()` a rejected one. Returns `true` when the
+   * batch must stop (a failure on a store without `fail`).
+   */
+  private async _settle(
+    event: DomainEvent,
+    publishErr: Error | null,
+    ctx: SettleContext,
+  ): Promise<boolean> {
+    const { canFail, counts, fenceTokens, durableAttempts } = ctx;
+    if (publishErr instanceof Error) {
+      counts.publishFailed++;
+      this._reportError("publish_failed", publishErr, event);
+      if (!canFail) {
+        // Legacy: stop the batch on the first failure
+        return true;
+      }
+
+      // Track attempts in-process; pass to the policy if configured. First
+      // failure = attempts: 1, second = 2, etc. Cleared on ack or when the
+      // event is dead-lettered (terminal state).
+      //
+      // The in-process count is only a FALLBACK. It restarts at 1 on every
+      // relay boot — so a poison event that crashes the relay never reaches
+      // `attempts >= N → deadLetter` — and every relay on a shared store keeps
+      // its own, so N means N × relays. When the store reports the durable
+      // count on the fenced claim, that one wins; `max` covers a store whose
+      // counter lags (e.g. one that only bumps it on `fail`).
+      const localAttempts = (this._attempts.get(event.meta.id) ?? 0) + 1;
+      const attempts = Math.max(localAttempts, durableAttempts.get(event.meta.id) ?? 0);
+      // delete-then-set keeps actively-failing ids at the tail of the
+      // Map's insertion order, so the cap below evicts the STALEST entry
+      // (most likely already acked by another worker after lease expiry).
+      touch(this._attempts, event.meta.id, attempts);
+      evictToSize(this._attempts, MAX_TRACKED_ATTEMPTS);
+
+      const fenceToken = fenceTokens.get(event.meta.id);
+      let failOpts: OutboxFailOptions = {
+        consumerId: this._consumerId,
+        ...(fenceToken !== undefined ? { fencingToken: fenceToken } : {}),
+      };
+      if (this._failurePolicy) {
+        try {
+          const decision = await this._failurePolicy({
+            event,
+            error: publishErr,
+            attempts,
+          });
+          failOpts = { ...failOpts, ...decision };
+        } catch (policyErr) {
+          // Policy must not break the relay — fall back to default fail() call
+          this._reportError("fail_failed", policyErr, event);
+        }
+      }
+
+      try {
+        await this._store.fail?.(event.meta.id, normalizeError(publishErr), failOpts);
+        if (failOpts.deadLetter) {
+          counts.deadLettered++;
+          this._attempts.delete(event.meta.id);
+        }
+      } catch (failErr) {
+        if (failErr instanceof OutboxOwnershipError) {
+          counts.ownershipMismatches++;
+          this._reportError("ownership_mismatch", failErr, event);
+        } else {
+          counts.failHookErrors++;
+          this._reportError("fail_failed", failErr, event);
+        }
+      }
+      return false;
+    }
+
+    // Published successfully — acknowledge
+    try {
+      const ackFenceToken = fenceTokens.get(event.meta.id);
+      await this._store.acknowledge(event.meta.id, {
+        consumerId: this._consumerId,
+        ...(ackFenceToken !== undefined ? { fencingToken: ackFenceToken } : {}),
+      });
+      counts.relayed++;
+      this._attempts.delete(event.meta.id);
+    } catch (ackErr) {
+      counts.ackFailed++;
+      if (ackErr instanceof OutboxOwnershipError) {
+        counts.ownershipMismatches++;
+        this._reportError("ownership_mismatch", ackErr, event);
+      } else {
+        this._reportError("acknowledge_failed", ackErr, event);
+      }
+    }
+    return false;
   }
 
   /**
@@ -642,6 +754,21 @@ export class EventOutbox {
     if (!this._store.purge) return 0;
     return this._store.purge(olderThanMs);
   }
+}
+
+/** Per-batch state {@link EventOutbox} threads into `_settle`. */
+interface SettleContext {
+  readonly canFail: boolean;
+  readonly counts: {
+    relayed: number;
+    publishFailed: number;
+    ackFailed: number;
+    ownershipMismatches: number;
+    failHookErrors: number;
+    deadLettered: number;
+  };
+  readonly fenceTokens: ReadonlyMap<string, number>;
+  readonly durableAttempts: ReadonlyMap<string, number>;
 }
 
 /**

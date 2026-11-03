@@ -11,5 +11,6 @@ export {
   type EventOutboxOptions,
   type OutboxRelayErrorHandler,
   type OutboxRelayErrorKind,
+  type RelayBatchOptions,
   type RelayResult,
 } from "./relay.js";

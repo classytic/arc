@@ -44,7 +44,8 @@ document.
 
 The document itself. A resource with optimistic concurrency (`concurrency: { versionField }`)
 also sends `ETag: "<version>"`; send it back as `If-Match` on the update, and a stale one is
-answered `412 arc.precondition_failed` — re-read and retry.
+answered `412 arc.precondition_failed` — re-read and retry. A resource with a `writes.update`
+verb gets the same If-Match check; the verb receives `ctx.expectedVersion` to CAS with.
 
 ```json
 { "_id": "507f1f77bcf86cd799439011", "name": "Product A", "price": 29.99 }

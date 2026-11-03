@@ -24,6 +24,12 @@ import { conjoinPolicyFilters } from "../../permissions/filter-merge.js";
 import type { AnyRecord } from "../../types/index.js";
 import { toRepositoryFilter } from "../repositoryFilter.js";
 import {
+  type AggregationFieldType,
+  type AggregationFieldTypes,
+  coerceByType,
+  guessDate,
+} from "./fieldTypes.js";
+import {
   adapterSupportsAggregate,
   compileAggRequest,
   type NormalizedAggregation,
@@ -43,6 +49,13 @@ export interface AggregationHandlerDeps {
    * correlation without duplicating the wiring.
    */
   buildOptions: (req: FastifyRequest) => AnyRecord;
+  /**
+   * Declared field types (field path → coercion class), from the resource's generated entity
+   * schema (`fieldTypesFromOpenApiSchemas`). URL filter operands are coerced BY THE FIELD's type
+   * (a string field keeps `2026-11-01` a string). The aggregation's own `fieldTypes` win over
+   * these. Fields absent from both keep the legacy shape guess.
+   */
+  fieldTypes?: AggregationFieldTypes;
 }
 
 /**
@@ -128,7 +141,9 @@ export async function executeAggregation(
   // (AND semantics — a permission restriction is never widened by a URL
   // filter). This is the SAME row-policy application CRUD list performs via
   // QueryResolver; folding it here makes aggregation enforcement identical.
-  const callerFilter = conjoinPolicyFilters(extractCallerFilter(query), policyFilter);
+  const fieldTypes =
+    config.fieldTypes || deps.fieldTypes ? { ...deps.fieldTypes, ...config.fieldTypes } : undefined;
+  const callerFilter = conjoinPolicyFilters(extractCallerFilter(query, fieldTypes), policyFilter);
   // Pass the raw query through so `compileAggRequest` can read
   // `?limit=N` when the aggregation declares URL-driven limits via
   // `defaultLimit` / `maxLimit`. When neither is declared, the query
@@ -425,13 +440,6 @@ function toOperandList(value: unknown): unknown[] {
   }
   return [value];
 }
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
-
-function tryCoerceDate(v: unknown): unknown {
-  if (typeof v !== "string" || !ISO_DATE_RE.test(v)) return v;
-  const d = new Date(v);
-  return Number.isNaN(d.getTime()) ? v : d;
-}
 
 /**
  * Translate a qs-parsed nested-operator object (`{ field: { gte, lte } }`)
@@ -439,8 +447,13 @@ function tryCoerceDate(v: unknown): unknown {
  * when EVERY key is a known shorthand operator — leaves user-data
  * objects untouched so callers can still equality-match on a stored
  * sub-document.
+ *
+ * With a declared `type` for the field, comparison operands (`eq`, `ne`, ranges, each `in` /
+ * `nin` item) are coerced by that type (`coerceByType`). Without one, only range operands are
+ * touched, by the legacy ISO-date shape guess.
  */
-function expandShorthandOperators(value: unknown): unknown {
+function expandShorthandOperators(value: unknown, type?: AggregationFieldType): unknown {
+  if (type && typeof value === "string") return coerceByType(value, type);
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const nested = value as Record<string, unknown>;
   const keys = Object.keys(nested);
@@ -452,9 +465,14 @@ function expandShorthandOperators(value: unknown): unknown {
   for (const [op, opVal] of Object.entries(nested)) {
     const mongoOp = OPERATOR_SHORTHAND[op];
     if (!mongoOp) continue;
-    if (SHORTHAND_RANGE_OPS.has(op)) expanded[mongoOp] = tryCoerceDate(opVal);
-    else if (SHORTHAND_LIST_OPS.has(op)) expanded[mongoOp] = toOperandList(opVal);
-    else expanded[mongoOp] = opVal;
+    if (SHORTHAND_RANGE_OPS.has(op)) {
+      expanded[mongoOp] = type ? coerceByType(opVal, type) : guessDate(opVal);
+    } else if (SHORTHAND_LIST_OPS.has(op)) {
+      const list = toOperandList(opVal);
+      expanded[mongoOp] = type ? list.map((v) => coerceByType(v, type)) : list;
+    } else if (type && (op === "eq" || op === "ne")) {
+      expanded[mongoOp] = coerceByType(opVal, type);
+    } else expanded[mongoOp] = opVal;
   }
   return expanded;
 }
@@ -470,7 +488,10 @@ function expandShorthandOperators(value: unknown): unknown {
  * The resulting record is shallow-merged into the AggRequest filter
  * via `compileAggRequest`.
  */
-function extractCallerFilter(query: Record<string, unknown>): AnyRecord {
+function extractCallerFilter(
+  query: Record<string, unknown>,
+  fieldTypes?: AggregationFieldTypes,
+): AnyRecord {
   const out: AnyRecord = {};
   const reserved = new Set([
     "page",
@@ -487,7 +508,7 @@ function extractCallerFilter(query: Record<string, unknown>): AnyRecord {
   for (const [key, value] of Object.entries(query)) {
     if (reserved.has(key)) continue;
     if (value === undefined || value === "") continue;
-    out[key] = expandShorthandOperators(value);
+    out[key] = expandShorthandOperators(value, fieldTypes?.[key]);
   }
   return out;
 }

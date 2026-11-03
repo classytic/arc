@@ -76,10 +76,12 @@ export type {
   ExponentialBackoffOptions,
   OutboxRelayErrorHandler,
   OutboxRelayErrorKind,
+  RelayBatchOptions,
   RelayResult,
 } from "./outbox.js";
 export { EventOutbox, exponentialBackoff, MemoryOutboxStore } from "./outbox.js";
 export type {
+  OutboxDrainRequest,
   OutboxDrainResult,
   OutboxModuleExports,
   OutboxModuleOptions,

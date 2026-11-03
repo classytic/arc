@@ -76,7 +76,8 @@ function emitMount(
     // narrow back via the same passthrough/conversion the runtime uses.
     if (a.schema) actionSchemas[a.name] = a.schema as Record<string, unknown>;
   }
-  const bodySchema = buildActionBodySchema(actionEnum, actionSchemas);
+  // `keepDefaults`: each action documents its OWN defaults on its branch.
+  const bodySchema = buildActionBodySchema(actionEnum, actionSchemas, { keepDefaults: true });
 
   // Build a human-friendly description listing each action + its
   // permission/description so codegen surfaces the per-action contract

@@ -291,10 +291,16 @@ export function repositoryAsIdempotencyStore(
     },
 
     async unlock(key: string, requestId: string): Promise<void> {
-      await r.findOneAndUpdate(
-        and(eqFilter(idField, key), eqFilter("lock.requestId", requestId)),
-        update({ unset: ["lock"] }),
-      );
+      const ours = and(eqFilter(idField, key), eqFilter("lock.requestId", requestId));
+      // A request released without a recorded response (a refusal: validation, permission, any
+      // non-2xx, or a throw) owns a claim-only row. Delete it, so the key leaves no trace and a
+      // corrected retry starts clean; leaving it result-less until its TTL kept a row per refusal.
+      const removed = (await r.deleteMany(and(ours, exists("result.statusCode", false)))) as
+        | { deletedCount?: number }
+        | undefined;
+      if ((removed?.deletedCount ?? 0) > 0) return;
+      // The row holds a result (the step protocol's finish-before-lock race): drop only the lock.
+      await r.findOneAndUpdate(ours, update({ unset: ["lock"] }));
     },
 
     async isLocked(key: string): Promise<boolean> {

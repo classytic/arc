@@ -39,6 +39,11 @@ import {
   type TestAuthProvider,
 } from "./authSession.js";
 import { createTestFixtures, type TestFixtures } from "./fixtures.js";
+import {
+  launchMongoMemory,
+  stopOnProcessExit,
+  sweepStaleMongoMemoryDirsOnce,
+} from "./mongoMemoryTmp.js";
 
 // ============================================================================
 // In-memory MongoDB — kept internal now that dbHelpers is gone.
@@ -52,12 +57,17 @@ interface InMemoryMongoHandle {
 async function startInMemoryMongo(): Promise<InMemoryMongoHandle> {
   try {
     const { MongoMemoryServer } = await import("mongodb-memory-server");
-    const mongod = await MongoMemoryServer.create();
-    const uri = mongod.getUri();
+    void sweepStaleMongoMemoryDirsOnce();
+    // Cleans up its data dir on stop, after a failed start, and on process
+    // exit / interrupt (see mongoMemoryTmp.ts).
+    const launched = await launchMongoMemory(MongoMemoryServer, "standalone");
+    const untrack = stopOnProcessExit(launched);
+    const uri = launched.server.getUri();
     return {
       uri,
       async stop() {
-        await mongod.stop();
+        untrack();
+        await launched.stop();
       },
     };
   } catch (err) {

@@ -54,6 +54,30 @@ export type RateLimitOpts = Record<string, unknown> & {
    * `createTenantKeyGenerator`'s IP fallback (documented there).
    */
   plan?: RateLimitPlanConfig;
+  /**
+   * What happens when the SHARED store (`redis` / `store`) is unavailable.
+   * Default (on whenever a shared store is configured): every store call is
+   * bounded by `timeoutMs` (250), and an error or timeout is answered from an
+   * in-process fixed-window counter, so requests neither hang nor fail and
+   * still have a limit (per instance while degraded). One warning per outage,
+   * the shared store is probed every `retryAfterMs` (5000) and resumes on its
+   * first answer; `onStatus` reports each switch (for a health or metrics
+   * signal). `false` = `@fastify/rate-limit`'s own behaviour (`skipOnError`).
+   */
+  storeFallback?:
+    | false
+    | {
+        timeoutMs?: number;
+        retryAfterMs?: number;
+        /** Most live keys per fallback counter; the oldest is dropped beyond it. Default 10000. */
+        capacity?: number;
+        onStatus?: (status: {
+          readonly mode: "shared" | "fallback";
+          readonly since: Date;
+          readonly outages: number;
+          readonly lastError?: string;
+        }) => void;
+      };
 };
 
 /** Plan-aware rate limiting (2.22) — see `rateLimit.plan` on CreateAppOptions. */

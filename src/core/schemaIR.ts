@@ -115,6 +115,23 @@ export function normalizeSchemaIR(raw: Record<string, unknown> | undefined): Sch
   };
 }
 
+/**
+ * An action schema's IR WITHOUT the `action` discriminator. Arc owns `action`:
+ * the router emits it (top-level enum, per-branch `const`), the MCP tool name
+ * carries it, and the handler's `data` never has it. A schema that declares it
+ * anyway (`z.strictObject({ action: z.literal('issue'), ... })`, one branch of
+ * a contracts discriminated union) must not override arc's: a declared
+ * `action` used to replace the top-level enum and, merged into the other
+ * branches, their `const`, so `oneOf` stopped discriminating. Strictness
+ * (`additionalProperties`) is kept as declared.
+ */
+export function actionSchemaIR(raw: Record<string, unknown> | undefined): SchemaIR {
+  const ir = normalizeSchemaIR(raw);
+  if (!("action" in ir.properties)) return ir;
+  const { action: _owned, ...properties } = ir.properties;
+  return { ...ir, properties, required: ir.required.filter((f) => f !== "action") };
+}
+
 // ============================================================================
 // Adapter — JSON Schema branch (for AJV via oneOf discriminator)
 // ============================================================================
@@ -132,9 +149,10 @@ export function normalizeSchemaIR(raw: Record<string, unknown> | undefined): Sch
  * `default` is stripped from each property schema. Zod v4's `z.toJSONSchema()`
  * emits `default` for `.default()` fields, but AJV with `useDefaults: true`
  * cannot apply defaults inside `oneOf` branches and throws a strict-mode error
- * (`strict mode: default is ignored for: <path>`). Runtime defaults are applied
- * by Zod parsing at the handler layer anyway, so the keyword is a no-op for AJV.
- * The OpenAPI doc path uses a separate `openapi-3.0` target and is unaffected.
+ * (`strict mode: default is ignored for: <path>`). The action router applies
+ * each action's own top-level defaults itself once the action is known
+ * (`collectActionDefaults` in createActionRouter.ts). OpenAPI passes
+ * `keepDefaults` so each branch documents its own defaults.
  */
 export function schemaIRToJsonSchemaBranch(
   ir: SchemaIR,
@@ -142,10 +160,12 @@ export function schemaIRToJsonSchemaBranch(
     properties?: Record<string, unknown>;
     required?: readonly string[];
   } = {},
+  /** Keep `default` on the properties (OpenAPI docs only; AJV rejects it inside `oneOf`). */
+  keepDefaults = false,
 ): Record<string, unknown> {
   const mergedProperties: Record<string, Record<string, unknown>> = {};
   for (const [key, prop] of Object.entries({ ...(extras.properties ?? {}), ...ir.properties })) {
-    if (typeof prop === "object" && prop !== null && "default" in prop) {
+    if (!keepDefaults && typeof prop === "object" && prop !== null && "default" in prop) {
       const { default: _dropped, ...rest } = prop as Record<string, unknown>;
       mergedProperties[key] = rest;
     } else {

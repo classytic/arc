@@ -29,6 +29,11 @@ import {
   createMockRepository as createArcMockRepository,
   createMockUser as createArcMockUser,
 } from "../src/testing/mocks.js";
+import {
+  type LaunchedMongoMemory,
+  launchMongoMemory,
+  stopOnProcessExit,
+} from "../src/testing/mongoMemoryTmp.js";
 
 // ============================================================================
 // Mongo lifecycle (shared across the arc test suite)
@@ -39,11 +44,16 @@ import {
 // file focused on the internal pattern so existing tests keep working.
 // ============================================================================
 
-let mongoServer: MongoMemoryServer | undefined;
+// Started through `launchMongoMemory` so a killed or crashed file still
+// removes its data dir (see src/testing/mongoMemoryTmp.ts).
+let mongoServer:
+  | { launched: LaunchedMongoMemory<MongoMemoryServer>; untrack: () => void }
+  | undefined;
 
 export async function setupTestDatabase(): Promise<string> {
-  mongoServer = await MongoMemoryServer.create();
-  const uri = mongoServer.getUri();
+  const launched = await launchMongoMemory(MongoMemoryServer, "standalone");
+  mongoServer = { launched, untrack: stopOnProcessExit(launched) };
+  const uri = launched.server.getUri();
   await mongoose.connect(uri);
   return uri;
 }
@@ -51,7 +61,8 @@ export async function setupTestDatabase(): Promise<string> {
 export async function teardownTestDatabase(): Promise<void> {
   await mongoose.disconnect();
   if (mongoServer) {
-    await mongoServer.stop();
+    mongoServer.untrack();
+    await mongoServer.launched.stop();
     mongoServer = undefined;
   }
 }

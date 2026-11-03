@@ -32,6 +32,11 @@ import { createApp } from "../factory/createApp.js";
 import type { ArcModuleInput, ArcPorts } from "../factory/module/index.js";
 import { getModuleExports } from "../factory/module/index.js";
 import type { CreateAppOptions } from "../factory/types/index.js";
+import {
+  launchMongoMemory,
+  stopOnProcessExit,
+  sweepStaleMongoMemoryDirsOnce,
+} from "./mongoMemoryTmp.js";
 import { type TestActor, testActorAuth } from "./testActor.js";
 
 /** Handed to a modules factory — the in-memory DB is live at call time. */
@@ -141,10 +146,17 @@ export async function mongoMemoryDatabase(opts: {
         "`database` factory for a different store",
     );
   }
-  const server = opts.replset
-    ? await mms.MongoMemoryReplSet.create({ replSet: { count: 1 } })
-    : await mms.MongoMemoryServer.create();
-  const uri = server.getUri();
+  // Data dirs abandoned by killed or crashed runs: swept once per process in
+  // the background, never a live server's (see mongoMemoryTmp.ts).
+  void sweepStaleMongoMemoryDirsOnce();
+  // `launchMongoMemory`, not `create()`: stop always cleans up (also after a
+  // failed start), `TEST_MONGO_TMPDIR` is honoured, and the server is stopped
+  // when the process exits or is interrupted before teardown.
+  const launched = opts.replset
+    ? await launchMongoMemory(mms.MongoMemoryReplSet, "replset", { replSet: { count: 1 } })
+    : await launchMongoMemory(mms.MongoMemoryServer, "standalone");
+  const untrack = stopOnProcessExit(launched);
+  const uri = launched.server.getUri();
 
   // Own the DEFAULT connection — kernels and models register against it
   // (`mongoose.model()`, engines defaulting to `mongoose.connection`), so a
@@ -168,7 +180,8 @@ export async function mongoMemoryDatabase(opts: {
       if (mongoose.connection.readyState !== 0) {
         await mongoose.disconnect().catch(() => undefined);
       }
-      await server.stop().catch(() => undefined);
+      untrack();
+      await launched.stop().catch(() => undefined);
     },
   };
 }

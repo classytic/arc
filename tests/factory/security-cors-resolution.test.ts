@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { resolveCorsOptions } from "../../src/factory/security/cors.js";
+import { corsMissingRouteMethods, resolveCorsOptions } from "../../src/factory/security/cors.js";
 
 describe("resolveCorsOptions — pure CORS policy", () => {
   it("throws on origin:'*' + credentials:true (reflected-origin hazard)", () => {
@@ -47,6 +47,47 @@ describe("resolveCorsOptions — pure CORS policy", () => {
       resolveCorsOptions({ preset: "production", cors: { origin: ["https://a.com"] } }).warnings,
     ).toHaveLength(0);
     expect(resolveCorsOptions({ cors: {} }).warnings).toHaveLength(0);
+  });
+
+  it("defaults `methods` to arc's route verbs; a declared list (array or string) is kept", () => {
+    expect(resolveCorsOptions({ cors: { origin: ["https://a.com"] } }).options.methods).toEqual([
+      "GET",
+      "HEAD",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ]);
+    expect(resolveCorsOptions({ cors: { methods: ["GET"] } }).options.methods).toEqual(["GET"]);
+    expect(resolveCorsOptions({ cors: { methods: "GET,POST" } as never }).options.methods).toBe(
+      "GET,POST",
+    );
+  });
+
+  it("widens `methods` for a string or RegExp allow-list too", () => {
+    expect(resolveCorsOptions({ cors: { origin: "https://a.com" } }).options.methods).toContain(
+      "DELETE",
+    );
+    expect(resolveCorsOptions({ cors: { origin: /\.a\.com$/ } }).options.methods).toContain(
+      "DELETE",
+    );
+  });
+
+  it("keeps @fastify/cors's GET,HEAD,POST for a reflecting origin with credentials, and warns", () => {
+    for (const origin of [true, () => true] as const) {
+      const { options, warnings } = resolveCorsOptions({
+        cors: { origin: origin as never, credentials: true },
+      });
+      expect(options.methods).toBeUndefined();
+      expect(warnings.some((w) => w.includes("GET,HEAD,POST"))).toBe(true);
+    }
+    // A declared list is the host's decision: no widening, no warning.
+    const declared = resolveCorsOptions({
+      cors: { origin: true, credentials: true, methods: ["GET", "PUT"] },
+    });
+    expect(declared.options.methods).toEqual(["GET", "PUT"]);
+    expect(declared.warnings).toHaveLength(0);
   });
 
   it("merges arc protocol headers into a declared allowedHeaders list (case-insensitive, no dupes)", () => {
@@ -94,5 +135,34 @@ describe("resolveCorsOptions — pure CORS policy", () => {
     // arc's headers on each boot.
     expect(hostConfig.cors.allowedHeaders).toEqual(["Content-Type"]);
     expect(hostConfig.cors.exposedHeaders).toEqual(["x-total-count"]);
+  });
+});
+
+describe("corsMissingRouteMethods — route verbs the CORS methods omit", () => {
+  it("uses @fastify/cors's GET,HEAD,POST when methods is unset", () => {
+    expect(corsMissingRouteMethods({}, ["GET", "POST", "patch", "DELETE", "OPTIONS"])).toEqual([
+      "DELETE",
+      "PATCH",
+    ]);
+  });
+
+  it("reads a declared array or comma string, case-insensitively", () => {
+    expect(corsMissingRouteMethods({ methods: ["get", "put"] }, ["PUT", "DELETE"])).toEqual([
+      "DELETE",
+    ]);
+    expect(corsMissingRouteMethods({ methods: "GET, PATCH" }, ["PATCH", "PUT"])).toEqual(["PUT"]);
+  });
+
+  it("never reports safelisted verbs", () => {
+    expect(
+      corsMissingRouteMethods({ methods: ["PUT"] }, ["GET", "HEAD", "POST", "OPTIONS"]),
+    ).toEqual([]);
+  });
+
+  it("flags methodsWarned only for the reflecting-origin + credentials case", () => {
+    expect(resolveCorsOptions({ cors: { origin: true, credentials: true } }).methodsWarned).toBe(
+      true,
+    );
+    expect(resolveCorsOptions({ cors: { origin: true } }).methodsWarned).toBe(false);
   });
 });

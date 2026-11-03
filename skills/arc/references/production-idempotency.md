@@ -74,7 +74,7 @@ repository: new Repository(IdempotencyModel, [methodRegistryPlugin(), batchOpera
 
 ## IdempotencyStore contract
 
-Required: `name`, `get`, `set`, `tryLock`, `unlock`, `isLocked`, `delete`, `deleteByPrefix`, `findByPrefix`. Optional: `acquire` (atomic check-and-lock), `setIfLocked` (fenced completion), `supportsFencedCompletion`, `completionReleasesLock`, `close`. A custom store without fencing needs `allowUnfencedCompletion: true`.
+Required: `name`, `get`, `set`, `tryLock`, `unlock`, `isLocked`, `delete`, `deleteByPrefix`, `findByPrefix`. Optional: `acquire` (atomic check-and-lock), `setIfLocked` (fenced completion), `supportsFencedCompletion`, `completionReleasesLock`, `close`. A custom store without fencing needs `allowUnfencedCompletion: true`. `unlock` after a non-2xx must leave no claim behind (the repository store deletes a result-less row it locks).
 
 ## Gotchas
 

@@ -20,6 +20,7 @@ import type { LookupSpec } from "@classytic/repo-core/lookup";
 import type { AggDateBucket, AggMeasure, AggTopN } from "@classytic/repo-core/repository";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { AnyRecord } from "../../types/index.js";
+import type { AggregationFieldType } from "./fieldTypes.js";
 
 /**
  * Sugar for measures: `'count'` / `'count:field'` / `'sum:price'` /
@@ -317,6 +318,16 @@ export interface AggregationConfig {
    * all-time scans on billion-row collections.
    */
   requireDateRange?: AggregationDateRangeRequirement;
+
+  /**
+   * Declared types of the fields a caller may filter on (`field path → "string" | "number" |
+   * "boolean" | "date"`). URL operands are coerced by the field's type, so a string field holding
+   * `YYYY-MM-DD` civil dates keeps `?civilDate[gte]=2026-11-01` a string instead of a Date that
+   * matches nothing. Merged over the types arc derives from the resource's generated entity
+   * schema (these win). A field in neither keeps the legacy guess (ISO-looking range operands
+   * become Dates).
+   */
+  fieldTypes?: Readonly<Record<string, AggregationFieldType>>;
 
   /**
    * Documented index expectation. Arc warns at boot when the kit

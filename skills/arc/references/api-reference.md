@@ -16,7 +16,7 @@ Import only from these subpaths (tree-shaken, no deep imports). Authoritative li
 | `/events` | `eventPlugin`, `MemoryEventTransport`, `defineEvent`, `createEventRegistry`, `withRetry`, `withInbox`, `withSubscriberId`, `wrapWithSchema`, `subscribeWithSchema`, `wrapWithBoundary`, `subscribeWithBoundary`, `createDeadLetterPublisher`, `EventOutbox`, `MemoryOutboxStore`, `repositoryAsOutboxStore`, `createOutboxModule`, `exponentialBackoff`, `readOutboxHealth`, `crudEventType`, `ARC_LIFECYCLE_EVENTS` |
 | `/events/redis`, `/events/redis-stream` | `RedisEventTransport`, `RedisStreamTransport` |
 | `/outbox-admin` | `createOutboxAdminModule` |
-| `/plugins` | `healthPlugin`, `gracefulShutdownPlugin`, `ssePlugin`, `metricsPlugin`, `versioningPlugin`, `schedulesPlugin`, `cachingPlugin`, `pressurePlugin`, `realtimePlugin`, `requestIdPlugin`, `errorHandlerPlugin`, `createPlugin`, `createDailyGate`, `createMemoryDailyLedger`; types `DailyLedger`, `DailyScheduleOptions`, `ScheduleRunContext`, `ScheduleDefinition` |
+| `/plugins` | `healthPlugin`, `gracefulShutdownPlugin`, `ssePlugin`, `metricsPlugin`, `versioningPlugin`, `schedulesPlugin`, `cachingPlugin`, `pressurePlugin`, `realtimePlugin`, `requestIdPlugin`, `errorHandlerPlugin`, `createPlugin`, `createDailyGate`, `createMemoryDailyLedger`, `registerSseStats`, `createSseConnectionGauge`; types `DailyLedger`, `DailyScheduleOptions`, `ScheduleRunContext`, `ScheduleDefinition` |
 | `/plugins/tracing`, `/plugins/response-cache` | `tracingPlugin`, `traced`, `createSpan`; `responseCachePlugin` |
 | `/audit` | `auditPlugin`, `MemoryAuditStore`, `repositoryAsAuditStore`, `createAuditEntry` |
 | `/idempotency` (+ `/idempotency/redis`) | `idempotencyPlugin`, `MemoryIdempotencyStore`, `repositoryAsIdempotencyStore`, `IdempotencyStoreMisconfiguredError`; `RedisIdempotencyStore` |
@@ -25,7 +25,7 @@ Import only from these subpaths (tree-shaken, no deep imports). Authoritative li
 | `/context`, `/logger` | `requestContext`, `transactionContext`, `runWorkScope`; `arcLog`, `configureArcLogger` |
 | `/registry`, `/discovery`, `/docs` | `ResourceRegistry`, `introspectionPlugin`; `discoverResources`; `openApiPlugin`, `scalarPlugin`, `buildOpenApiSpec` |
 | `/schemas` | `Type`, `ArcListResponse`, `ArcErrorResponse`, `ArcPaginationQuery` |
-| `/utils` | `createStateMachine`, `CircuitBreaker`, `withCompensation`, `defineGuard`, `declareRuntimeCapability`, `createQueryParser`, `ArcQueryParser`, `createError`, `pipeUIMessageStreamToReply`, `listResponse`, `errorContractSchema`, error classes |
+| `/utils` | `createStateMachine`, `CircuitBreaker`, `withCompensation`, `defineGuard`, `declareRuntimeCapability`, `createQueryParser`, `ArcQueryParser`, `createError`, `pipeUIMessageStreamToReply`, `openSseStream`, `createReplayHub`, `lastEventIdOf`, `STREAM_FRAMES`, `registerSseStats`, `createSseConnectionGauge`, `listResponse`, `errorContractSchema`, error classes |
 | `/migrations` | `defineMigration`, `MigrationRunner`, `MigrationRegistry`, `MongoMigrationStore` |
 | `/cleanup` | `createDataCleanupModule`, `createCleanupService`, `createCleanupRegistry`, `recipeFromSteps` |
 | `/encryption` | `encryptionPlugin`, `encryptField`, `decryptField`, `createStaticKeyProvider` |

@@ -98,19 +98,21 @@ describe("createOutboxModule", () => {
     ).toBe(false);
   });
 
-  it("reuses ONE relay across ticks — a per-tick instance would break the lease", () => {
+  it("reuses ONE relay across ticks — a per-tick instance would break the lease", async () => {
     /**
      * `EventOutbox` carries the consumer id the lease is keyed on. Rebuilding it every few seconds
      * would make each tick a different claimant, and the lease is the only thing stopping two
      * relays publishing the same event.
      */
     const mod = createOutboxModule({ store: new MemoryOutboxStore() });
-    const exp = mod.bootstrap!(app()) as { relay: { relay: () => Promise<unknown> } };
-    const spy = vi.spyOn(exp.relay, "relay").mockResolvedValue(undefined as never);
+    const exp = mod.bootstrap!(app()) as { relay: { relayBatch: () => Promise<unknown> } };
+    const spy = vi
+      .spyOn(exp.relay, "relayBatch")
+      .mockResolvedValue({ attempted: 0, relayed: 0 } as never);
 
     const [job] = schedules(mod);
-    void job!.handler(app());
-    void job!.handler(app());
+    // Ticks are single-flight (G-LOAD-2): the second waits for the first.
+    await Promise.all([job!.handler(app()), job!.handler(app())]);
 
     expect(spy).toHaveBeenCalledTimes(2); // same instance both ticks
   });

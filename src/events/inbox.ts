@@ -18,7 +18,12 @@ export interface InboxOptions {
   readonly store: IdempotencyClaimStore;
   /** Must exceed the handler's worst-case run time. Default: the store's lease default. */
   readonly leaseMs?: number;
-  /** Commit or roll back ALL work, including claim completion; external effects need their own key. */
+  /**
+   * Commit or roll back ALL work, including claim completion; external effects need their own key.
+   * Covers only writes made with the handler's `context.session`. A write outside it runs while this
+   * transaction stays open (a database-wide lock can then deadlock on it): omit `transaction` for
+   * such a handler and dedupe by `context.eventId`.
+   */
   readonly transaction?: <T>(work: (session: unknown) => Promise<T>) => Promise<T>;
 }
 

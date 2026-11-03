@@ -153,6 +153,7 @@ export type {
   AuthOption,
   BetterAuthOption,
   BootDisposer,
+  CreateAppHttpOptions,
   CreateAppOptions,
   CustomAuthenticatorOption,
   CustomPluginAuthOption,

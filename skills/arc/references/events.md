@@ -104,7 +104,7 @@ await subscribeWithBoundary(app, 'cache.*', invalidate);     // log and swallow,
 | Helper | Use |
 |---|---|
 | `withSubscriberId(id, handler)` | Stable per-handler identity for durable per-handler progress (never an index) |
-| `withInbox(name, handler, { store, leaseMs?, transaction? })` | Run a handler once per event id; `store` is a repo-core `IdempotencyClaimStore`; handler gets `{ session, eventId }` |
+| `withInbox(name, handler, { store, leaseMs?, transaction? })` | Run a handler once per event id; `store` is a repo-core `IdempotencyClaimStore`; handler gets `{ session, eventId }`; `transaction` covers only writes made with that `session` (omit it when a handler writes elsewhere) |
 | `createDeadLetterPublisher(app.events)` | Handler that publishes exhausted events to `$deadLetter`; pass as `onDead` or `deadLetter` |
 
 Dead-letter contract: a transport may implement `deadLetter(dlq: DeadLetteredEvent)`.
@@ -114,7 +114,7 @@ Dead-letter contract: a transport may implement `deadLetter(dlq: DeadLetteredEve
 | Transport | Import | Use |
 |---|---|---|
 | `MemoryEventTransport` | `@classytic/arc/events` | Dev, tests, one process |
-| `RedisEventTransport(redis, { channel, externalLifecycle, logger })` | `@classytic/arc/events/redis` | Pub/Sub, fire-and-forget, live fan-out |
+| `RedisEventTransport(redis, { channel, externalLifecycle, logger, subscribeTimeoutMs, publishTimeoutMs })` | `@classytic/arc/events/redis` | Pub/Sub, fire-and-forget, live fan-out; Redis down: subscribe returns after 2 s (queued), publish rejects after 5 s then at once until ready |
 | `RedisStreamTransport(redis, opts)` | `@classytic/arc/events/redis-stream` | Persistent, consumer groups, replay, DLQ stream |
 
 Streams options: `stream` ('arc:events'), `group` ('default'), `consumer`, `blockTimeMs` (5000), `batchSize` (10), `processingConcurrency` (1, keeps order), `maxRetries` (5), `claimTimeoutMs` (30000), `deadLetterStream` ('arc:events:dlq' or `false`), `maxLen` (0), `groupStart` ('latest' | 'beginning'), `maxPayloadBytes` (1 MB), `externalLifecycle`.

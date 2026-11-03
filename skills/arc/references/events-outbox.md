@@ -32,14 +32,17 @@ const app = await createApp({
 | `transport` | Default: the app's raw event transport (not the `app.events` facade) |
 | `name` | Module name and `dependsOn` key (default `'outbox'`) |
 | `relayEveryMs` | Default 5000 |
-| `batchSize`, `leaseMs`, `consumerId` | Relay tuning; `consumerId` defaults to a per-instance unique id |
+| `batchSize`, `leaseMs`, `consumerId` | Relay tuning; `consumerId` defaults to a per-instance unique id. `leaseMs` must exceed one publish + ack, not a batch: claims shrink to fit the lease. A repository page `maxLimit` below `batchSize` warns `OUTBOX_CLAIM_CAPPED` once and `batchSize` drops to the store's `claimCap` |
+| `maxPassesPerTick` | Default 1. Above 1, a tick (and `requestDrain`) keeps relaying while the last pass claimed and relayed something (a claim capped below `batchSize` does not stop it); an empty or all-failed pass stops. Replaces hand-rolled `relayBatch` loops |
 | `failurePolicy` | `({ attempts, error }) => { retryAt } \| { deadLetter: true }`. Set one: without it failed rows retry every poll forever |
-| `onError` | Per-event relay problems (default: structured logger) |
+| `onError` | Per-event relay problems (default: structured logger; lost leases log one `OUTBOX_LEASE_LOST` warning per pass, then back off) |
 | `sessionProvider` | Default `() => transactionContext.get()`; `false` opts out |
 | `runOnStart` | Drain backlog at boot (default true) |
 | `health` | Readiness check `<name>.relay` + log alerts; `false` disables. `{ relayLagUnhealthyMs, probeCacheMs, alertEveryMs }` |
 
-Exports at `getModuleExports<OutboxModuleExports>(app, 'outbox')`: `store`, `relay` (an `EventOutbox`), `requestDrain()` (coalesced, call after commit), `drain({ maxPasses })` (await in tests), `health()`.
+Exports at `getModuleExports<OutboxModuleExports>(app, 'outbox')`: `store`, `relay` (an `EventOutbox`), `requestDrain({ types? })` (coalesced, call after commit; `types` = a priority pass for those event types ahead of the backlog, published once by the relay), `drain({ maxPasses })` (await in tests), `health()`.
+
+Passes are single-flight: a `requestDrain` during a pass queues one follow-up, a tick waits instead of overlapping. Typed drains run in their own lane. A pass publishes a claimed row only while its lease has budget left and acks it at once; rows past the budget stay leased and are re-claimed after expiry, never published twice by one relay. Leave `batchSize` at its default on a slow store.
 
 ## Writing
 
@@ -59,7 +62,7 @@ await outbox.store(
 ```typescript
 const outbox = new EventOutbox({ repository: repo, transport, failurePolicy, batchSize: 100, leaseMs: 30000 });
 const r = await outbox.relayBatch();
-// { relayed, attempted, publishFailed, ackFailed, ownershipMismatches, malformed, failHookErrors, deadLettered, usedPublishMany }
+// { relayed, attempted, publishFailed, ackFailed, ownershipMismatches, malformed, failHookErrors, deadLettered, usedPublishMany, leaseDeferred? }
 const dead = await outbox.getDeadLettered(100);      // DeadLetteredEvent[]
 await outbox.purge(olderThanMs);                      // delivered rows
 ```

@@ -64,7 +64,7 @@ import {
   selectPluginMw,
   tryRegisterRoute,
 } from "./routerShared.js";
-import { normalizeSchemaIR, schemaIRToJsonSchemaBranch } from "./schemaIR.js";
+import { actionSchemaIR, schemaIRToJsonSchemaBranch } from "./schemaIR.js";
 
 // ============================================================================
 // Types
@@ -429,6 +429,21 @@ export function createActionRouter(
       if (actionSchemas[name]) subsetSchemas[name] = actionSchemas[name];
     }
     const bodySchema = buildActionBodySchema(actionSubset, subsetSchemas);
+    const actionDefaults = collectActionDefaults(actionSubset, subsetSchemas);
+
+    // Before AJV (so the filled value is validated too, as `useDefaults` would):
+    // only the SUBMITTED action's defaults, only for fields the caller left out.
+    const applyActionDefaults = async (req: FastifyRequest): Promise<void> => {
+      const body = req.body as Record<string, unknown> | null | undefined;
+      if (!body || typeof body !== "object" || Array.isArray(body)) return;
+      const entries = typeof body.action === "string" ? actionDefaults.get(body.action) : undefined;
+      if (!entries) return;
+      for (const [key, value] of entries) {
+        if (body[key] === undefined) {
+          body[key] = typeof value === "object" && value !== null ? structuredClone(value) : value;
+        }
+      }
+    };
 
     const routeSchema: Record<string, unknown> = {
       tags: tag ? [tag] : undefined,
@@ -532,6 +547,7 @@ export function createActionRouter(
         method: "POST",
         url: urlPath,
         schema: routeSchema as FastifySchema,
+        ...(actionDefaults.size > 0 ? { preValidation: [applyActionDefaults] } : {}),
         ...routeHookOptions(hooks),
         ...buildRouteConfig(
           rateLimitConfig,
@@ -678,13 +694,27 @@ export function createActionRouter(
  * `additionalProperties: false` rejects unknown fields on every host. The full
  * property union stays because a host-supplied `validatorCompiler` may still strip.
  *
- * Pinned by `tests/core/action-discriminator-strip.test.ts` and
- * `action-strict-schema-parity.test.ts`. Exported so OpenAPI and MCP tool
- * generation reuse one shape.
+ * NO `default` ANYWHERE AJV WOULD APPLY IT. AJV `useDefaults` ignores defaults
+ * inside `oneOf` and applies top-level ones to EVERY body, so a top-level
+ * `default` wrote one action's default into every other action's body (a strict
+ * action then refused its own valid input). The top level and the branches
+ * carry no `default`; the router applies the submitted action's own defaults
+ * (`collectActionDefaults`). `keepDefaults` (OpenAPI only) keeps each action's
+ * defaults on its own branch, for docs.
+ *
+ * ARC OWNS `action`. An action schema that declares it (a contracts
+ * discriminated-union branch) is read through `actionSchemaIR`, which drops
+ * it, so the top-level enum and each branch's `const` stay arc's.
+ *
+ * Pinned by `tests/core/action-discriminator-strip.test.ts`,
+ * `action-strict-schema-parity.test.ts`, `action-default-isolation.test.ts`
+ * and `action-schema-declares-discriminator.test.ts`.
+ * Exported so OpenAPI and MCP tool generation reuse one shape.
  */
 export function buildActionBodySchema(
   actionEnum: readonly string[],
   actionSchemas: Record<string, Record<string, unknown>> = {},
+  options: { readonly keepDefaults?: boolean } = {},
 ): Record<string, unknown> {
   // First pass: normalize every action's IR and accumulate the property
   // union. Two actions MAY declare one field name with different shapes
@@ -694,7 +724,7 @@ export function buildActionBodySchema(
   // valid body. Each branch still validates its own declaration.
   const unionProperties: Record<string, Record<string, unknown>> = {};
   const conflicting = new Set<string>();
-  const irs: Array<{ name: string; ir: ReturnType<typeof normalizeSchemaIR> }> = [];
+  const irs: Array<{ name: string; ir: ReturnType<typeof actionSchemaIR> }> = [];
 
   for (const actionName of actionEnum) {
     // Normalize each action's schema through the shared IR ([./schemaIR.ts])
@@ -703,7 +733,7 @@ export function buildActionBodySchema(
     // verbatim — authors who declare `additionalProperties: false` in their
     // action `schema` get strict AJV rejection of unknown fields AND strict
     // MCP rejection in a single declaration.
-    const ir = normalizeSchemaIR(actionSchemas[actionName]);
+    const ir = actionSchemaIR(actionSchemas[actionName]);
     irs.push({ name: actionName, ir });
     for (const [key, val] of Object.entries(ir.properties)) {
       const prior = unionProperties[key];
@@ -712,8 +742,10 @@ export function buildActionBodySchema(
       unionProperties[key] = val;
     }
   }
-  const topLevelProperties: Record<string, Record<string, unknown>> = { ...unionProperties };
-  for (const key of conflicting) topLevelProperties[key] = {};
+  const topLevelProperties: Record<string, Record<string, unknown>> = {};
+  for (const [key, val] of Object.entries(unionProperties)) {
+    topLevelProperties[key] = conflicting.has(key) ? {} : withoutDefault(val);
+  }
 
   // Second pass: emit each branch with the full union baked into its
   // `properties` (action discriminator is overridden per-branch). This is
@@ -729,6 +761,7 @@ export function buildActionBodySchema(
           properties: { action: { type: "string", const: name } },
           required: ["action"],
         },
+        options.keepDefaults === true,
       ),
     );
   }
@@ -742,6 +775,31 @@ export function buildActionBodySchema(
     },
     oneOf: branches,
   };
+}
+
+function withoutDefault(prop: Record<string, unknown>): Record<string, unknown> {
+  if (!("default" in prop)) return prop;
+  const { default: _dropped, ...rest } = prop;
+  return rest;
+}
+
+/**
+ * Each action's own top-level `default`s, keyed by action name. The router
+ * fills the submitted action's missing fields from this before validation,
+ * so a default reaches only the action that declared it.
+ */
+export function collectActionDefaults(
+  actionEnum: readonly string[],
+  actionSchemas: Record<string, Record<string, unknown>> = {},
+): Map<string, ReadonlyArray<readonly [string, unknown]>> {
+  const defaults = new Map<string, ReadonlyArray<readonly [string, unknown]>>();
+  for (const name of actionEnum) {
+    const entries = Object.entries(actionSchemaIR(actionSchemas[name]).properties)
+      .filter(([, prop]) => typeof prop === "object" && prop !== null && "default" in prop)
+      .map(([key, prop]) => [key, prop.default] as const);
+    if (entries.length > 0) defaults.set(name, entries);
+  }
+  return defaults;
 }
 
 // ============================================================================

@@ -26,6 +26,7 @@ await app.listen({ port: 3000, host: '0.0.0.0' });
 | `trustProxy` | `true`, CIDR string/array, or `'loopback'`. Unset behind a proxy makes `request.ip` the proxy |
 | `keepAliveTimeout` | Default 72000; keep above the LB idle timeout or you get intermittent 502 |
 | `requestTimeout`, `connectionTimeout`, `bodyLimit`, `maxParamLength` | Fastify pass-through (body 1 MiB, param 400) |
+| `http` | Node server options pass-through: `highWaterMark`, `maxHeaderSize`, `requireHostHeader`, `joinDuplicateHeaders`, `noDelay`, `keepAlive*` |
 | `underPressure` | Production preset sets `maxEventLoopDelay: 3000`; override `{ maxEventLoopDelay: 500 }`, disable `false` |
 | `strictResourceDir`, `strictResources` | Throw on empty discovery or duplicate resource names; turn on in production |
 | `resourceDir: import.meta.url` | Works from `src/` and `dist/`; a path string resolves against `process.cwd()` |
@@ -62,6 +63,7 @@ export default { fetch: toFetchHandler(app) };
 
 ## CORS
 
+- Unset `methods` → arc's verbs (`GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS`), not `@fastify/cors`'s `GET,HEAD,POST`, when `origin` is an explicit allow-list (string, array, RegExp). `origin: true` or a function keeps `GET,HEAD,POST` (boot warning with `credentials: true`). Any resolved list that omits a verb your routes use (e.g. `origin: true` without credentials vs CRUD `PATCH`/`DELETE`) logs one `onReady` warning naming the verbs.
 - Production without `cors.origin` warns. `origin: '*'` with `credentials: true` throws at boot; use an allow-list.
 - Arc merges its headers (`x-organization-id`, `x-arc-scope`, `x-request-id`) into a declared `allowedHeaders` list and always exposes its own response headers.
 - Mobile webviews (Capacitor, Ionic): add webview origins and expose the Better Auth bearer header.

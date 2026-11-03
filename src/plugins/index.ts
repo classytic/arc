@@ -30,6 +30,9 @@ import "../types/fastify-augmentation.js";
 export type { ArcCore, ArcCorePluginOptions, PluginMeta } from "../core/arcCorePlugin.js";
 // Arc core (instance-scoped hooks & registry)
 export { default as arcCorePlugin } from "../core/arcCorePlugin.js";
+// `fastify.sseStats()` registration for custom `openSseStream` routes (also on `./utils`)
+export type { SseConnectionGauge } from "../utils/sseStats.js";
+export { createSseConnectionGauge, registerSseStats } from "../utils/sseStats.js";
 export type { CachingOptions, CachingRule } from "./caching.js";
 // Caching headers (ETag + Cache-Control)
 export { default as cachingPlugin } from "./caching.js";

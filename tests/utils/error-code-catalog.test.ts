@@ -29,6 +29,8 @@ const NOT_ERROR_CODES = new Set([
   "arc.session",
   "arc.module.absent",
   "arc.shutdown", // Symbol.for key in utils/shutdown.ts
+  "arc.realtime.revoke", // replay-hub revoke broadcast event type (utils/replayStream.ts)
+  "arc.transport_unavailable", // in-process Error.code of a refused Redis publish (events/transports/redis.ts), read by outbox failure policies; never on the wire
 ]);
 
 /**

@@ -69,6 +69,24 @@ export {
   ArcQueryParser,
   createQueryParser,
 } from "./queryParser.js";
+// Resumable SSE over a repo-core ChangeLogStore — replay, resync, revalidate, revoke
+export type {
+  ReadyFrame,
+  ReplayCloseVerdict,
+  ReplayHub,
+  ReplayHubOptions,
+  ReplayHubStats,
+  ReplayHubTimers,
+  ReplayReadScope,
+  ReplaySubscription,
+  ResyncFrame,
+  ResyncReason,
+  RetryFrame,
+  RevokedFrame,
+  RevokeTarget,
+  StreamFrameName,
+} from "./replayStream.js";
+export { createReplayHub, lastEventIdOf, STREAM_FRAMES } from "./replayStream.js";
 export type { JsonSchema } from "./responseSchemas.js";
 // Response Schemas
 export {
@@ -105,9 +123,16 @@ export {
 } from "./shutdown.js";
 // Minimal flat-equality matcher for `DataAdapter.matchesFilter` on custom/minimal repos
 export { simpleEqualityMatcher } from "./simpleEqualityMatcher.js";
+// One `fastify.sseStats()` gauge across every SSE surface (boot-time registration)
+export type { SSEStats, SseConnectionGauge } from "./sseStats.js";
+export { createSseConnectionGauge, registerSseStats } from "./sseStats.js";
 export type { SseStream, SseStreamOptions } from "./sseStream.js";
-// SSE transport primitive — hijack + CORS-merged headers, heartbeat, backpressure fail-fast
-export { openSseStream } from "./sseStream.js";
+// SSE transport primitive — hijack + CORS-merged headers, heartbeat, bounded backpressure (drain within a byte/time budget)
+export {
+  openSseStream,
+  SSE_DEFAULT_DRAIN_TIMEOUT_MS,
+  SSE_DEFAULT_MAX_BUFFERED_BYTES,
+} from "./sseStream.js";
 export type { StateMachine, TransitionConfig } from "./stateMachine.js";
 // State Machine
 export { createStateMachine } from "./stateMachine.js";

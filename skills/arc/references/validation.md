@@ -38,6 +38,7 @@ routes: [{
 
 - A failed parse is `400 arc.validation_error` with `details[]` (`path`, `message`), the same wire as an AJV failure.
 - A plain JSON Schema slot is AJV-only (no preHandler is added for it).
+- AJV coerces querystring, params and headers only. JSON bodies are validated as sent (`"5"` for a number is a 400; `false` under `anyOf [number, boolean]` stays `false`). `createApp({ ajv: { coerceBody: true } })` opts back in.
 - `parsed(schema, value)` is a typing helper: it does not parse again.
 - `headers` and `response` are schema-only.
 
@@ -72,6 +73,8 @@ actions: {
 
 `noPayloadSchema` is plain JSON Schema (`additionalProperties: false`): any stray field is a 400.
 
+Arc owns `action`: `data` never carries it. A schema may still declare it (a contracts union branch, `z.strictObject({ action: z.literal('close'), ... })`): arc keeps its own discriminator for AJV, OpenAPI and MCP, and `parse: true` parses with `action` put back, then drops it from `data`.
+
 ## The wrapper pitfall
 
 An action's `schema` IS the body schema. `schema: { body: X }` has no `type` or `properties`, arc reads it as empty, and the action accepts anything with no error.
@@ -88,4 +91,5 @@ schema: z.object({ note: z.string() })             // right
 - `customSchemas` parts replace generated parts; untouched parts keep auto-generation. Model-required fields the server fills: `schemaOptions.fieldRules: { f: { systemManaged: true } }`.
 - Unconvertible zod in a validation slot (`z.date()`, `z.bigint()`, custom checks) fails boot: use the wire form (`z.iso.datetime()`, `z.string()`) and convert in the handler.
 - A `.refine()` is not enforced by AJV: it needs `routeInput` / `parse: true`, or do it in the handler.
+- Your own error code for a refinement: tag the issue (`ctx.addIssue({ ..., params: { code } })`) and pass `routeInput(slots, { mapIssues })` / `crudInput({ ..., mapIssues })`, returning an `ArcError` (or `undefined` for the default 400).
 - A thrown raw `ZodError` from your own `.parse()` is not mapped to a 400 by arc; use `routeInput` or throw `ValidationError`.

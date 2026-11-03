@@ -8,11 +8,15 @@ export interface ResourceRateLimitPolicy {
   timeWindow: string;
   /** Explicit route overrides own a separate budget. */
   bucket?: string;
+  /** Routes sharing a `groupId` share one budget, across resources; it supersedes `bucket`. */
+  groupId?: string;
 }
 
 export interface ResourceRateLimitContext {
   scope?: RequestScope;
   ip?: string;
+  /** The host's `keyGenerator` result; when set it replaces the scope/IP key. */
+  key?: string;
 }
 
 export interface ResourceRateLimitDecision {
@@ -44,6 +48,13 @@ function decision(
 function policyIdentity(resource: string, policy: ResourceRateLimitPolicy): string {
   if (!Number.isSafeInteger(policy.max) || policy.max <= 0)
     throw new Error("rateLimit.max must be a positive safe integer.");
+  if (policy.groupId !== undefined)
+    return JSON.stringify([
+      "arc-group",
+      policy.groupId,
+      policy.max,
+      resourceRateLimitWindowMs(policy.timeWindow),
+    ]);
   return JSON.stringify([
     "arc-resource",
     resource,
@@ -66,7 +77,13 @@ export interface ResourceRateLimiter {
 const RESOURCE_RATE_LIMITER = Symbol.for("arc.resourceRateLimiter");
 const tenantKey = createTenantKeyGenerator();
 
+/** The budget's owner inside the store key: the resource, or the group that spans resources. */
+function budgetOwner(resource: string, policy: ResourceRateLimitPolicy): string {
+  return policy.groupId === undefined ? resource : `group:${policy.groupId}`;
+}
+
 export function resourceRateLimitKey(resource: string, context: ResourceRateLimitContext): string {
+  if (context.key !== undefined) return JSON.stringify([resource, "key", context.key]);
   const actor = tenantKey({ scope: context.scope, ip: context.ip ?? "anonymous" });
   const dimension =
     context.scope &&
@@ -144,7 +161,10 @@ export function resolveResourceRateLimiter(
       }
       // The plugin only needs the supplied key and route config for this numeric policy.
       const req = {
-        ip: JSON.stringify([identity, resourceRateLimitKey(resource, context)]),
+        ip: JSON.stringify([
+          identity,
+          resourceRateLimitKey(budgetOwner(resource, policy), context),
+        ]),
         routeOptions: { config: {} },
       } as FastifyRequest;
       const result = await consume(req);
@@ -174,7 +194,7 @@ export function createMemoryResourceRateLimiter(capacity = 10000): ResourceRateL
       const windowMs = resourceRateLimitWindowMs(policy.timeWindow);
       const key = JSON.stringify([
         policyIdentity(resource, policy),
-        resourceRateLimitKey(resource, context),
+        resourceRateLimitKey(budgetOwner(resource, policy), context),
       ]);
       let slot = windows.get(key);
       if (!slot || slot.expires <= now) {

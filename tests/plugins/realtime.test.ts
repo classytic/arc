@@ -357,6 +357,8 @@ describe("Realtime Plugin", () => {
     const feed = openFeed(`${base}/realtime/note`);
     await feed.headersArrived;
     await sleep(60); // subscription live after the ready frame
+    // The feed counts in the shared `sseStats()` gauge.
+    expect(app.sseStats().connections).toBe(1);
 
     const created = await app.inject({
       method: "POST",
@@ -368,6 +370,11 @@ describe("Realtime Plugin", () => {
     const { statusCode, body } = await feed.done;
     expect(statusCode).toBe(200);
     expect(body).toContain("event: ready");
+    // Shared stream contract: `resources`/`operations` kept, `resumed: false` added
+    // (no replay on this feed, so no `cursor`).
+    expect(body).toMatch(
+      /event: ready\ndata: \{"resources":\["note"\],"operations":\[[^\]]*\],"resumed":false\}/,
+    );
     expect(body).toContain("event: note.created");
     expect(body).toContain('"title":"hello"');
     // SSE-standard fields: reconnection hint at connect, per-frame id

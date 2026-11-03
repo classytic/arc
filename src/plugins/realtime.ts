@@ -35,8 +35,9 @@
  * bounds session/cookie auth that has none.
  *
  * NON-GOALS: no replay/resume (a change NOTIFIER, not an event store — use the
- * outbox for guaranteed delivery); filters must be CONCRETE at connect, since a
- * rule referencing a row absent from the payload cannot be evaluated in
+ * outbox for guaranteed delivery, or `createReplayHub` from `@classytic/arc/utils`
+ * for a resumable custom stream over a repo-core `ChangeLogStore`); filters
+ * must be CONCRETE at connect, since a rule referencing a row absent from the payload cannot be evaluated in
  * process; no presence/broadcast (`app.events` + sse cover that); no payload
  * E2EE (TLS + field masking is the posture). Delivery is per-instance and
  * follows the transport's semantics.
@@ -66,7 +67,9 @@ import { getUserRoles } from "../permissions/types.js";
 import type { RequestScope } from "../scope/types.js";
 import type { RegistryEntry } from "../types/index.js";
 import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
+import { registerSseStats } from "../utils/sseStats.js";
 import { openSseStream } from "../utils/sseStream.js";
+import { STREAM_FRAMES } from "../utils/streamFrames.js";
 import { promoteStreamTokenToHeader } from "../utils/streaming.js";
 
 const log = arcLog("realtime");
@@ -352,6 +355,8 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
   }
 
   const activeConnections = new Set<() => void>();
+  // Counted in `fastify.sseStats().connections` beside ssePlugin and replay hubs.
+  registerSseStats(fastify, () => ({ connections: activeConnections.size, keys: 0 }));
 
   /** One authorized resource on a connection: everything delivery needs. */
   interface ResourceSubscription {
@@ -550,10 +555,13 @@ const realtimePlugin: FastifyPluginAsync<RealtimeOptions> = async (
     // Ready frame — clients know the subscription is live (and what it
     // carries) before the first change arrives.
     stream.write(
-      "ready",
+      STREAM_FRAMES.READY,
       JSON.stringify({
         resources: subscriptions.map((s) => s.name),
         operations: [...operations],
+        // The shared stream contract (`ReadyFrame`): this feed has no replay, so a
+        // connection is never resumed and no `cursor` is sent.
+        resumed: false,
       }),
     );
   };

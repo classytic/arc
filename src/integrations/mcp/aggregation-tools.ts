@@ -28,6 +28,7 @@
 import type { ErrorContract } from "@classytic/repo-core/errors";
 import { z } from "zod";
 import { executeAggregation } from "../../core/aggregation/buildHandler.js";
+import type { AggregationFieldTypes } from "../../core/aggregation/fieldTypes.js";
 import type { AggregationConfig, AggregationsMap } from "../../core/aggregation/types.js";
 import type { NormalizedAggregation } from "../../core/aggregation/validate.js";
 import { validateAggregations } from "../../core/aggregation/validate.js";
@@ -74,6 +75,8 @@ export function buildAggregationTools(args: {
    * group keys or measure values.
    */
   fields?: FieldPermissionMap;
+  /** Declared field types for filter coercion (same map the REST route uses). */
+  fieldTypes?: AggregationFieldTypes;
 }): ToolDefinition[] {
   const {
     resourceName,
@@ -132,6 +135,7 @@ export function buildAggregationTools(args: {
         buildOptionsFromSession,
         fields,
         tenantMiddlewares: args.tenantMiddlewares,
+        fieldTypes: args.fieldTypes,
       }),
     });
   }
@@ -254,6 +258,7 @@ interface CreateHandlerArgs {
   buildOptionsFromSession: (session: unknown) => AnyRecord;
   tenantMiddlewares?: readonly unknown[];
   fields?: FieldPermissionMap;
+  fieldTypes?: AggregationFieldTypes | undefined;
 }
 
 function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["handler"] {
@@ -300,7 +305,11 @@ function createAggregationToolHandler(args: CreateHandlerArgs): ToolDefinition["
 
     const result = await executeAggregation(
       normalized,
-      { repo, buildOptions: () => tenantOptions },
+      {
+        repo,
+        buildOptions: () => tenantOptions,
+        ...(args.fieldTypes ? { fieldTypes: args.fieldTypes } : {}),
+      },
       {
         query: filterInput,
         tenantOptions,

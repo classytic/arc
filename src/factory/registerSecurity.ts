@@ -19,9 +19,10 @@ import {
  */
 
 import type { FastifyInstance } from "fastify";
-import { resolveCorsOptions } from "./security/cors.js";
+import { corsMissingRouteMethods, resolveCorsOptions } from "./security/cors.js";
 import { loadPlugin, preflightPlugins } from "./security/pluginLoader.js";
 import { buildRateLimitOpts } from "./security/rateLimit.js";
+import { applyRateLimitStoreFallback } from "./security/rateLimitStore.js";
 import type { CreateAppOptions } from "./types/index.js";
 
 // Re-exported from this module's historical home — createApp, registerArcPlugins,
@@ -56,11 +57,33 @@ export async function registerSecurityPlugins(
   // preflight max-age default) lives in security/cors.ts as a pure function.
   if (config.cors !== false) {
     const cors = await loadPlugin("cors");
-    const { options: corsOptions, warnings } = resolveCorsOptions(config);
+    const { options: corsOptions, warnings, methodsWarned } = resolveCorsOptions(config);
     for (const warning of warnings) {
       fastify.log.warn(warning);
     }
     await fastify.register(cors, corsOptions);
+
+    // Route-aware methods check: a preflight for a verb outside the resolved
+    // `methods` fails in the browser with nothing on the server. Collect the
+    // verbs routes actually register and warn once at boot for any the CORS
+    // config omits (e.g. `origin: true` without credentials keeps
+    // @fastify/cors's GET,HEAD,POST while CRUD routes answer PATCH/DELETE).
+    const routeMethods = new Set<string>();
+    fastify.addHook("onRoute", (route) => {
+      for (const method of [route.method].flat()) routeMethods.add(String(method));
+    });
+    fastify.addHook("onReady", async () => {
+      if (methodsWarned) return;
+      const missing = corsMissingRouteMethods(corsOptions, routeMethods);
+      if (missing.length === 0) return;
+      fastify.log.warn(
+        `CORS \`methods\` omit ${missing.join(", ")}, which registered routes use: ` +
+          "cross-origin requests on those verbs fail their browser preflight. " +
+          "Declare cors.methods (e.g. ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS']) " +
+          "or set cors.origin to an explicit allow-list so arc allows its route verbs. " +
+          "Ignore this if those routes are same-origin only.",
+      );
+    });
     fastify.log.debug("CORS enabled");
   } else {
     fastify.log.warn("CORS disabled");
@@ -69,8 +92,12 @@ export async function registerSecurityPlugins(
   // Rate limiting — DDoS protection
   if (config.rateLimit !== false) {
     const rateLimit = await loadPlugin("rateLimit");
-    const rateLimitOpts = buildRateLimitOpts(
-      config.rateLimit ?? { max: 100, timeWindow: "1 minute" },
+    // A shared store (Redis / custom) answers through a bounded call with an
+    // in-memory fallback (`storeFallback`, security/rateLimitStore.ts): an
+    // outage limits per instance instead of hanging or 500-ing every request.
+    const rateLimitOpts = await applyRateLimitStoreFallback(
+      buildRateLimitOpts(config.rateLimit ?? { max: 100, timeWindow: "1 minute" }),
+      fastify.log,
     );
     await fastify.register(rateLimit, rateLimitOpts);
 

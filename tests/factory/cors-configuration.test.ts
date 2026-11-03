@@ -266,6 +266,30 @@ describe("CORS preflight requests", () => {
     expect(res.headers["access-control-allow-methods"]).toBeDefined();
   });
 
+  it("a host cors object without `methods` allows arc's write verbs (PUT, PATCH, DELETE)", async () => {
+    // The host object replaces the preset's, so @fastify/cors alone would answer GET,HEAD,POST.
+    app = await buildApp({ origin: ["https://portal.example"], credentials: false });
+    const res = await preflight(app, "https://portal.example", "PUT");
+    expect(res.statusCode).toBe(204);
+    const allowed = String(res.headers["access-control-allow-methods"]).split(/,\s*/);
+    expect(allowed).toEqual(expect.arrayContaining(["GET", "POST", "PUT", "PATCH", "DELETE"]));
+  });
+
+  it("origin: true with credentials does not widen methods (no credentialed cross-origin DELETE)", async () => {
+    app = await buildApp({ origin: true, credentials: true });
+    const res = await preflight(app, "https://evil.example", "DELETE");
+    const allowed = String(res.headers["access-control-allow-methods"]).split(/,\s*/);
+    expect(allowed).not.toContain("DELETE");
+    expect(allowed).not.toContain("PUT");
+    expect(allowed).not.toContain("PATCH");
+  });
+
+  it("a declared `methods` list is kept as is", async () => {
+    app = await buildApp({ origin: ["https://portal.example"], methods: ["GET"] });
+    const res = await preflight(app, "https://portal.example", "PUT");
+    expect(res.headers["access-control-allow-methods"]).toBe("GET");
+  });
+
   it("OPTIONS preflight should include custom allowed headers", async () => {
     app = await buildApp({
       origin: true,

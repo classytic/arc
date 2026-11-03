@@ -57,6 +57,60 @@ export interface RedisEventTransportOptions {
    * Pass `fastify.log` to integrate with your application logger.
    */
   logger?: EventLogger;
+
+  /**
+   * Longest `subscribe()` waits for Redis to confirm a subscription (ms). Past it the
+   * handler is registered anyway and the SUBSCRIBE stays queued on the client (ioredis
+   * sends it once connected and re-subscribes after every reconnect), so an app BOOTS
+   * while Redis is down instead of hanging until it returns. One warning per outage;
+   * while the subscriber is not connected, later subscriptions do not wait at all.
+   * @default 2000
+   */
+  subscribeTimeoutMs?: number;
+
+  /**
+   * Longest `publish()` waits for Redis (ms) before it rejects, so a caller with a retry
+   * (the outbox relay) retries later instead of hanging on a client that queues while
+   * disconnected. A publish that timed out may still be sent when the client reconnects:
+   * handlers must be idempotent by event id (they already must be for at-least-once).
+   * @default 5000
+   */
+  publishTimeoutMs?: number;
+}
+
+/** Settle `promise` within `ms`: `'timeout'` when it did not. The promise keeps running. */
+function within<T>(promise: Promise<T>, ms: number): Promise<{ value: T } | "timeout"> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve("timeout"), ms);
+    (timer as { unref?: () => void }).unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ value });
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * `error.code` of a publish refused because Redis did not answer (never a bad event): an outbox
+ * `failurePolicy` can keep retrying it instead of counting it toward dead-lettering.
+ */
+export const TRANSPORT_UNAVAILABLE = "arc.transport_unavailable";
+
+function unavailable(message: string): Error {
+  return Object.assign(new Error(message), { code: TRANSPORT_UNAVAILABLE });
+}
+
+function positiveMs(name: string, value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value) || value <= 0)
+    throw new Error(`[RedisEventTransport] ${name} must be a positive number of milliseconds.`);
+  return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,18 +167,47 @@ export class RedisEventTransport implements EventTransport {
   /** Tracks whether the pmessage listener has been attached. */
   private listenerAttached = false;
 
+  private subscribeTimeoutMs: number;
+  private publishTimeoutMs: number;
+
+  /** A subscription timed out and the subscriber has not been ready since: do not wait again. */
+  private subscriberDown = false;
+
+  /** A publish timed out and the publisher has not been ready since: refuse at once. */
+  private publisherDown = false;
+
   constructor(redis: RedisLike, options: RedisEventTransportOptions = {}) {
     const { channel = "arc-events", externalLifecycle = false, logger = console } = options;
 
     this.channel = channel;
     this.externalLifecycle = externalLifecycle;
     this.logger = logger;
+    this.subscribeTimeoutMs = positiveMs("subscribeTimeoutMs", options.subscribeTimeoutMs, 2000);
+    this.publishTimeoutMs = positiveMs("publishTimeoutMs", options.publishTimeoutMs, 5000);
 
     // Use the provided client for publishing, create a dedicated duplicate for subscribing.
     // ioredis requires separate connections for pub and sub because a client in
     // subscriber mode cannot issue regular commands.
     this.pub = redis;
     this.sub = redis.duplicate();
+    // Optional on the publisher: a hand-rolled client may implement only the commands.
+    if (typeof this.pub.on === "function")
+      this.pub.on("ready", () => {
+        this.publisherDown = false;
+      });
+    // The duplicate is ours: without a listener ioredis prints every failed reconnect as an
+    // unhandled error. One warning per outage instead (reset when it is ready again).
+    let reported = false;
+    this.sub.on("error", (err: unknown) => {
+      if (reported) return;
+      reported = true;
+      this.logger.warn(
+        `[RedisEventTransport] subscriber connection error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+    this.sub.on("ready", () => {
+      reported = false;
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -133,7 +216,22 @@ export class RedisEventTransport implements EventTransport {
 
   async publish(event: DomainEvent): Promise<void> {
     const redisChannel = `${this.channel}:${event.type}`;
-    await this.pub.publish(redisChannel, serialize(event));
+    if (this.publisherDown)
+      // A publish already timed out and the client has not been ready since: fail at once (the
+      // caller retries) rather than wait `publishTimeoutMs` on every event of the outage.
+      throw unavailable(
+        `[RedisEventTransport] publish of ${event.type} refused: Redis unavailable`,
+      );
+    const sent = await within(
+      this.pub.publish(redisChannel, serialize(event)),
+      this.publishTimeoutMs,
+    );
+    if (sent === "timeout") {
+      this.publisherDown = true;
+      throw unavailable(
+        `[RedisEventTransport] publish of ${event.type} not confirmed within ${this.publishTimeoutMs} ms (Redis unavailable?)`,
+      );
+    }
   }
 
   // -----------------------------------------------------------------------
@@ -145,18 +243,34 @@ export class RedisEventTransport implements EventTransport {
 
     const redisPattern = this.toRedisPattern(pattern);
 
-    if (!this.handlers.has(redisPattern)) {
-      this.handlers.set(redisPattern, new Set());
+    const known = this.handlers.get(redisPattern);
+    // Registered before Redis confirms: a message that arrives as the confirmation does is not missed.
+    this.handlers.set(redisPattern, (known ?? new Set<EventHandler>()).add(handler));
 
+    if (!known) {
       // Decide between exact SUBSCRIBE or pattern PSUBSCRIBE.
-      if (this.isGlob(redisPattern)) {
-        await this.sub.psubscribe(redisPattern);
+      const confirmed = this.isGlob(redisPattern)
+        ? this.sub.psubscribe(redisPattern)
+        : this.sub.subscribe(redisPattern);
+      if (this.subscriberDown) {
+        // Already known down: queued on the client, never waited on (boot must not stall per pattern).
+        confirmed.catch((err: unknown) => this.subscribeFailed(redisPattern, err));
       } else {
-        await this.sub.subscribe(redisPattern);
+        const outcome = await within(confirmed, this.subscribeTimeoutMs).catch((err: unknown) => {
+          // A refused command (not a slow one) is still the caller's error, as before.
+          this.handlers.delete(redisPattern);
+          throw err;
+        });
+        if (outcome === "timeout") {
+          this.subscriberDown = true;
+          confirmed.catch((err: unknown) => this.subscribeFailed(redisPattern, err));
+          this.logger.warn(
+            `[RedisEventTransport] Redis did not confirm a subscription within ${this.subscribeTimeoutMs} ms: ` +
+              "continuing; subscriptions are sent when it connects (no cross-instance events until then)",
+          );
+        }
       }
     }
-
-    this.handlers.get(redisPattern)?.add(handler);
 
     // Return unsubscribe function.
     return () => {
@@ -182,11 +296,11 @@ export class RedisEventTransport implements EventTransport {
       // The subscriber connection is always a duplicate we created, so we
       // always quit it. The publisher is the client the user passed in, so
       // we only quit it when externalLifecycle is false.
-      await Promise.all([this.sub.quit(), this.pub.quit()]);
+      await Promise.all([this.quitOrDrop(this.sub), this.quitOrDrop(this.pub)]);
     } else {
       // Even with external lifecycle we quit the subscriber duplicate since we
       // created it ourselves.
-      await this.sub.quit();
+      await this.quitOrDrop(this.sub);
     }
   }
 
@@ -195,11 +309,33 @@ export class RedisEventTransport implements EventTransport {
   // -----------------------------------------------------------------------
 
   /**
+   * QUIT waits for Redis like any command (queued while disconnected): bounded, then the socket is
+   * dropped (`disconnect()` when the client has one), so an app can shut down during an outage.
+   */
+  private async quitOrDrop(client: RedisLike): Promise<void> {
+    const quit = client.quit();
+    quit.catch(() => {});
+    const outcome = await within(quit, this.publishTimeoutMs).catch(() => "failed" as const);
+    if (outcome === "timeout" || outcome === "failed")
+      (client as RedisLike & { disconnect?: () => void }).disconnect?.();
+  }
+
+  /** A queued subscription that Redis refused once it answered (logged; the handler stays registered). */
+  private subscribeFailed(redisPattern: string, err: unknown): void {
+    this.logger.error(`[RedisEventTransport] Subscription to ${redisPattern} failed:`, err);
+  }
+
+  /**
    * Attach the Redis message listeners exactly once.
    */
   private ensureListener(): void {
     if (this.listenerAttached) return;
     this.listenerAttached = true;
+
+    // Subscriber connected (again): later subscriptions may wait for their confirmation.
+    this.sub.on("ready", () => {
+      this.subscriberDown = false;
+    });
 
     // Pattern-matched messages (from psubscribe)
     this.sub.on("pmessage", (...args: unknown[]) => {

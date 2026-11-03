@@ -24,12 +24,12 @@ const app = await createApp({
 
 Full rationale in changelog 2.22 ("hardening wave" sections); the contracts:
 
-- CORS `origin: '*'` + `credentials: true` **throws at boot** (was: silent rewrite to reflect-any-origin). Fixes listed in the error. Policy lives in `factory/security/cors.ts` (`resolveCorsOptions`, pure).
+- CORS `origin: '*'` + `credentials: true` **throws at boot** (was: silent rewrite to reflect-any-origin). Fixes listed in the error. Policy lives in `factory/security/cors.ts` (`resolveCorsOptions`, pure). Unset `methods` defaults to arc's verbs (a host `cors` object replaces the preset's, and `@fastify/cors` alone allows `GET,HEAD,POST`) only for an explicit origin allow-list (string, array, RegExp); `origin: true` or a function keeps `GET,HEAD,POST` and, with `credentials: true`, warns at boot. `registerSecurity` also warns once at `onReady` when registered routes use a verb the resolved `methods` omit (`corsMissingRouteMethods`).
 - Client-sent bad bytes are **always 400, never 500** — one primitive (`utils/jsonBody.ts` `parseJsonBody`) backs the JSON / SCIM / JWE parsers; raw cause logged, never wired.
 - Unclassified 500 messages sanitized in prod — `errorHandler({ exposeInternalMessages })`; domain-coded 5xx keep their messages.
 - Request id is **server-level** (`genReqId: createRequestIdGenerator()`, automatic) so `request.id`, `request.log`'s `reqId`, requestContext, and the echoed header all agree. Exported for standalone use.
 - `arcLog` routes through `fastify.log` via `createPinoWriter` (inherits transports/level/redaction); `logger: false` keeps the console fallback.
-- Knobs: `requestTimeout`/`connectionTimeout`/`keepAliveTimeout` pass-throughs (no arc defaults — Node ≥18 bounds slow-loris; a forced requestTimeout would 408 slow uploads); `trustProxy` accepts CIDR / named / list / `true` forms — NOT a hop count (fastify 5.12.1 removed `number` and fails closed: a hop count cannot validate the immediate peer, so padded `X-Forwarded-*` would spoof `request.ip`). Default `false` everywhere incl. the production preset (2.24 fail-closed flip; proxied hosts must set it explicitly).
+- Knobs: `http` (Node `http.createServer` options: `highWaterMark`, header limits, `noDelay`, `keepAlive*`; pass-through, no defaults); `requestTimeout`/`connectionTimeout`/`keepAliveTimeout` pass-throughs (no arc defaults — Node ≥18 bounds slow-loris; a forced requestTimeout would 408 slow uploads); `trustProxy` accepts CIDR / named / list / `true` forms — NOT a hop count (fastify 5.12.1 removed `number` and fails closed: a hop count cannot validate the immediate peer, so padded `X-Forwarded-*` would spoof `request.ip`). Default `false` everywhere incl. the production preset (2.24 fail-closed flip; proxied hosts must set it explicitly).
 - Multipart caps every busboy dimension (`fields: 100`, `parts: 120` join `fileSize`/`files`); host `limits` deep-merge per key.
 
 ## Plan-aware rate limits (2.22)

@@ -285,27 +285,77 @@ function toFetchRequest(request: FastifyRequest): Request {
  *
  * Transfers status code, all response headers, and the body.
  * Handles both buffered (JSON) and streaming (SSE) responses.
+ *
+ * A buffered JSON error (status >= 400, body a plain object) gains arc's
+ * envelope fields when absent: `status` and `correlationId` (`request.id`),
+ * the same two the error handler stamps on arc's own refusals. Anything else
+ * is passed through byte-identical.
  */
-async function sendFetchResponse(response: Response, reply: FastifyReply): Promise<void> {
+async function sendFetchResponse(
+  response: Response,
+  reply: FastifyReply,
+  request?: FastifyRequest,
+): Promise<void> {
   reply.status(response.status);
-
-  response.headers.forEach((value, key) => {
-    // Fastify manages transfer-encoding itself.
-    if (key.toLowerCase() === "transfer-encoding") return;
-    reply.header(key, value);
-  });
 
   // Stream SSE / binary bodies; buffer everything else as text.
   const contentType = response.headers.get("content-type") ?? "";
-  if (
-    response.body &&
-    (contentType.includes("text/event-stream") || contentType.includes("application/octet-stream"))
-  ) {
-    await reply.send(response.body);
-  } else {
-    const body = await response.text();
-    await reply.send(body);
+  const streamed =
+    response.body !== null &&
+    (contentType.includes("text/event-stream") || contentType.includes("application/octet-stream"));
+  let body: string | undefined;
+  let rewritten = false;
+  if (!streamed) {
+    body = await response.text();
+    const enveloped = request
+      ? withErrorEnvelope(body, response.status, contentType, request.id)
+      : undefined;
+    if (enveloped !== undefined) {
+      body = enveloped;
+      rewritten = true;
+    }
   }
+
+  response.headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    // Fastify manages transfer-encoding itself.
+    if (lower === "transfer-encoding") return;
+    // A rewritten body has a new length; Fastify computes it from the payload.
+    if (rewritten && lower === "content-length") return;
+    reply.header(key, value);
+  });
+
+  await reply.send(streamed ? response.body : body);
+}
+
+/**
+ * The enveloped JSON text for a Better Auth error body, or `undefined` to
+ * send the original bytes (not an error, not JSON, not a plain object, or
+ * nothing to add).
+ */
+function withErrorEnvelope(
+  text: string,
+  status: number,
+  contentType: string,
+  correlationId: string | undefined,
+): string | undefined {
+  if (status < 400 || !contentType.toLowerCase().includes("json")) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const obj = parsed as Record<string, unknown>;
+  const addStatus = obj.status === undefined;
+  const addCorrelation = obj.correlationId === undefined && correlationId !== undefined;
+  if (!addStatus && !addCorrelation) return undefined;
+  return JSON.stringify({
+    ...obj,
+    ...(addStatus ? { status } : {}),
+    ...(addCorrelation ? { correlationId } : {}),
+  });
 }
 
 // ============================================================================
@@ -816,7 +866,7 @@ export function createBetterAuthAdapter(
         try {
           const fetchRequest = toFetchRequest(request);
           const fetchResponse = await auth.handler(fetchRequest);
-          await sendFetchResponse(fetchResponse, reply);
+          await sendFetchResponse(fetchResponse, reply, request);
         } catch (err) {
           throw new ArcError("Authentication service error", {
             code: ARC_ERROR_CODES.AUTH_SERVICE_ERROR,

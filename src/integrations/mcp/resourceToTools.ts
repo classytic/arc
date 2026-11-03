@@ -20,6 +20,7 @@ import { createMemoryResourceRateLimiter } from "../../permissions/resourceRateL
 
 import { z } from "zod";
 import { resolveActionPermission } from "../../core/actionPermissions.js";
+import { fieldTypesFromOpenApiSchemas } from "../../core/aggregation/fieldTypes.js";
 import {
   normalizeActionsToRouterConfig,
   resolveActionTargetFence,
@@ -562,6 +563,7 @@ export function resourceToTools(
         tenantMiddlewares: resource.middlewares?.aggregations,
         prefix,
         fields: resource.fields,
+        fieldTypes: fieldTypesFromOpenApiSchemas(resource._registryMeta?.openApiSchemas),
       }),
     );
   }

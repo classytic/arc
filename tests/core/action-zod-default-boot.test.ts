@@ -15,8 +15,9 @@
  *
  *     Fix in [../../src/core/schemaIR.ts] `schemaIRToJsonSchemaBranch` (~L130):
  *     strip `default` from each property when emitting a branch's JSON Schema.
- *     The top-level `unionProperties` keep `default`, so AJV still applies it
- *     at request time. (Adding "default" to AJV's `keywords` allowlist was
+ *     The router applies the submitted action's own defaults before AJV runs
+ *     (`collectActionDefaults`; a top-level `default` leaked into every other
+ *     action — see action-default-isolation.test.ts). (Adding "default" to AJV's `keywords` allowlist was
  *     attempted first — it fails with "Keyword default is already defined"
  *     because AJV ships `default` as a built-in. Do NOT reintroduce that path.)
  *

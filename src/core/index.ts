@@ -24,6 +24,8 @@ export type {
   AggregationCacheConfig,
   AggregationConfig,
   AggregationDateRangeRequirement,
+  AggregationFieldType,
+  AggregationFieldTypes,
   AggregationIndexHint,
   AggregationMaterializedContext,
   AggregationMaterializedResult,
@@ -111,10 +113,13 @@ export { QueryResolver } from "./QueryResolver.js";
 export { type NativePolicyFilter, nativePolicyFilter } from "./repositoryFilter.js";
 // Declare a zod schema once per route / action / CRUD verb: AJV + parsed handler input + docs
 export {
+  type CrudInput,
   crudInput,
   type InputSchema,
   noPayloadSchema,
   parsed,
+  type RouteInputIssue,
+  type RouteInputOptions,
   type RouteInputSlots,
   routeInput,
 } from "./routeInput.js";

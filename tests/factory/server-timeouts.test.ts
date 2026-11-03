@@ -33,6 +33,32 @@ describe("server timeout and trustProxy pass-throughs", () => {
     expect(app.initialConfig.keepAliveTimeout).toBe(65_000);
   });
 
+  it("passes `http` server options through: every accepted socket gets the write mark", async () => {
+    app = await createApp({
+      logger: false,
+      preset: "testing",
+      auth: false,
+      http: { highWaterMark: 1 << 20, maxHeaderSize: 32 * 1024 },
+    });
+    app.get("/mark", async (request) => ({
+      socket: request.raw.socket.writableHighWaterMark,
+    }));
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as { port: number };
+    const res = await fetch(`http://127.0.0.1:${port}/mark`);
+    expect(await res.json()).toMatchObject({ socket: 1 << 20 });
+    expect(app.server.maxHeaderSize).toBe(32 * 1024);
+  });
+
+  it("without `http` the Node defaults stay (16 KiB socket write mark)", async () => {
+    app = await createApp({ logger: false, preset: "testing", auth: false });
+    app.get("/mark", async (request) => ({ socket: request.raw.socket.writableHighWaterMark }));
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as { port: number };
+    const res = await fetch(`http://127.0.0.1:${port}/mark`);
+    expect(await res.json()).toEqual({ socket: 16 * 1024 });
+  });
+
   it("leaves Fastify defaults untouched when not configured", async () => {
     app = await createApp({ preset: "testing", auth: false });
     expect(app.initialConfig.requestTimeout).toBe(0);

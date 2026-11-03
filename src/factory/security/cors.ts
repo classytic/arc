@@ -3,7 +3,7 @@
  * expressed as a pure function so every rule is unit-testable without a
  * Fastify instance.
  *
- * Five policies live here:
+ * Six policies live here:
  *   1. Production without a declared origin → warning (catches the
  *      env-var-undefined trap).
  *   2. `origin: '*'` + `credentials: true` → boot-time THROW (the browser
@@ -19,6 +19,12 @@
  *      exposes NOTHING, so the list is created when absent.
  *   5. Preflight caching: `maxAge` defaults to 24h when unset (`0` is
  *      respected as explicit no-cache).
+ *   6. `methods` defaults to the verbs arc's routes register (unreleased,
+ *      after 2.48) instead of `@fastify/cors`'s `GET,HEAD,POST`, but only
+ *      for an explicit origin allow-list; `origin: true` / a function with
+ *      `credentials: true` keeps the narrow list and warns. Whatever the
+ *      resolved list, registerSecurity warns at `onReady` when registered
+ *      routes use a verb it omits (`corsMissingRouteMethods`).
  *
  * The returned options NEVER alias the host's arrays — merging into an
  * aliased `allowedHeaders`/`exposedHeaders` would mutate the caller's
@@ -57,11 +63,62 @@ const ARC_EXPOSED_HEADERS = ["set-auth-token"] as const;
  */
 const DEFAULT_CORS_MAX_AGE = 86_400;
 
+/**
+ * `Access-Control-Allow-Methods` when the host's `cors` object names none:
+ * the verbs arc's own routes register (CRUD `PUT`/`PATCH`/`DELETE` included),
+ * the same list the production and development presets carry. `@fastify/cors`
+ * alone allows only `GET,HEAD,POST`, so a host `cors` object (which replaces the
+ * preset's) silently broke every cross-origin update and delete.
+ */
+const ARC_DEFAULT_CORS_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+/** `@fastify/cors`'s own `methods` default, answered when `options.methods` is unset. */
+const FASTIFY_CORS_DEFAULT_METHODS = ["GET", "HEAD", "POST"];
+
+/**
+ * CORS-safelisted methods: browsers never check them against
+ * `Access-Control-Allow-Methods`, so a route on one of these verbs cannot
+ * fail its preflight for want of the verb. `OPTIONS` is the preflight itself.
+ */
+const PREFLIGHT_EXEMPT_METHODS = new Set(["GET", "HEAD", "POST", "OPTIONS"]);
+
 export interface CorsResolution {
   /** The options object to hand to `@fastify/cors`. */
   options: Record<string, unknown>;
   /** Config-quality warnings for the caller to log (order preserved). */
   warnings: string[];
+  /**
+   * True when `warnings` already explains a narrow `methods` default (reflecting
+   * origin with credentials). The route-aware check in registerSecurity skips
+   * its own warning then, so the host sees one message, not two.
+   */
+  methodsWarned?: boolean;
+}
+
+/**
+ * The verbs registered routes use that the resolved CORS `methods` do not allow
+ * (sorted, upper case). Safelisted verbs never count. Feeds the boot warning
+ * for cross-origin PUT/PATCH/DELETE that would fail their preflight silently.
+ */
+export function corsMissingRouteMethods(
+  options: Record<string, unknown>,
+  routeMethods: Iterable<string>,
+): string[] {
+  const declared = options.methods;
+  const allowed = new Set(
+    (Array.isArray(declared)
+      ? (declared as string[])
+      : typeof declared === "string"
+        ? declared.split(",")
+        : FASTIFY_CORS_DEFAULT_METHODS
+    ).map((m) => m.trim().toUpperCase()),
+  );
+  const missing = new Set<string>();
+  for (const method of routeMethods) {
+    const verb = method.toUpperCase();
+    if (!PREFLIGHT_EXEMPT_METHODS.has(verb) && !allowed.has(verb)) missing.add(verb);
+  }
+  return [...missing].sort();
 }
 
 /**
@@ -74,6 +131,7 @@ export function resolveCorsOptions(
 ): CorsResolution {
   const corsOptions = { ...(config.cors ?? {}) } as Record<string, unknown>;
   const warnings: string[] = [];
+  let methodsWarned = false;
 
   // Production CORS warning — also catches the env-derived `undefined`
   // hazard. The canonical README pattern was
@@ -154,11 +212,37 @@ export function resolveCorsOptions(
     corsOptions.exposedHeaders = exposed;
   }
 
+  // Smart CORS: allow the verbs arc's routes answer when the host named no
+  // `methods`. A declared list (string or array) is kept as is. Only an
+  // explicit origin allow-list (string, array, RegExp) gets the widened list:
+  // `origin: true` or a function reflects origins arc cannot see, and with
+  // `credentials: true` the wider list would let any website send credentialed
+  // updates and deletes. Those keep @fastify/cors's `GET,HEAD,POST`.
+  if (corsOptions.methods === undefined) {
+    const origin = corsOptions.origin;
+    const explicitAllowList =
+      typeof origin === "string" || Array.isArray(origin) || origin instanceof RegExp;
+    if (explicitAllowList) {
+      corsOptions.methods = [...ARC_DEFAULT_CORS_METHODS];
+    } else if (
+      corsOptions.credentials === true &&
+      (origin === true || typeof origin === "function")
+    ) {
+      warnings.push(
+        "CORS `origin` reflects any origin (true or a function) with `credentials: true` and names no `methods`: " +
+          "arc keeps @fastify/cors's GET,HEAD,POST, so cross-origin PUT/PATCH/DELETE fail their preflight. " +
+          "Set cors.origin to an explicit allow-list (arc then allows its route verbs), or declare cors.methods " +
+          "yourself if the origin function already restricts origins.",
+      );
+      methodsWarned = true;
+    }
+  }
+
   // Smart CORS: cache the preflight unless the host opted out or set a
   // value. `maxAge: 0` is respected (explicit no-cache).
   if (corsOptions.maxAge === undefined) {
     corsOptions.maxAge = DEFAULT_CORS_MAX_AGE;
   }
 
-  return { options: corsOptions, warnings };
+  return { options: corsOptions, warnings, methodsWarned };
 }

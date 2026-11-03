@@ -47,22 +47,48 @@ export type CacheResult<T> =
 
 const MISS: CacheResult<never> = Object.freeze({ status: "miss", data: undefined });
 
+/** `QueryCache` options. */
+export interface QueryCacheOptions {
+  /**
+   * Called once per store outage (the first failed operation after a success) with the
+   * error and the operation. While the store fails, reads miss (the source answers), writes
+   * are skipped, and invalidations are remembered and replayed when it answers again.
+   */
+  onStoreError?: (err: unknown, operation: string) => void;
+}
+
 export class QueryCache {
   private readonly store: CacheStore;
+  private readonly onStoreError: QueryCacheOptions["onStoreError"];
+  /** Entry deletes the store refused: read as a miss here until replayed. */
+  private readonly pendingDeletes = new Set<string>();
+  /** Version keys whose bump the store refused: bumped once each when it answers again. */
+  private readonly pendingBumps = new Set<string>();
+  private failing = false;
+  private flushing: Promise<void> | undefined;
 
-  constructor(store: CacheStore) {
+  constructor(store: CacheStore, options: QueryCacheOptions = {}) {
     this.store = store;
+    this.onStoreError = options.onStoreError;
   }
 
   async get<T>(key: string): Promise<CacheResult<T>> {
-    const envelope = (await this.store.get(key)) as CacheEnvelope<T> | undefined;
+    if (!(await this.recovered()) || this.pendingDeletes.has(key)) return MISS;
+    let envelope: CacheEnvelope<T> | undefined;
+    try {
+      envelope = (await this.store.get(key)) as CacheEnvelope<T> | undefined;
+      this.ok();
+    } catch (err) {
+      this.failed(err, "get");
+      return MISS;
+    }
 
     if (!envelope?.createdAt) return MISS;
 
     const now = Date.now();
 
     if (now >= envelope.expiresAt) {
-      await this.store.delete(key);
+      await this.invalidate(key);
       return MISS;
     }
 
@@ -92,17 +118,30 @@ export class QueryCache {
       tags: config.tags ?? [],
     };
 
-    await this.store.set(key, envelope, totalTtlSec);
+    try {
+      await this.store.set(key, envelope, totalTtlSec);
+      this.pendingDeletes.delete(key);
+      this.ok();
+    } catch (err) {
+      // Not cached: the next read misses and the source answers.
+      this.failed(err, "set");
+    }
   }
 
   async invalidate(key: string): Promise<void> {
-    await this.store.delete(key);
+    try {
+      await this.store.delete(key);
+      this.pendingDeletes.delete(key);
+      this.ok();
+    } catch (err) {
+      this.pendingDeletes.add(key);
+      this.failed(err, "invalidate");
+    }
   }
 
   /** Get current version for a resource (defaults to 0 if not set) */
   async getResourceVersion(resource: string): Promise<number> {
-    const ver = (await this.store.get(versionKey(resource))) as number | undefined;
-    return ver ?? 0;
+    return this.readVersion(versionKey(resource));
   }
 
   /** Bump resource version — orphans all cached queries for this resource */
@@ -112,13 +151,34 @@ export class QueryCache {
 
   /** Get current version for a tag */
   async getTagVersion(tag: string): Promise<number> {
-    const ver = (await this.store.get(tagVersionKey(tag))) as number | undefined;
-    return ver ?? 0;
+    return this.readVersion(tagVersionKey(tag));
   }
 
   /** Bump tag version — orphans all cached queries tagged with this tag */
   async bumpTagVersion(tag: string): Promise<void> {
     await this.bumpVersion(tagVersionKey(tag));
+  }
+
+  /** The store is failing, or holds invalidations it refused: reads go to the source. */
+  get degraded(): boolean {
+    return this.failing || this.pendingDeletes.size > 0 || this.pendingBumps.size > 0;
+  }
+
+  /**
+   * A version the store cannot give is 0: entries are not read while it fails either, and
+   * a version bump it refused is replayed before any version is read again (`recovered`),
+   * so an entry cached before the outage is never served past an invalidation.
+   */
+  private async readVersion(key: string): Promise<number> {
+    if (!(await this.recovered())) return 0;
+    try {
+      const ver = (await this.store.get(key)) as number | undefined;
+      this.ok();
+      return ver ?? 0;
+    } catch (err) {
+      this.failed(err, "version");
+      return 0;
+    }
   }
 
   /**
@@ -142,8 +202,21 @@ export class QueryCache {
    * outlive that reset and entry TTLs are minutes-scale (staleTime +
    * gcTime). The read-modify-write fallback uses plain `set`, which
    * refreshes the TTL per bump — strictly longer-lived, equally safe.
+   *
+   * A bump the store refuses is remembered and replayed once it answers.
    */
   private async bumpVersion(key: string): Promise<void> {
+    try {
+      await this.rawBump(key);
+      this.pendingBumps.delete(key);
+      this.ok();
+    } catch (err) {
+      this.pendingBumps.add(key);
+      this.failed(err, "bump");
+    }
+  }
+
+  private async rawBump(key: string): Promise<void> {
     if (typeof this.store.increment === "function") {
       // Canonical CacheAdapter signature: (key, by, ttlSeconds).
       await this.store.increment(key, 1, VERSION_TTL_SECONDS);
@@ -152,6 +225,50 @@ export class QueryCache {
     const current = (await this.store.get(key)) as number | undefined;
     const next = Math.max(Date.now(), (current ?? 0) + 1);
     await this.store.set(key, next, VERSION_TTL_SECONDS);
+  }
+
+  /**
+   * Replay refused invalidations before a read; `false` while the store still refuses a
+   * version bump (the caller then answers from the source). One replay at a time.
+   */
+  private async recovered(): Promise<boolean> {
+    if (this.pendingBumps.size === 0 && this.pendingDeletes.size === 0) return true;
+    this.flushing ??= this.flush().finally(() => {
+      this.flushing = undefined;
+    });
+    await this.flushing;
+    return this.pendingBumps.size === 0;
+  }
+
+  private async flush(): Promise<void> {
+    try {
+      for (const key of [...this.pendingBumps]) {
+        await this.rawBump(key);
+        this.pendingBumps.delete(key);
+      }
+      for (const key of [...this.pendingDeletes]) {
+        await this.store.delete(key);
+        this.pendingDeletes.delete(key);
+      }
+      this.ok();
+    } catch (err) {
+      this.failed(err, "replay");
+    }
+  }
+
+  private ok(): void {
+    this.failing = false;
+  }
+
+  private failed(err: unknown, operation: string): void {
+    if (!this.failing) {
+      try {
+        this.onStoreError?.(err, operation);
+      } catch {
+        // A reporting callback never breaks a read.
+      }
+    }
+    this.failing = true;
   }
 }
 

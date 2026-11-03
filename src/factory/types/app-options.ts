@@ -3,6 +3,7 @@
  * environment, stores, auth, security, arc plugins, resources, lifecycle.
  */
 
+import type { ServerOptions as NodeHttpServerOptions } from "node:http";
 import type { FastifyInstance, FastifyServerOptions } from "fastify";
 import type { CacheStore } from "../../cache/interface.js";
 import type { EventTransport } from "../../events/EventTransport.js";
@@ -28,6 +29,18 @@ export type BootDisposer = () => void | Promise<void>;
  * });
  * ```
  */
+/** The Node HTTP server options {@link CreateAppOptions.http} passes through. */
+export type CreateAppHttpOptions = Pick<
+  NodeHttpServerOptions,
+  | "highWaterMark"
+  | "maxHeaderSize"
+  | "requireHostHeader"
+  | "joinDuplicateHeaders"
+  | "noDelay"
+  | "keepAlive"
+  | "keepAliveInitialDelay"
+>;
+
 export interface CreateAppOptions {
   // ============================================
   // Environment & Logging
@@ -181,6 +194,23 @@ export interface CreateAppOptions {
    * the server just closed — intermittent 502s.
    */
   keepAliveTimeout?: number;
+
+  /**
+   * Node HTTP server options, passed through as Fastify `http`
+   * (`http.createServer(options, handler)`). Pass-through only — no arc
+   * defaults. Limited to the per-socket and parser knobs that do not overlap
+   * the timeout options above:
+   *
+   * - `highWaterMark` (Node 20.1+): the write buffer every accepted socket gets
+   *   before `write()` reports it full (Node default 16 KiB). SSE streams wait
+   *   for `drain` within their own byte budget either way; a larger mark only
+   *   means fewer drain round trips for a big replay.
+   * - `maxHeaderSize`, `requireHostHeader`, `joinDuplicateHeaders`, `noDelay`,
+   *   `keepAlive`, `keepAliveInitialDelay`: as documented for `http.createServer`.
+   *
+   * Ignored by an `https` / `http2` server built outside arc.
+   */
+  http?: CreateAppHttpOptions;
 
   /**
    * Max JSON body in bytes. Fastify default 1 MiB; over it is a 413
@@ -438,6 +468,15 @@ export interface CreateAppOptions {
    */
   ajv?: {
     keywords?: string[];
+    /**
+     * Type-coerce JSON BODY values to their schema type (`"5"` → `5`). Default `false`.
+     *
+     * Querystring, params and headers always coerce (URL values are strings). A JSON body is
+     * already typed, and coercing it picks the FIRST `anyOf` branch: `{ value: false }` against
+     * `anyOf [number, boolean, string]` became `0`. Set `true` only for clients that send
+     * numbers/booleans as strings in a JSON or urlencoded body (migration escape hatch).
+     */
+    coerceBody?: boolean;
   };
 
   /**

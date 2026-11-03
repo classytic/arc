@@ -3,7 +3,7 @@
  * validator, the idempotency-declaration fence, and duplicate-route diagnostics.
  */
 
-import type { RouteOptions } from "fastify";
+import type { FastifyRequest, RouteOptions } from "fastify";
 import {
   declaresIdempotencyFence,
   idempotencyConfigProblem,
@@ -15,6 +15,43 @@ import {
 import type { FastifyWithDecorators } from "../../types/index.js";
 import { arcRouteValidatorCompiler } from "../routeValidator.js";
 import { isReplayBoundary, isValidationGate } from "./chain.js";
+
+type RateKeyGenerator = (req: FastifyRequest) => string | number | Promise<string | number>;
+type RateAllowList = readonly string[] | ((req: FastifyRequest, key: string) => unknown);
+
+const SUPPORTED_RATE_OPTIONS = ["max", "timeWindow", "keyGenerator", "groupId", "allowList"];
+
+/** `@fastify/rate-limit` per-route options arc's limiter honours; any other option refuses. */
+function routeRateHostOptions(
+  policy: Record<string, unknown>,
+  where: string,
+): { keyGenerator?: RateKeyGenerator; allowList?: RateAllowList; groupId?: string } {
+  const fail = (problem: string) => new Error(`[arc] ${where}: config.rateLimit.${problem}`);
+  for (const [option, value] of Object.entries(policy))
+    if (value !== undefined && !SUPPORTED_RATE_OPTIONS.includes(option))
+      throw fail(
+        `${option} is not supported on arc's resource limiter (supported: ${SUPPORTED_RATE_OPTIONS.join(", ")}). Remove it, or set it on the app-wide createApp({ rateLimit }).`,
+      );
+  const { keyGenerator, allowList, groupId } = policy;
+  if (keyGenerator !== undefined && typeof keyGenerator !== "function")
+    throw fail("keyGenerator must be a function of the request.");
+  if (
+    allowList !== undefined &&
+    typeof allowList !== "function" &&
+    !(Array.isArray(allowList) && allowList.every((key) => typeof key === "string"))
+  )
+    throw fail("allowList must be an array of keys or a function (req, key).");
+  if (groupId !== undefined && (typeof groupId !== "string" || groupId.length === 0))
+    throw fail("groupId must be a non-empty string.");
+  return {
+    ...(keyGenerator ? { keyGenerator: keyGenerator as RateKeyGenerator } : {}),
+    ...(allowList ? { allowList: allowList as RateAllowList } : {}),
+    ...(groupId ? { groupId: groupId as string } : {}),
+  };
+}
+
+/** One group, one limit: a shared budget cannot be counted against two maxima. */
+const groupLimits = new WeakMap<object, Map<string, string>>();
 
 /**
  * Register a route with friendly handling of `FST_ERR_DUPLICATED_ROUTE`.
@@ -39,6 +76,8 @@ export function tryRegisterRoute(
     typeof ratePolicy.max === "number" &&
     typeof ratePolicy.timeWindow === "string"
   ) {
+    const where = `${String(opts.method)} ${opts.url} on resource "${context.resourceName}"`;
+    const host = routeRateHostOptions(ratePolicy as Record<string, unknown>, where);
     const limiter = resolveResourceRateLimiter(fastify);
     if (!limiter && !recordUnenforcedRateLimit(fastify, context.resourceName))
       throw new Error(
@@ -51,16 +90,40 @@ export function tryRegisterRoute(
         max: ratePolicy.max,
         timeWindow: ratePolicy.timeWindow,
         bucket: context.rateLimitBucket,
+        ...(host.groupId ? { groupId: host.groupId } : {}),
       };
+      if (host.groupId) {
+        const limits = groupLimits.get(limiter) ?? new Map<string, string>();
+        groupLimits.set(limiter, limits);
+        const declared = `${policy.max} per ${policy.timeWindow}`;
+        const prior = limits.get(host.groupId);
+        if (prior !== undefined && prior !== declared)
+          throw new Error(
+            `[arc] ${where}: config.rateLimit.groupId "${host.groupId}" is declared with two different limits (${prior} and ${declared}); routes sharing a group must declare the same max and timeWindow.`,
+          );
+        limits.set(host.groupId, declared);
+      }
+      const { keyGenerator, allowList } = host;
       const handlers = Array.isArray(opts.preHandler)
         ? opts.preHandler
         : opts.preHandler
           ? [opts.preHandler]
           : [];
       const limit: import("fastify").preHandlerAsyncHookHandler = async (req, reply) => {
+        // Same order as @fastify/rate-limit: the key (host's, else the address), then allowList.
+        const key = keyGenerator ? String(await keyGenerator(req)) : undefined;
+        if (allowList) {
+          const candidate = key ?? req.ip;
+          const bypass =
+            typeof allowList === "function"
+              ? await allowList(req, candidate)
+              : allowList.includes(candidate);
+          if (bypass) return;
+        }
         const decision = await limiter.consume(context.resourceName, policy, {
           scope: req.scope,
           ip: req.ip,
+          ...(key !== undefined ? { key } : {}),
         });
         for (const [header, value] of Object.entries(decision.headers)) reply.header(header, value);
         if (!decision.allowed) {

@@ -35,6 +35,7 @@ import {
   tryRegisterRoute,
 } from "../routerShared.js";
 import { buildAggregationHandler } from "./buildHandler.js";
+import type { AggregationFieldTypes } from "./fieldTypes.js";
 import type { AggregationsMap } from "./types.js";
 import { type NormalizedAggregation, validateAggregations } from "./validate.js";
 
@@ -84,6 +85,11 @@ export interface AggregationRouterConfig {
    * BEFORE the aggregation handler.
    */
   middlewares?: ReadonlyArray<RouteHandlerMethod | null | undefined>;
+  /**
+   * Declared field types for URL filter coercion (`fieldTypesFromOpenApiSchemas` over the
+   * resource's generated schemas). Each aggregation's own `fieldTypes` win.
+   */
+  fieldTypes?: AggregationFieldTypes;
 }
 
 /**
@@ -105,6 +111,7 @@ export function createAggregationRouter(
     repository,
     buildOptions,
     middlewares = [],
+    fieldTypes,
   } = config;
 
   if (!aggregations || Object.keys(aggregations).length === 0) {
@@ -135,6 +142,7 @@ export function createAggregationRouter(
       repository,
       buildOptions,
       middlewares,
+      fieldTypes,
     });
   }
 
@@ -159,6 +167,7 @@ interface RegisterOneCtx {
   buildOptions: (req: FastifyRequest) => AnyRecord;
   /** Preset-emitted preHandlers for the aggregation slot (2.15.3). */
   middlewares: ReadonlyArray<RouteHandlerMethod | null | undefined>;
+  fieldTypes: AggregationFieldTypes | undefined;
 }
 
 function registerOne(
@@ -166,7 +175,7 @@ function registerOne(
   normalized: NormalizedAggregation,
   ctx: RegisterOneCtx,
 ): void {
-  const { tag, arcDecorator, routeGuards, repository, buildOptions, middlewares } = ctx;
+  const { tag, arcDecorator, routeGuards, repository, buildOptions, middlewares, fieldTypes } = ctx;
   const { name } = normalized;
   const config = normalized.base;
 
@@ -232,6 +241,7 @@ function registerOne(
   const handler = buildAggregationHandler(normalized, {
     repo: repository,
     buildOptions,
+    ...(fieldTypes ? { fieldTypes } : {}),
   });
 
   const routeSchema = {

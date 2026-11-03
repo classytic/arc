@@ -87,6 +87,62 @@ describe("createOutboxModule — requestDrain", () => {
     expect(relayBatch).toHaveBeenCalledTimes(2);
   });
 
+  it("requestDrain({ types }) relays those types ahead of an older backlog, once (G-ALERTS-3)", async () => {
+    const published: string[] = [];
+    const publish = vi.fn(async (event: { type: string }) => {
+      published.push(event.type);
+    });
+    const store = new MemoryOutboxStore();
+    const transport = { name: "t", publish } as unknown as EventTransport;
+    // batchSize 10: an untyped pass would take 10 of the 300 older rows and never reach the alarm.
+    const mod = createOutboxModule({ store, transport, batchSize: 10 });
+    const exp = mod.bootstrap!({
+      log: { error: vi.fn() },
+      [ARC_EVENT_TRANSPORT]: transport,
+    } as never) as OutboxModuleExports;
+    for (let i = 0; i < 300; i++) await store.save(createEvent("import:row", { n: i }));
+    await store.save(createEvent("alarm:raised", { id: "a1" }));
+
+    exp.requestDrain({ types: ["alarm:raised"] });
+    await tick();
+
+    expect(published).toEqual(["alarm:raised"]);
+    const pending = await store.getPending(1_000);
+    expect(pending).toHaveLength(300);
+    expect(pending.every((e) => e.type === "import:row")).toBe(true);
+  });
+
+  it("a typed and a plain request in one burst: one typed pass first, then one plain pass", async () => {
+    const relayBatch = vi.fn(async () => ({ attempted: 0, relayed: 0 }));
+    const { exp } = boot({
+      name: "t",
+      publish: vi.fn(async () => {}),
+    } as unknown as EventTransport);
+    (exp.relay as unknown as { relayBatch: typeof relayBatch }).relayBatch = relayBatch;
+
+    exp.requestDrain({ types: ["a"] });
+    exp.requestDrain();
+    exp.requestDrain({ types: ["b", "a"] });
+    exp.requestDrain({ types: [] }); // empty = plain
+    await tick();
+
+    expect(relayBatch.mock.calls).toEqual([[{ types: ["a", "b"] }], [undefined]]);
+  });
+
+  it("a typed request alone runs no untyped pass", async () => {
+    const relayBatch = vi.fn(async () => ({ attempted: 0, relayed: 0 }));
+    const { exp } = boot({
+      name: "t",
+      publish: vi.fn(async () => {}),
+    } as unknown as EventTransport);
+    (exp.relay as unknown as { relayBatch: typeof relayBatch }).relayBatch = relayBatch;
+
+    exp.requestDrain({ types: ["a"] });
+    await tick();
+
+    expect(relayBatch.mock.calls).toEqual([[{ types: ["a"] }]]);
+  });
+
   it("a failing pass is logged, never thrown into the caller", async () => {
     const error = vi.fn();
     const store = new MemoryOutboxStore();

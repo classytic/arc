@@ -9,7 +9,7 @@
  * - `./app-options.ts`    — `CreateAppOptions` (the big one)
  */
 
-export type { BootDisposer, CreateAppOptions } from "./app-options.js";
+export type { BootDisposer, CreateAppHttpOptions, CreateAppOptions } from "./app-options.js";
 export type {
   AuthOption,
   BetterAuthOption,

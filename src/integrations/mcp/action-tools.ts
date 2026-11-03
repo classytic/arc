@@ -14,7 +14,7 @@
 
 import type { z } from "zod";
 import type { ActionTargetCheck } from "../../core/entityHelpers.js";
-import { normalizeSchemaIR, shouldRejectAdditionalProperties } from "../../core/schemaIR.js";
+import { actionSchemaIR, shouldRejectAdditionalProperties } from "../../core/schemaIR.js";
 import { schemaIRToZodShape } from "../../core/schemaIRZod.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
@@ -71,7 +71,7 @@ export interface ActionToolParity {
 export function convertActionSchemaToZod(
   raw: Record<string, unknown>,
 ): Record<string, z.ZodTypeAny> {
-  const ir = normalizeSchemaIR(raw);
+  const ir = actionSchemaIR(raw);
   return schemaIRToZodShape(ir);
 }
 
@@ -146,7 +146,7 @@ export function createActionToolHandler(
         },
       }
     : { tenantMiddlewares: extras?.tenantMiddlewares };
-  const ir = rawSchema ? normalizeSchemaIR(rawSchema) : undefined;
+  const ir = rawSchema ? actionSchemaIR(rawSchema) : undefined;
   const strict = ir ? shouldRejectAdditionalProperties(ir) : false;
   // Pre-compute the allowed key set ONCE — every action call re-reads it to
   // reject unknown keys, matching HTTP AJV strict-mode semantics. The MCP

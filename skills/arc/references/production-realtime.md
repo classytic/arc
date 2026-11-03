@@ -22,7 +22,7 @@ const app = await createApp({
 - `GET /realtime/:resource` (resource name) and multiplexed `GET /realtime?resources=a,b,c` (max 20).
 - Gated by the resource's own `list` permission; per-event row filtering, tenant guard, field masking.
 - Client: plain `EventSource` with `?token=` (`tokenQueryParam`, default `token`, `null` disables).
-- No replay: on reconnect, refetch the list.
+- No replay: on reconnect, refetch the list. For a resumable stream use `createReplayHub` (below).
 - Permission filters are snapshotted at connect. The feed closes at token `exp` and at `maxConnectionMs` (default 30 min) to bound staleness.
 
 ## SSE plugin
@@ -46,7 +46,33 @@ const app = await createApp({
 
 - Events without `organizationId` reach every caller. An elevated admin with no active org sees all tenants.
 - `orgScoped: false` only for a deliberately cross-tenant stream; keep `requireAuth` and add a `filter`.
-- `fastify.sseStats()` returns `{ connections, keys }`.
+- `fastify.sseStats()` returns `{ connections, keys }`, summed over ssePlugin, realtime feeds, replay hubs and `createSseConnectionGauge(app)` (custom routes call `gauge.track(stream)`). Register at boot: `decorate` after ready throws.
+
+## Resumable custom stream (replay over a ChangeLogStore)
+
+```typescript
+import { createReplayHub, lastEventIdOf, openSseStream } from '@classytic/arc/utils';
+
+const hub = createReplayHub(app, {                  // at boot, before ready
+  store,                                            // repo-core ChangeLogStore (mongokit createChangeLogStore, MemoryChangeLogStore)
+  readScope: (ctx) => ({ tenantId: ctx.orgId, scopes: ['alerts'] }),   // tail partition + since() filter
+  toFrame: (entry, ctx) => (canSee(ctx, entry) ? { event: 'alert', data: entry.doc } : null),
+  isValidCursor: (c) => /^\d{16}$/.test(c),
+  compareCursors: (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+  revalidate: { everyMs: 15_000, check: (ctx, { memo }) => stillAllowed(ctx, memo), maxConsecutiveFailures: 3 },   // null/undefined/false → revoked; { close: 'revoke' | 'retry', reason }
+  identify: (ctx) => ({ userId: ctx.userId, sessionId: ctx.sessionId }),
+  revokeVia: { secret: env.REALTIME_REVOKE_SECRET }, // hub.revoke() reaches every replica, sealed (AES-GCM)
+});
+await app.events.subscribe('alert.*', () => hub.notify());   // the bus only WAKES the tail
+// route, after every gate:
+await hub.attach(openSseStream(req, reply), ctx, lastEventIdOf(req));
+```
+
+- Frames: `ready {cursor, resumed}` first, then the replay or one `resync {cursor, reason}`, then live (`id:` = cursor). `revoked {reason}` then close (final). `retry {reason}` then close (not final: reconnect now). Names: `STREAM_FRAMES`, same literals as `@classytic/arc-next/sse`.
+- `openSseStream` waits for `drain` (`maxBufferedBytes` 1 MiB, `drainTimeoutMs` 10 s; `0` bytes = old fail-fast); the hub paces a replay on `needsDrain`/`drain()`, so a large resume is not cut.
+- A live entry the replay already sent goes out once. Entries hidden by `toFrame` are followed by an id-only frame, so the client cursor keeps up.
+- Gap over `maxReplay` (500) → `gap_too_large`; `CursorExpiredError` → `cursor_expired`; invalid or ahead → `cursor_invalid`. Other store errors close with no frame.
+- mongokit `compactSuperseded` keeps only the latest entry per doc, so replay yields latest state; a foreign cursor throws there, so set `isValidCursor`.
 
 ## Streaming custom routes
 

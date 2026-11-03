@@ -22,7 +22,7 @@ Hand-rolling is a bug in arc apps. Check this table before writing any route, va
 | Usage counters, quotas, plan limits | @classytic/arc/usage: usagePlugin, requireQuota; rateLimit.plan |
 | Audit, record history | audit: true, history: true |
 | Idempotency | @classytic/arc/idempotency |
-| Events, outbox, webhooks | @classytic/arc/events, createOutboxModule, integrations/webhooks |
+| Events, outbox, webhooks, SSE replay | @classytic/arc/events, createOutboxModule, integrations/webhooks, createReplayHub |
 | AI / MCP tools | generated per resource; mcpPlugin from @classytic/arc/mcp |
 | Unknown route 404 | built in: ErrorContract arc.not_found (errorHandler.notFound to replace) |
 | Tests | createTestApp, expectArc from @classytic/arc/testing |
@@ -31,7 +31,7 @@ Hand-rolling is a bug in arc apps. Check this table before writing any route, va
 ## Read next
 
 - skills/arc/SKILL.md: golden paths, gotchas, reference index
-- skills/arc/references/: one topic per file (validation, schedules, resources, permissions, auth, events, mcp, production, testing)
+- skills/arc/references/: topics (validation, schedules, resources, permissions, auth, events, mcp, production, tests)
 - skills/arc-code-review/SKILL.md: audit a codebase for hand-rolled code
 - skills/arc-module-publishing/SKILL.md: ship a reusable arc module
 

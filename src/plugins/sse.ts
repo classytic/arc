@@ -25,6 +25,7 @@ import type { DomainEvent } from "../events/EventTransport.js";
 import { arcLog } from "../logger/index.js";
 import type { RequestScope } from "../scope/types.js";
 import { getUserId, PUBLIC_SCOPE } from "../scope/types.js";
+import { registerSseStats } from "../utils/sseStats.js";
 import { openSseStream, type SseStream } from "../utils/sseStream.js";
 import { promoteStreamTokenToHeader } from "../utils/streaming.js";
 
@@ -77,41 +78,12 @@ export interface SSEOptions {
   connectionKey?: (request: FastifyRequest) => string | null | undefined;
 }
 
-/** Live connection gauge, summed across every `ssePlugin` registration on the instance. */
-export interface SSEStats {
-  /** Open SSE connections. */
-  connections: number;
-  /** Distinct `connectionKey`s indexed (0 without `audience`). */
-  keys: number;
-}
-
-declare module "fastify" {
-  interface FastifyInstance {
-    sseStats: () => SSEStats;
-  }
-}
-
-/** Per-registration stats providers behind one `sseStats` decorator. */
-const statsProviders = new WeakMap<() => SSEStats, Set<() => SSEStats>>();
-
-function registerStats(fastify: FastifyInstance, provider: () => SSEStats): void {
-  if (fastify.hasDecorator("sseStats")) {
-    statsProviders.get(fastify.sseStats)?.add(provider);
-    return;
-  }
-  const providers = new Set([provider]);
-  const sseStats = (): SSEStats => {
-    const total: SSEStats = { connections: 0, keys: 0 };
-    for (const p of providers) {
-      const s = p();
-      total.connections += s.connections;
-      total.keys += s.keys;
-    }
-    return total;
-  };
-  statsProviders.set(sseStats, providers);
-  fastify.decorate("sseStats", sseStats);
-}
+/**
+ * Live connection gauge behind `fastify.sseStats()`, summed across every SSE
+ * surface registered on the instance (`ssePlugin`, `realtimePlugin`, replay
+ * hubs, `createSseConnectionGauge`). Defined in `utils/sseStats.ts`.
+ */
+export type { SSEStats } from "../utils/sseStats.js";
 
 interface KeyedConnection {
   request: FastifyRequest;
@@ -220,7 +192,7 @@ const ssePlugin: FastifyPluginAsync<SSEOptions> = async (
     return sharedSubscription;
   };
 
-  registerStats(fastify, () =>
+  registerSseStats(fastify, () =>
     resolveAudience
       ? { connections: connections.size, keys: byKey.size }
       : { connections: activeConnections.size, keys: 0 },

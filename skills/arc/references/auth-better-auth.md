@@ -68,6 +68,7 @@ BA stores several roles in one `member.role` string. Arc reads `scope.orgRoles` 
 - Redis sessions: BA `secondaryStorage` (sessions skip the DB unless `session.storeSessionInDatabase: true`). Arc's `RedisSessionStore` (`@classytic/arc/auth/redis`) belongs to `createSessionManager`, a different layer. Do not mix.
 - BA `session.cookieCache` never caches custom session fields such as `activeOrganizationId`, so scope cannot go stale, but the org lookup still runs.
 - BA has its own limiter (`rateLimit.storage: 'secondary-storage'`). Exempt it from arc's bucket: `rateLimit: { skipPaths: ['/api/auth/*'] }`.
+- BA JSON refusals (status >= 400) from `/api/auth/*` gain `status` and `correlationId` (`request.id`) when absent, like arc's own errors. Other responses pass through byte-identical. Drop any host `onSend` that added them.
 
 ## Bearer transport (SPA, mobile)
 

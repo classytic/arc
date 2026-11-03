@@ -31,6 +31,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     setupFiles: ["./tests/_helpers/load-env.ts"],
+    // Removes data dirs abandoned by killed runs (never a live server's).
+    globalSetup: ["./tests/_helpers/mongo-tmp-sweep.ts"],
     exclude: [...configDefaults.exclude, "tests/perf/**"],
     // ── Parallelism strategy ──
     // Everything runs file-parallel EXCEPT suites whose assertions depend on

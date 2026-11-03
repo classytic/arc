@@ -17,6 +17,7 @@ import type { RouteHandlerMethod } from "fastify";
 import type { z } from "zod";
 import type { ActionDefinition, MiddlewareHandler } from "../types/index.js";
 import { ValidationError } from "../utils/errors.js";
+import { normalizeSchemaIR } from "./schemaIR.js";
 
 /** A zod schema (parsed by the preHandler) or plain JSON Schema (AJV only). */
 export type InputSchema = z.ZodType | Record<string, unknown>;
@@ -33,11 +34,30 @@ export interface RouteInputSlots {
   response?: Record<number, InputSchema> | undefined;
 }
 
+/** One zod issue as the parse saw it (`params` is what a refinement's `ctx.addIssue` attached). */
+export interface RouteInputIssue {
+  readonly path: ReadonlyArray<PropertyKey>;
+  readonly message: string;
+  readonly code?: string;
+  readonly params?: unknown;
+}
+
+/** Options shared by {@link routeInput}, {@link crudInput}. */
+export interface RouteInputOptions {
+  /**
+   * A failed parse's issues -> the error to throw instead of the default 400
+   * `arc.validation_error`, or `undefined` to keep it. Lets a schema choose its own code: a
+   * refinement tags its issue (`ctx.addIssue({ ..., params: { code: 'insights.range_too_long' } })`)
+   * and this returns `new ArcError(msg, { code, statusCode: 400 })` for it.
+   */
+  readonly mapIssues?: ((issues: readonly RouteInputIssue[]) => Error | undefined) | undefined;
+}
+
 interface Parseable {
   safeParse(value: unknown): {
     success: boolean;
     data?: unknown;
-    error?: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> };
+    error?: { issues: ReadonlyArray<RouteInputIssue> };
   };
 }
 
@@ -50,12 +70,19 @@ function isParseable(schema: unknown): schema is Parseable {
 }
 
 /** Parse `value` with `schema`; zod issues become one `ValidationError` (400, `details[]`). */
-function parseOrThrow(schema: Parseable, value: unknown): unknown {
+function parseOrThrow(
+  schema: Parseable,
+  value: unknown,
+  mapIssues?: RouteInputOptions["mapIssues"],
+): unknown {
   const result = schema.safeParse(value);
   if (result.success) return result.data;
+  const issues = result.error?.issues ?? [];
+  const mapped = mapIssues?.(issues);
+  if (mapped) throw mapped;
   throw new ValidationError(
     "Validation failed",
-    (result.error?.issues ?? []).map((issue) => ({
+    issues.map((issue) => ({
       field: issue.path.map(String).join("."),
       message: issue.message,
     })),
@@ -68,16 +95,18 @@ function parseOrThrow(schema: Parseable, value: unknown): unknown {
  */
 export function routeInput<const S extends RouteInputSlots>(
   slots: S,
+  options: RouteInputOptions = {},
 ): { schema: S; preHandler: RouteHandlerMethod[] } {
+  const { mapIssues } = options;
   const { body, querystring, params } = slots;
   const parseBody = isParseable(body) ? body : undefined;
   const parseQuery = isParseable(querystring) ? querystring : undefined;
   const parseParams = isParseable(params) ? params : undefined;
   if (!parseBody && !parseQuery && !parseParams) return { schema: slots, preHandler: [] };
   const parse: RouteHandlerMethod = async (request) => {
-    if (parseParams) request.params = parseOrThrow(parseParams, request.params ?? {});
-    if (parseQuery) request.query = parseOrThrow(parseQuery, request.query ?? {});
-    if (parseBody) request.body = parseOrThrow(parseBody, request.body ?? {});
+    if (parseParams) request.params = parseOrThrow(parseParams, request.params ?? {}, mapIssues);
+    if (parseQuery) request.query = parseOrThrow(parseQuery, request.query ?? {}, mapIssues);
+    if (parseBody) request.body = parseOrThrow(parseBody, request.body ?? {}, mapIssues);
   };
   return { schema: slots, preHandler: [parse] };
 }
@@ -98,6 +127,17 @@ export const noPayloadSchema: Readonly<Record<string, unknown>> = Object.freeze(
 });
 
 /**
+ * What {@link crudInput} returns. Each slot is present only when its schema was given
+ * (never `undefined`), so the spread type-checks under `exactOptionalPropertyTypes`.
+ */
+export interface CrudInput {
+  customSchemas: { create?: { body: InputSchema }; update?: { body: InputSchema } };
+  openApiSchemas: { createBody?: InputSchema; updateBody?: InputSchema };
+  /** Filled only with `parse: true`. */
+  middlewares: { create?: MiddlewareHandler[]; update?: MiddlewareHandler[] };
+}
+
+/**
  * Wire shape of a resource's own CRUD writes. Spread into `defineResource`:
  * `customSchemas` is what AJV validates (and, for zod, converts input-direction: a `.default()`
  * stays optional; `z.strictObject` refuses unknown keys); `openApiSchemas` makes the generated
@@ -107,40 +147,75 @@ export const noPayloadSchema: Readonly<Record<string, unknown>> = Object.freeze(
  * OUTPUT (trim, defaults, refinements). It writes `middlewares.create` / `middlewares.update`, so
  * merge your own: `middlewares: { create: [...mine, ...crud.middlewares.create] }`.
  */
-export function crudInput(input: { create?: InputSchema; update?: InputSchema; parse?: boolean }) {
+export function crudInput(input: {
+  create?: InputSchema | undefined;
+  update?: InputSchema | undefined;
+  parse?: boolean | undefined;
+  /** With `parse: true`: see {@link RouteInputOptions.mapIssues}. */
+  mapIssues?: RouteInputOptions["mapIssues"];
+}): CrudInput {
   const { create, update } = input;
   const parseBody = (schema: InputSchema): MiddlewareHandler[] =>
     input.parse && isParseable(schema)
       ? [
           (async (request) => {
-            request.body = parseOrThrow(schema, request.body ?? {});
+            request.body = parseOrThrow(schema, request.body ?? {}, input.mapIssues);
           }) as MiddlewareHandler,
         ]
       : [];
-  return {
-    customSchemas: {
-      ...(create ? { create: { body: create } } : {}),
-      ...(update ? { update: { body: update } } : {}),
-    },
-    openApiSchemas: {
-      ...(create ? { createBody: create } : {}),
-      ...(update ? { updateBody: update } : {}),
-    },
-    middlewares: {
-      ...(create && input.parse ? { create: parseBody(create) } : {}),
-      ...(update && input.parse ? { update: parseBody(update) } : {}),
-    } as { create?: MiddlewareHandler[]; update?: MiddlewareHandler[] },
-  };
+  // Assigned, never spread from a conditional: a spread infers `create?: X | undefined`,
+  // which `defineResource` refuses under `exactOptionalPropertyTypes`. An absent slot is
+  // an absent key.
+  const customSchemas: CrudInput["customSchemas"] = {};
+  const openApiSchemas: CrudInput["openApiSchemas"] = {};
+  const middlewares: CrudInput["middlewares"] = {};
+  if (create) {
+    customSchemas.create = { body: create };
+    openApiSchemas.createBody = create;
+    if (input.parse) middlewares.create = parseBody(create);
+  }
+  if (update) {
+    customSchemas.update = { body: update };
+    openApiSchemas.updateBody = update;
+    if (input.parse) middlewares.update = parseBody(update);
+  }
+  return { customSchemas, openApiSchemas, middlewares };
+}
+
+/** True when the schema's object shape declares an `action` property. */
+function declaresAction(schema: unknown): boolean {
+  try {
+    return "action" in normalizeSchemaIR(schema as Record<string, unknown>).properties;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Wrap an action handler so `data` is the zod schema's OUTPUT. Used by `ActionDefinition.parse`
  * and `defineAction({ parse: true })`; a non-zod schema returns the handler unchanged.
+ *
+ * `data` never carries the `action` discriminator (arc owns it). A schema that DECLARES `action`
+ * (`z.strictObject({ action: z.literal('issue'), ... })`, a contracts discriminated-union branch)
+ * is parsed with `action: actionName` put back, so strictness and refinements that read it hold;
+ * the handler still gets the output without `action`.
  */
 export function withParsedInput(
   handler: ActionDefinition["handler"],
   schema: unknown,
+  actionName?: string,
 ): ActionDefinition["handler"] {
   if (!isParseable(schema)) return handler;
-  return (id, data, req) => handler(id, parseOrThrow(schema, data) as Record<string, unknown>, req);
+  if (actionName === undefined || !declaresAction(schema)) {
+    return (id, data, req) =>
+      handler(id, parseOrThrow(schema, data) as Record<string, unknown>, req);
+  }
+  return (id, data, req) => {
+    const out = parseOrThrow(schema, { ...data, action: actionName });
+    if (out === null || typeof out !== "object" || Array.isArray(out)) {
+      return handler(id, out as Record<string, unknown>, req);
+    }
+    const { action: _owned, ...rest } = out as Record<string, unknown>;
+    return handler(id, rest, req);
+  };
 }

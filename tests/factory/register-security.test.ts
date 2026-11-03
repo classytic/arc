@@ -388,3 +388,72 @@ describe("registerUtilityPlugins — under-pressure load shedding", () => {
     expect(calls.some((m) => m.includes("never shed load"))).toBe(false);
   });
 });
+
+describe("registerSecurityPlugins — CORS methods vs registered routes (G-ARC-INC-1)", () => {
+  let app: FastifyInstance;
+
+  afterEach(async () => {
+    if (app) await app.close();
+  });
+
+  async function bootWithRoutes(cors: Record<string, unknown>, verbs: string[]) {
+    app = createTestFastify();
+    const warn = vi.spyOn(app.log, "warn");
+    await registerSecurityPlugins(app, { helmet: false, rateLimit: false, cors });
+    for (const method of verbs) {
+      app.route({
+        method: method as "GET",
+        url: `/items/${method.toLowerCase()}`,
+        handler: async () => ({}),
+      });
+    }
+    await app.ready();
+    const methodWarnings = warn.mock.calls
+      .map((c) => String(c[0]))
+      .filter((m) => m.includes("registered routes use"));
+    return { warn, methodWarnings };
+  }
+
+  it("warns when origin: true without credentials keeps GET,HEAD,POST but routes use PATCH/DELETE", async () => {
+    const { methodWarnings } = await bootWithRoutes({ origin: true, credentials: false }, [
+      "GET",
+      "POST",
+      "PATCH",
+      "DELETE",
+    ]);
+    expect(methodWarnings).toHaveLength(1);
+    expect(methodWarnings[0]).toContain("DELETE, PATCH");
+  });
+
+  it("warns for a declared methods list that omits a route verb", async () => {
+    const { methodWarnings } = await bootWithRoutes(
+      { origin: ["https://a.example"], methods: ["GET", "PUT"] },
+      ["GET", "PUT", "DELETE"],
+    );
+    expect(methodWarnings).toHaveLength(1);
+    expect(methodWarnings[0]).toContain("omit DELETE,");
+  });
+
+  it("stays silent when the resolved methods cover every route verb", async () => {
+    const { methodWarnings } = await bootWithRoutes({ origin: ["https://a.example"] }, [
+      "GET",
+      "PUT",
+      "PATCH",
+      "DELETE",
+    ]);
+    expect(methodWarnings).toHaveLength(0);
+  });
+
+  it("stays silent when routes only use safelisted verbs", async () => {
+    const { methodWarnings } = await bootWithRoutes({ origin: true }, ["GET", "POST"]);
+    expect(methodWarnings).toHaveLength(0);
+  });
+
+  it("does not double-warn when the reflecting-origin + credentials warning already fired", async () => {
+    const { warn, methodWarnings } = await bootWithRoutes({ origin: true, credentials: true }, [
+      "PATCH",
+    ]);
+    expect(methodWarnings).toHaveLength(0);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("GET,HEAD,POST"))).toBe(true);
+  });
+});
