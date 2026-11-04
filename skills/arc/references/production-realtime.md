@@ -68,7 +68,7 @@ await app.events.subscribe('alert.*', () => hub.notify());   // the bus only WAK
 await hub.attach(openSseStream(req, reply), ctx, lastEventIdOf(req));
 ```
 
-- Frames: `ready {cursor, resumed}` first, then the replay or one `resync {cursor, reason}`, then live (`id:` = cursor). `revoked {reason}` then close (final). `retry {reason}` then close (not final: reconnect now). Names: `STREAM_FRAMES`, same literals as `@classytic/arc-next/sse`.
+- Frames: `ready {cursor, resumed}` first, then the replay or one `resync {cursor, reason}`, then live (`id:` = cursor). `revoked {reason}` then close (final). `retry {reason}` then close (not final: reconnect now). Names: `STREAM_FRAMES` from `@classytic/repo-core/sync` (the contract owner; `@classytic/arc-next/sse` reads the same one).
 - `openSseStream` waits for `drain` (`maxBufferedBytes` 1 MiB, `drainTimeoutMs` 10 s; `0` bytes = old fail-fast); the hub paces a replay on `needsDrain`/`drain()`, so a large resume is not cut.
 - A live entry the replay already sent goes out once. Entries hidden by `toFrame` are followed by an id-only frame, so the client cursor keeps up.
 - Gap over `maxReplay` (500) → `gap_too_large`; `CursorExpiredError` → `cursor_expired`; invalid or ahead → `cursor_invalid`. Other store errors close with no frame.

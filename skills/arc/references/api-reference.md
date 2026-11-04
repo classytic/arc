@@ -25,7 +25,7 @@ Import only from these subpaths (tree-shaken, no deep imports). Authoritative li
 | `/context`, `/logger` | `requestContext`, `transactionContext`, `runWorkScope`; `arcLog`, `configureArcLogger` |
 | `/registry`, `/discovery`, `/docs` | `ResourceRegistry`, `introspectionPlugin`; `discoverResources`; `openApiPlugin`, `scalarPlugin`, `buildOpenApiSpec` |
 | `/schemas` | `Type`, `ArcListResponse`, `ArcErrorResponse`, `ArcPaginationQuery` |
-| `/utils` | `createStateMachine`, `CircuitBreaker`, `withCompensation`, `defineGuard`, `declareRuntimeCapability`, `createQueryParser`, `ArcQueryParser`, `createError`, `pipeUIMessageStreamToReply`, `openSseStream`, `createReplayHub`, `lastEventIdOf`, `STREAM_FRAMES`, `registerSseStats`, `createSseConnectionGauge`, `listResponse`, `errorContractSchema`, error classes |
+| `/utils` | `createStateMachine`, `CircuitBreaker`, `withCompensation`, `defineGuard`, `declareRuntimeCapability`, `createQueryParser`, `ArcQueryParser`, `createError`, `pipeUIMessageStreamToReply`, `openSseStream`, `createReplayHub`, `lastEventIdOf`, `registerSseStats`, `createSseConnectionGauge`, `listResponse`, `errorContractSchema`, error classes |
 | `/migrations` | `defineMigration`, `MigrationRunner`, `MigrationRegistry`, `MongoMigrationStore` |
 | `/cleanup` | `createDataCleanupModule`, `createCleanupService`, `createCleanupRegistry`, `recipeFromSteps` |
 | `/encryption` | `encryptionPlugin`, `encryptField`, `decryptField`, `createStaticKeyProvider` |

@@ -141,7 +141,7 @@ reconnects into the right partition.
 mid-attach). `revokeVia` seals the broadcast (AES-256-GCM under a key derived from
 `secret`, the same on every replica): the bus, `ssePlugin` `'*'` clients and webhook
 subscribers see that a revoke happened, never who or why. The frame names are
-`STREAM_FRAMES` and match `@classytic/arc-next/sse`, whose `subscribeToEvents`
+`STREAM_FRAMES` (import it from `@classytic/repo-core/sync`, which owns the frame contract) and match `@classytic/arc-next/sse`, whose `subscribeToEvents`
 handles `ready`/`resync` (`onResync`) and treats `revoked` as terminal when listed
 in `terminalEvents`. `hub.stats()` reports subscribers, partitions, replayed,
 resyncs, revoked and revalidate failures for a health endpoint; the connections

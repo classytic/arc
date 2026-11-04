@@ -54,6 +54,7 @@
  * ```
  */
 
+import { STREAM_FRAMES } from "@classytic/repo-core/sync";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
 import { arcRouteValidatorCompiler } from "../core/routeValidator.js";
@@ -69,7 +70,6 @@ import type { RegistryEntry } from "../types/index.js";
 import { simpleEqualityMatcher } from "../utils/simpleEqualityMatcher.js";
 import { registerSseStats } from "../utils/sseStats.js";
 import { openSseStream } from "../utils/sseStream.js";
-import { STREAM_FRAMES } from "../utils/streamFrames.js";
 import { promoteStreamTokenToHeader } from "../utils/streaming.js";
 
 const log = arcLog("realtime");

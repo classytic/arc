@@ -81,8 +81,9 @@ describe("CircuitBreaker — sharedState", () => {
   });
 
   it("without sharedState every replica pays the full threshold — the behaviour being fixed", async () => {
-    const replicas = Array.from({ length: 3 }, () =>
-      new CircuitBreaker(failing, { name: "payments", failureThreshold: 5, timeout: 1000 }),
+    const replicas = Array.from(
+      { length: 3 },
+      () => new CircuitBreaker(failing, { name: "payments", failureThreshold: 5, timeout: 1000 }),
     );
     for (const r of replicas) await r.call().catch(() => {});
     await flush();

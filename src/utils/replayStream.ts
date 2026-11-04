@@ -57,30 +57,22 @@
  */
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
-import type { ChangeEntry, ChangeLogStore, ChangesSinceOptions } from "@classytic/repo-core/sync";
+import {
+  type ChangeEntry,
+  type ChangeLogStore,
+  type ChangesSinceOptions,
+  type ReadyFrame,
+  type ResyncFrame,
+  type ResyncReason,
+  type RetryFrame,
+  type RevokedFrame,
+  STREAM_FRAMES,
+  type StreamFrameName,
+} from "@classytic/repo-core/sync";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { arcLog } from "../logger/index.js";
 import { registerSseStats } from "./sseStats.js";
 import type { SseStream } from "./sseStream.js";
-import {
-  type ReadyFrame,
-  type ResyncFrame,
-  type ResyncReason,
-  type RetryFrame,
-  type RevokedFrame,
-  STREAM_FRAMES,
-  type StreamFrameName,
-} from "./streamFrames.js";
-
-export {
-  type ReadyFrame,
-  type ResyncFrame,
-  type ResyncReason,
-  type RetryFrame,
-  type RevokedFrame,
-  STREAM_FRAMES,
-  type StreamFrameName,
-} from "./streamFrames.js";
 
 const log = arcLog("replay-stream");
 

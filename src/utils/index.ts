@@ -71,7 +71,6 @@ export {
 } from "./queryParser.js";
 // Resumable SSE over a repo-core ChangeLogStore — replay, resync, revalidate, revoke
 export type {
-  ReadyFrame,
   ReplayCloseVerdict,
   ReplayHub,
   ReplayHubOptions,
@@ -79,14 +78,9 @@ export type {
   ReplayHubTimers,
   ReplayReadScope,
   ReplaySubscription,
-  ResyncFrame,
-  ResyncReason,
-  RetryFrame,
-  RevokedFrame,
   RevokeTarget,
-  StreamFrameName,
 } from "./replayStream.js";
-export { createReplayHub, lastEventIdOf, STREAM_FRAMES } from "./replayStream.js";
+export { createReplayHub, lastEventIdOf } from "./replayStream.js";
 export type { JsonSchema } from "./responseSchemas.js";
 // Response Schemas
 export {

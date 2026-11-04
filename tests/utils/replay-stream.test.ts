@@ -5,7 +5,7 @@
  * partitioned tailing, revalidation, revoke (local and cross-replica), the
  * `sseStats` gauge and `lastEventIdOf`.
  */
-import { CursorExpiredError, MemoryChangeLogStore } from "@classytic/repo-core/sync";
+import { CursorExpiredError, MemoryChangeLogStore, STREAM_FRAMES } from "@classytic/repo-core/sync";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { eventPlugin } from "../../src/events/eventPlugin.js";
@@ -14,7 +14,6 @@ import {
   createReplayHub,
   lastEventIdOf,
   type ReplayHubOptions,
-  STREAM_FRAMES,
 } from "../../src/utils/replayStream.js";
 import { createSseConnectionGauge } from "../../src/utils/sseStats.js";
 import { openSseStream, type SseStream } from "../../src/utils/sseStream.js";
