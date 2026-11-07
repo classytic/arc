@@ -283,9 +283,13 @@ NODE_ENV=development
 BETTER_AUTH_SECRET=your-32-character-minimum-secret-here
 FRONTEND_URL=http://localhost:3000
 
-# Google OAuth (optional)
+# Social sign-in: providers to enable (google, github, apple, facebook), comma-separated.
+# Each enabled provider needs its credentials; boot fails naming any that are missing.
+# Provider console redirect URI: <BETTER_AUTH_URL>/api/auth/callback/<provider>
+SOCIAL_PROVIDERS=
 # GOOGLE_CLIENT_ID=
 # GOOGLE_CLIENT_SECRET=
+# GOOGLE_ID_TOKEN_AUDIENCES=   # native/mobile client ids accepted on id-token sign-in
 `;
   } else {
     content += `
@@ -335,7 +339,8 @@ HOST=0.0.0.0
 BETTER_AUTH_SECRET=dev-secret-change-in-production-min-32-chars
 FRONTEND_URL=http://localhost:3000
 
-# Google OAuth (optional — leave empty to disable)
+# Social sign-in (e.g. SOCIAL_PROVIDERS=google, then set its credentials)
+SOCIAL_PROVIDERS=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 `;

@@ -128,6 +128,9 @@ export default defineConfig({
     // Auth — Better Auth → arc audit bridge (auth-event lifecycle)
     "src/auth/audit.ts",
 
+    // Auth — social sign-in presets + Better Auth plugin (requires better-auth)
+    "src/auth/social/index.ts",
+
     // Discovery — auto-discovery plugin
     "src/discovery/index.ts",
 

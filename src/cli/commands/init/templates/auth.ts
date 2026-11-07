@@ -163,8 +163,10 @@ import { mongodbAdapter } from '@better-auth/mongo-adapter';`
     : `// Configure your database adapter here
     // See: https://www.better-auth.com/docs/concepts/database`;
 
-  // Plugin usage — same conditional layering as imports.
+  // Plugin usage — same conditional layering as imports. `socialAuth()` comes first: its
+  // callback hook must run before any plugin that rewrites the session cookie or redirect.
   const pluginEntries = [
+    `        socialAuth({ providers: social.providers }),`,
     useBearer ? `        bearer(),` : "",
     useApiKey
       ? `        apiKey({
@@ -181,30 +183,18 @@ import { mongodbAdapter } from '@better-auth/mongo-adapter';`
       : "",
   ].filter(Boolean);
 
-  const orgPluginUsage =
-    pluginEntries.length > 0
-      ? `
+  const pluginUsage = `
       plugins: [
 ${pluginEntries.join("\n")}
-      ],`
-      : "";
+      ],`;
 
   // Stub-registration plugin keys — only registers what's enabled.
   const stubPluginsList = [useOrg ? `'organization'` : ""].filter(Boolean).join(", ");
   const stubExtras = useApiKey ? `, extraCollections: ['apikey']` : "";
 
-  const googleProvider = `
-      // Google OAuth (enabled when env vars are set)
-      ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
-        ? {
-            socialProviders: {
-              google: {
-                clientId: process.env.GOOGLE_CLIENT_ID,
-                clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-              },
-            },
-          }
-        : {}),`;
+  const socialProviders = `
+      // Social sign-in: SOCIAL_PROVIDERS=google,github enables providers (see .env.example).
+      socialProviders: social.socialProviders,`;
 
   return `/**
  * Better Auth Configuration
@@ -221,6 +211,7 @@ ${pluginEntries.join("\n")}
 
 import { betterAuth } from 'better-auth';
 ${[mongoImport, pluginImports, stubsImport].filter(Boolean).join("\n")}
+import { defineSocialProviders, socialAuth } from '@classytic/arc/auth/social';
 import config from '#config/index.js';
 
 // Factory keeps the CONCRETE betterAuth({...}) instantiation as the source
@@ -229,6 +220,9 @@ import config from '#config/index.js';
 // typecheck because Better Auth's \`Auth<T>\` is generic over the exact
 // options object.
 function createAuth() {
+  // Throws at boot naming any missing credential of an enabled provider.
+  const social = defineSocialProviders({ enabled: process.env.SOCIAL_PROVIDERS ?? '' });
+
   return betterAuth({
       secret: config.betterAuth.secret,
       baseURL: process.env.BETTER_AUTH_URL || \`http://localhost:\${config.server.port}\`,
@@ -255,8 +249,8 @@ ${
         enabled: true,
         minPasswordLength: 6,
       },
-${googleProvider}
-${orgPluginUsage}
+${socialProviders}
+${pluginUsage}
       session: {
         cookieCache: {
           enabled: true,
@@ -264,7 +258,7 @@ ${orgPluginUsage}
         },
       },
 
-      trustedOrigins: [config.frontend.url],
+      trustedOrigins: [config.frontend.url, ...social.trustedOrigins],
 
       rateLimit: {
         enabled: process.env.NODE_ENV === 'production',

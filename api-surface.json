@@ -805,6 +805,7 @@
   "./auth": {
     "stability": "stable",
     "runtime": [
+      "BETTER_AUTH_CLIENT_IP_HEADER",
       "MemorySessionStore",
       "authPlugin",
       "createBetterAuthAdapter",
@@ -814,6 +815,7 @@
     ],
     "types": [
       "AuthPluginOptions",
+      "BETTER_AUTH_CLIENT_IP_HEADER",
       "BetterAuthAdapterOptions",
       "BetterAuthAdapterResult",
       "BetterAuthHandler",
@@ -834,7 +836,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "4e165e3152818895"
+    "typesHash": "12fb4573f7cc127a"
   },
   "./hooks": {
     "stability": "stable",
@@ -2525,6 +2527,23 @@
       "wireBetterAuthAudit"
     ],
     "typesHash": "3531a54ab6da87fe"
+  },
+  "./auth/social": {
+    "stability": "experimental",
+    "runtime": [
+      "defineSocialProviders",
+      "socialAuth"
+    ],
+    "types": [
+      "DefineSocialProvidersOptions",
+      "DefinedSocialProviders",
+      "SocialAuthOptions",
+      "SocialProviderId",
+      "SocialProviderInfo",
+      "defineSocialProviders",
+      "socialAuth"
+    ],
+    "typesHash": "735a674e152e9f8a"
   },
   "./usage": {
     "stability": "experimental",

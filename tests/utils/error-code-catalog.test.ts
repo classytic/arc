@@ -42,6 +42,14 @@ const NOT_WIRE_REASON_CODES = new Set([
   "MALFORMED_EVENT", // outbox row `lastError.code`, not an HTTP response
 ]);
 
+/**
+ * Codes returned inside Better Auth's own `{ code, message }` response by endpoints arc's
+ * `socialAuth()` plugin adds under the auth catch-all (the same envelope as Better Auth's
+ * built-ins such as `SESSION_NOT_FRESH`). They are not arc's error envelope, which repo-core's
+ * catalog describes. Documented in wiki/auth.md; clients (arc-next) match them by string.
+ */
+const BETTER_AUTH_ENDPOINT_CODES = new Set(["HANDOFF_INVALID", "ONE_TAP_NONCE_MISMATCH"]);
+
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = path.join(dir, entry);
@@ -82,7 +90,12 @@ describe("error-code catalog (repo-core) covers everything arc emits", () => {
   it("every UPPER_SNAKE `code:` is a catalogued reason code", () => {
     const catalogued = new Set<string>(Object.values(ARC_REASON_CODES));
     const missing = [...scan(/\bcode:\s*["']([A-Z][A-Z0-9_]+)["']/g)]
-      .filter(([code]) => !catalogued.has(code) && !NOT_WIRE_REASON_CODES.has(code))
+      .filter(
+        ([code]) =>
+          !catalogued.has(code) &&
+          !NOT_WIRE_REASON_CODES.has(code) &&
+          !BETTER_AUTH_ENDPOINT_CODES.has(code),
+      )
       .map(([code, file]) => `${code} (${file})`);
     expect(missing, "add these to ARC_REASON_CODES in @classytic/repo-core/errors").toEqual([]);
   });

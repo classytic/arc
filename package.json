@@ -1,6 +1,6 @@
 {
   "name": "@classytic/arc",
-  "version": "2.50.0",
+  "version": "2.51.0",
   "description": "Resource-oriented backend framework for Fastify - clean, minimal, powerful, tree-shakable",
   "type": "module",
   "exports": {
@@ -224,6 +224,10 @@
       "types": "./dist/auth/audit.d.mts",
       "default": "./dist/auth/audit.mjs"
     },
+    "./auth/social": {
+      "types": "./dist/auth/social/index.d.mts",
+      "default": "./dist/auth/social/index.mjs"
+    },
     "./usage": {
       "types": "./dist/usage/index.d.mts",
       "default": "./dist/usage/index.mjs"
@@ -312,6 +316,7 @@
       "./mcp/testing": "stable",
       "./scim": "stable",
       "./auth/audit": "stable",
+      "./auth/social": "stable",
       "./usage": "experimental",
       "./testing/outbox": "stable",
       "./testing/ports": "stable",
@@ -378,7 +383,7 @@
     "node": ">=22"
   },
   "peerDependencies": {
-    "@classytic/primitives": ">=0.36.0",
+    "@classytic/primitives": ">=0.37.0",
     "@classytic/repo-core": ">=0.38.0",
     "@classytic/streamline": ">=2.12.0",
     "@fastify/cors": ">=11.0.0",
@@ -400,8 +405,8 @@
     "@opentelemetry/instrumentation-http": ">=0.50.0",
     "@opentelemetry/instrumentation-mongodb": ">=0.40.0",
     "@opentelemetry/sdk-node": ">=0.50.0",
-    "better-auth": ">=1.7.15",
-    "bullmq": ">=6.5.4",
+    "better-auth": ">=1.7.18",
+    "bullmq": ">=6.7.2",
     "fastify": ">=5.12.8",
     "fastify-raw-body": ">=6.0.3",
     "h3-js": ">=4.0.0",
@@ -508,14 +513,14 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
-    "@better-auth/drizzle-adapter": "^1.7.15",
-    "@better-auth/mongo-adapter": "^1.7.15",
+    "@better-auth/drizzle-adapter": "^1.7.18",
+    "@better-auth/mongo-adapter": "^1.7.18",
     "@biomejs/biome": "^2.6.4",
     "@classytic/dev-tools": "^0.2.1",
     "@classytic/gitkit": ">=0.3.0",
-    "@classytic/mongokit": "^3.44.0",
+    "@classytic/mongokit": "^3.45.0",
     "@classytic/pgkit": "^0.1.1",
-    "@classytic/primitives": "^0.36.0",
+    "@classytic/primitives": "^0.37.0",
     "@classytic/repo-core": "^0.38.0",
     "@classytic/sqlitekit": "^0.13.0",
     "@classytic/streamline": "^2.12.0",
@@ -538,9 +543,9 @@
     "@types/qs": "^6.15.1",
     "@vitest/coverage-v8": "^5.1.0",
     "ajv": "^8.20.0",
-    "better-auth": "^1.7.15",
+    "better-auth": "^1.7.18",
     "better-sqlite3": "^13.0.3",
-    "bullmq": "^6.5.4",
+    "bullmq": "^6.7.2",
     "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
     "fast-check": "^4.10.2",
@@ -551,9 +556,9 @@
     "jose": "^6.2.15",
     "jsonwebtoken": "^9.0.3",
     "knip": "^6.44.1",
-    "mongodb": "~7.7.0",
+    "mongodb": "~7.8.0",
     "mongodb-memory-server": "^11.3.0",
-    "mongoose": "^9.11.4",
+    "mongoose": "^9.12.0",
     "publint": "^0.3.25",
     "tsdown": "^0.23.4",
     "typebox": "^1.4.3",

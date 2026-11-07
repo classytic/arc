@@ -27,7 +27,7 @@ export type {
   CredentialVerifier,
 } from "./betterAuth.js";
 // Better Auth adapter
-export { createBetterAuthAdapter } from "./betterAuth.js";
+export { BETTER_AUTH_CLIENT_IP_HEADER, createBetterAuthAdapter } from "./betterAuth.js";
 export type { BetterAuthOpenApiOptions } from "./betterAuthOpenApi.js";
 // Better Auth OpenAPI extractor
 export { extractBetterAuthOpenApi } from "./betterAuthOpenApi.js";

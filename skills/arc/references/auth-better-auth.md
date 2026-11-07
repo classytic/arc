@@ -24,7 +24,7 @@ const app = await createApp({
 });
 ```
 
-Result also exposes `plugin`, `authenticate`, `optionalAuthenticate`, `permissions` (`requireOrgRole`, `requireOrgMembership`, `requireTeamMembership`), `openapi`.
+Result also exposes `plugin`, `authenticate`, `optionalAuthenticate`, `requireSensitiveSession`, `permissions` (`requireOrgRole`, `requireOrgMembership`, `requireTeamMembership`), `openapi`.
 
 ## Options
 
@@ -38,6 +38,7 @@ Result also exposes `plugin`, `authenticate`, `optionalAuthenticate`, `permissio
 | `openapi` | `true` (default) extracts from `auth.api`; `false`; or a manual spec |
 | `userFields` | Extra user fields merged into OpenAPI schemas |
 | `exposeAuthErrors` | Show detail in 401 (debug only) |
+| `sensitivePaths: ['/admin', ...]` | Route prefixes that skip the cookie cache (see below) |
 
 ```typescript
 createBetterAuthAdapter({
@@ -47,6 +48,31 @@ createBetterAuthAdapter({
 ```
 
 Gate `credentials` routes with `requireServiceScope(...)`.
+
+## Auth routes
+
+`${basePath}/*` answers GET and POST, plus any verb a plugin endpoint in `auth.api` declares (SCIM, OAuth provider). Never TRACE or QUERY. OPTIONS preflight is `@fastify/cors`'s; set BA `trustedOrigins` to your CORS origins (`mirrorTrustedOriginsFromCors`).
+
+BA rate-limits by `X-Forwarded-For`, which clients can forge. Arc sets `x-arc-client-ip` from `request.ip` (honors `trustProxy`); use it:
+
+```typescript
+import { BETTER_AUTH_CLIENT_IP_HEADER } from '@classytic/arc/auth';
+betterAuth({ advanced: { ipAddress: { ipAddressHeaders: [BETTER_AUTH_CLIENT_IP_HEADER] } } });
+```
+
+## Sensitive routes (revoked or banned sessions)
+
+With BA `session.cookieCache`, a revoked session or a newly banned user still passes `authenticate` until the cache `maxAge` lapses. Default; unchanged. For account and security settings, admin and money-moving routes, opt in to BA's own sensitive-route read (`getSession` with `disableCookieCache`):
+
+```typescript
+const ba = createBetterAuthAdapter({ auth, sensitivePaths: ['/admin', '/api/billing'] });
+defineResource({ name: 'payout', routeGuards: [ba.requireSensitiveSession], /* ... */ });
+fastify.post('/me/email', { preHandler: [fastify.authenticate, ba.requireSensitiveSession] }, h);
+// A recent sign-in (Better Auth `session.freshAge`, default 1 day; 403 when stale):
+fastify.post('/me/password', { preHandler: [fastify.authenticate, ba.requireFreshSession] }, h);
+```
+
+Revoked or expired → 401; admin-plugin ban in force → 403. Cookie and bearer alike. Cost: one session-store read per request (bearer sessions already read the store, so the preHandler makes it two; `sensitivePaths` never adds one). Not BA's `freshAge` (recent sign-in).
 
 ## Org context flow (`orgContext: true`)
 

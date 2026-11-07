@@ -251,6 +251,59 @@ x-organization-id: org_abc123    # Org context for tenant-scoped resources
 
 Arc's adapter auto-detects the `apiKey()` plugin and generates matching OpenAPI security schemes. See [OpenAPI docs](../production-ops/openapi#external-paths--dynamic-security) for spec details.
 
+### Social sign-in
+
+`@classytic/arc/auth/social` turns social sign-in into configuration: no routes to write. Every endpoint lives under the Better Auth catch-all, and the only storage is Better Auth's own verification table, so it works with whichever database adapter your `betterAuth()` uses (MongoDB, SQL, memory).
+
+```typescript
+import { betterAuth } from 'better-auth';
+import { bearer } from 'better-auth/plugins';
+import { defineSocialProviders, socialAuth } from '@classytic/arc/auth/social';
+
+const social = defineSocialProviders({ enabled: process.env.SOCIAL_PROVIDERS ?? '' });
+
+export const auth = betterAuth({
+  baseURL: process.env.BETTER_AUTH_URL,
+  socialProviders: social.socialProviders,
+  trustedOrigins: [process.env.FRONTEND_URL!, ...social.trustedOrigins],
+  account: {
+    accountLinking: { trustedProviders: [], requireLocalEmailVerified: true },
+  },
+  // socialAuth() first: see "Ordering" below.
+  plugins: [socialAuth({ providers: social.providers }), bearer()],
+});
+```
+
+**Enabling.** `SOCIAL_PROVIDERS=google,github` (or an array) names the providers. Credentials alone never enable one, and an enabled provider with a missing credential throws at boot naming every missing variable.
+
+| Provider | Required env | Notes |
+|---|---|---|
+| `google` | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Optional `GOOGLE_ID_TOKEN_AUDIENCES` (comma list of native/mobile client ids accepted on id-token sign-in). Scopes `openid email profile` only, account chooser, no offline access. The id token is verified (signature, issuer, audience, expiry) before the profile is trusted; `hd` still restricts the hosted domain. |
+| `github` | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | |
+| `apple` | `APPLE_CLIENT_ID`, `APPLE_CLIENT_SECRET` | Optional `APPLE_APP_BUNDLE_IDENTIFIER`. Adds `https://appleid.apple.com` to `trustedOrigins` (Apple posts the callback). |
+| `facebook` | `FACEBOOK_CLIENT_ID`, `FACEBOOK_CLIENT_SECRET` | |
+
+Register this redirect URI in each provider's console: `${BETTER_AUTH_URL}/api/auth/callback/<id>` (for example `https://api.example.com/api/auth/callback/google`).
+
+**Adding or tuning a provider.** `overrides: { google: { hd: 'example.com' } }` merges Better Auth provider options over a preset. A provider without a preset goes straight into `betterAuth({ socialProviders })`; `socialAuth()` lists it too.
+
+**Account linking.** Keep `trustedProviders: []` and `requireLocalEmailVerified: true` (Better Auth's defaults, spelled out above): a provider account then links to an existing user only when both sides have verified the email, so a provider that hands out unverified emails cannot take over an account.
+
+**Endpoints** (under `/api/auth`):
+
+- `GET /social/providers` → `{ providers: [{ id, name }] }`, the enabled providers only, `Cache-Control: public, max-age=300`. Render the buttons from it.
+- `POST /social/handoff` → the bearer handoff below. Rate-limited to 10 per minute when Better Auth's rate limiter is on.
+
+**Bearer handoff** (for a frontend on another site that keeps the session as a bearer token, not the API's cookie):
+
+1. The initiating tab makes `verifier` (32 random bytes, base64url), keeps it in `sessionStorage`, and calls `signIn.social({ provider, callbackURL, errorCallbackURL, newUserCallbackURL, additionalData: { handoff: base64url(SHA-256(verifier)) } })`.
+2. The provider redirects to `/api/auth/callback/<id>`. When that callback creates a new session, redirects to an absolute URL on a trusted origin, and the flow carried a `handoff` challenge, arc stores a single-use record (60 seconds, keyed by a hash of a random code) and appends `#handoff=<code>` to the redirect. The query string is untouched; an existing fragment gets `&handoff=<code>`. Linking callbacks (no new session) are untouched.
+3. The page reads the code from the fragment and posts `{ code, verifier }` (JSON, no cookies needed) to `/api/auth/social/handoff`. The answer is `{ token, user }`, plus a `set-auth-token` header when `bearer()` is installed. Unknown, expired, replayed or mismatched codes all get the same 400 `{ code: "HANDOFF_INVALID" }`, and a wrong verifier burns the code.
+
+**Ordering.** List `socialAuth()` before any plugin that strips the session `Set-Cookie` or rewrites the callback redirect: Better Auth runs plugin hooks in `plugins` order.
+
+**Google One Tap** needs Better Auth's `oneTap()` plugin. Better Auth ignores a client `nonce` on `/one-tap/callback`; with `socialAuth()` installed, a sent `nonce` must match the id token's, or the request is refused with 400 `ONE_TAP_NONCE_MISMATCH`.
+
 ## Custom Auth
 
 ### Custom Plugin

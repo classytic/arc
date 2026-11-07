@@ -396,8 +396,9 @@ describe("Better Auth Adapter", () => {
       await app.register(plugin);
       await app.ready();
 
-      await app.inject({ method: "DELETE", url: "/api/auth/session" });
-      expect(receivedMethod).toBe("DELETE");
+      // A stub without `api` gets GET + POST only; plugin-declared verbs: better-auth-routes.test.ts.
+      await app.inject({ method: "POST", url: "/api/auth/session", payload: {} });
+      expect(receivedMethod).toBe("POST");
 
       await app.close();
     });

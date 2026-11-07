@@ -30,6 +30,7 @@ describe("Public API Contract", () => {
       "./auth",
       "./auth/audit",
       "./auth/redis",
+      "./auth/social",
       "./cache",
       "./cleanup",
       "./cli",

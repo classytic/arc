@@ -158,6 +158,15 @@ export interface BetterAuthAdapterOptions {
    * ```
    */
   rateLimit?: { max: number; timeWindow: string | number } | false;
+
+  /**
+   * Route prefixes (`'/admin'`, `'/api/account'`) whose requests re-read the session from Better
+   * Auth's session store, bypassing the cookie cache, as Better Auth's `sensitiveSessionMiddleware`
+   * does: a revoked or expired session is a 401, a banned user a 403. Matched against the registered
+   * route URL on `/` boundaries. Costs one session-store read per matching request. Per route:
+   * `requireSensitiveSession`. See wiki/auth.md.
+   */
+  sensitivePaths?: readonly string[];
 }
 
 export interface BetterAuthAdapterResult {
@@ -167,6 +176,27 @@ export interface BetterAuthAdapterResult {
   authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void | FastifyReply>;
   /** Optional authenticate -- resolves session silently, continues as unauthenticated on failure */
   optionalAuthenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  /**
+   * PreHandler for a sensitive route (account, security settings, admin, money): after
+   * `authenticate`, re-reads the session from storage, bypassing the cookie cache; revoked or
+   * expired → 401, banned → 403. One extra session-store read, skipped on a `sensitivePaths` route.
+   * Per resource: `routeGuards: [requireSensitiveSession]`.
+   */
+  requireSensitiveSession: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => Promise<void | FastifyReply>;
+  /**
+   * PreHandler for a route that needs a RECENT sign-in (change password, add a passkey, delete the
+   * account), as Better Auth's `freshSessionMiddleware`: after `authenticate`, a session older than
+   * Better Auth's `session.freshAge` (default one day; `0` disables the check) is a 403
+   * "Session is not fresh", and the client re-authenticates. No session (a credential verifier, or
+   * no `authenticate` before it) is a 401. Per resource: `routeGuards: [requireFreshSession]`.
+   */
+  requireFreshSession: (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) => Promise<void | FastifyReply>;
   /** Permission helpers bound to this auth adapter (available when orgContext is enabled) */
   permissions: {
     requireOrgRole: (...roles: string[]) => import("../permissions/types.js").PermissionCheck;
@@ -205,6 +235,42 @@ declare module "fastify" {
 // ============================================================================
 
 /**
+ * Header arc sets on every request it hands Better Auth: Fastify's `request.ip` (so it honors
+ * arc's `trustProxy`), replacing any client-sent value. Better Auth keys rate limits on
+ * `X-Forwarded-For` by default, which a directly-connected client can forge; opt in with
+ * `advanced: { ipAddress: { ipAddressHeaders: [BETTER_AUTH_CLIENT_IP_HEADER] } }`.
+ */
+export const BETTER_AUTH_CLIENT_IP_HEADER = "x-arc-client-ip";
+
+/** Verbs Better Auth endpoints may declare that the catch-all will register. */
+const ROUTABLE_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * The verbs Better Auth's router answers: GET and POST (core, and the official Fastify guide),
+ * plus any a plugin endpoint declares — `@better-auth/scim` uses PUT/PATCH/DELETE,
+ * `@better-auth/oauth-provider` PATCH/DELETE. Mirrors better-call's `createRouter`, which skips
+ * endpoints without a path or marked `metadata.SERVER_ONLY`. Never `all()`: that adds TRACE and
+ * QUERY to the auth surface.
+ */
+function betterAuthRouteMethods(api: Record<string, unknown> | undefined): string[] {
+  const methods = new Set(["GET", "POST"]);
+  for (const endpoint of Object.values(api ?? {})) {
+    if (!endpoint || (typeof endpoint !== "function" && typeof endpoint !== "object")) continue;
+    const { path, options } = endpoint as {
+      path?: unknown;
+      options?: { method?: unknown; metadata?: { SERVER_ONLY?: unknown } };
+    };
+    if (typeof path !== "string" || !options || options.metadata?.SERVER_ONLY) continue;
+    for (const method of [options.method].flat()) {
+      if (typeof method !== "string") continue;
+      const verb = method.toUpperCase();
+      if (ROUTABLE_METHODS.has(verb)) methods.add(verb);
+    }
+  }
+  return [...methods];
+}
+
+/**
  * Convert a Fastify request into a Fetch API Request.
  *
  * Better Auth expects standard Web API Request objects.
@@ -212,20 +278,15 @@ declare module "fastify" {
  */
 function toFetchRequest(request: FastifyRequest): Request {
   const protocol = request.protocol ?? "http";
-  const host = request.hostname ?? "localhost";
+  // `host`, not `hostname`: Fastify 5's `hostname` drops the port, and Better Auth derives its
+  // baseURL (and so a trusted origin) from this URL when `baseURL` is unset.
+  const host = request.host || "localhost";
   const url = `${protocol}://${host}${request.url}`;
 
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const v of value) {
-        headers.append(key, v);
-      }
-    } else {
-      headers.set(key, value);
-    }
-  }
+  const headers = buildHeaders(request);
+  // Server-set, so a client cannot pick its own rate-limit bucket (see BETTER_AUTH_CLIENT_IP_HEADER).
+  headers.delete(BETTER_AUTH_CLIENT_IP_HEADER);
+  if (request.ip) headers.set(BETTER_AUTH_CLIENT_IP_HEADER, request.ip);
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
 
@@ -366,18 +427,42 @@ function withErrorEnvelope(
 interface BetterAuthDirectApi {
   getSession?: (opts: {
     headers: Headers;
+    query?: { disableCookieCache?: boolean };
   }) => Promise<{ user: Record<string, unknown>; session: Record<string, unknown> } | null>;
   [key: string]: unknown;
 }
 
 /**
+ * Whether sessions live in a server-side store (Better Auth's `isStateful`: `database` or
+ * `secondaryStorage`). Without one the signed cookie IS the session, so an authoritative read
+ * keeps the cookie cache. An instance without `options` (a stub) counts as stateful.
+ */
+function hasSessionStore(auth: BetterAuthHandler): boolean {
+  const options = (auth as { options?: { database?: unknown; secondaryStorage?: unknown } })
+    .options;
+  return !options || !!options.database || !!options.secondaryStorage;
+}
+
+/**
+ * Better Auth admin plugin's ban rule, as its session-create hook applies it: `banned`, unless
+ * `banExpires` has passed. Checked only on an authoritative read (a cached user is stale).
+ */
+function isBannedUser(user: Record<string, unknown>): boolean {
+  if (user.banned !== true) return false;
+  if (!user.banExpires) return true;
+  return !(new Date(user.banExpires as string | number | Date).getTime() < Date.now());
+}
+
+/**
  * Resolve the current session via `auth.api.getSession`. Throws
  * `ArcError(BETTER_AUTH_API_MISSING)` when it is absent (a stub, not a real
- * `betterAuth()` instance).
+ * `betterAuth()` instance). `authoritative` bypasses the cookie cache
+ * (`disableCookieCache`), so the session is read from storage.
  */
 async function getSessionDirect(
   auth: BetterAuthHandler,
   headers: Headers,
+  authoritative = false,
 ): Promise<{ user: Record<string, unknown>; session: Record<string, unknown> } | null> {
   const api = auth.api as BetterAuthDirectApi | undefined;
   if (!api || typeof api.getSession !== "function") {
@@ -388,7 +473,9 @@ async function getSessionDirect(
   }
 
   // Errors propagate: callers map them to 401 (gated by `exposeAuthErrors`) or unauthenticated.
-  const result = await api.getSession({ headers });
+  const result = await api.getSession(
+    authoritative ? { headers, query: { disableCookieCache: true } } : { headers },
+  );
   return result?.user ? result : null;
 }
 
@@ -599,7 +686,31 @@ export function createBetterAuthAdapter(
     resolveOrgRoles,
     memberLookup = "better-auth",
     credentials = {},
+    sensitivePaths = [],
   } = options;
+
+  const sensitivePrefixes = sensitivePaths.map((prefix) => {
+    if (typeof prefix !== "string" || !prefix.startsWith("/"))
+      throw new Error(
+        `createBetterAuthAdapter: sensitivePaths entry ${JSON.stringify(prefix)} must start with "/".`,
+      );
+    return prefix.replace(/\/+$/, "");
+  });
+  /** The registered route URL (not the raw URL, which percent-encoding could disguise). */
+  const isSensitiveRoute = (request: FastifyRequest): boolean => {
+    if (sensitivePrefixes.length === 0) return false;
+    const url = request.routeOptions?.url ?? request.url.split("?")[0] ?? "";
+    return sensitivePrefixes.some((prefix) => url === prefix || url.startsWith(`${prefix}/`));
+  };
+  const authoritativeRead = hasSessionStore(auth);
+  /** Requests whose principal was read authoritatively this request (store read, or a verifier). */
+  const verifiedFresh = new WeakSet<FastifyRequest>();
+  const bannedReply = (reply: FastifyReply) =>
+    reply.code(403).send({
+      code: ARC_ERROR_CODES.FORBIDDEN,
+      message: "Account is banned",
+      status: 403,
+    });
 
   const verifiers = new Map<string, CredentialVerifier>();
   for (const [scheme, verify] of Object.entries(credentials)) {
@@ -710,12 +821,14 @@ export function createBetterAuthAdapter(
         return reply;
       }
       (request as unknown as { scope: RequestScope }).scope = scope;
+      verifiedFresh.add(request);
       return;
     }
     try {
       const headers = buildHeaders(request);
 
-      const sessionData = await getSessionDirect(auth, headers);
+      const sensitive = isSensitiveRoute(request);
+      const sessionData = await getSessionDirect(auth, headers, sensitive && authoritativeRead);
 
       if (!sessionData?.user) {
         reply.code(401).send({
@@ -724,6 +837,10 @@ export function createBetterAuthAdapter(
           status: 401,
         });
         return reply;
+      }
+      if (sensitive) {
+        if (isBannedUser(sessionData.user)) return bannedReply(reply);
+        verifiedFresh.add(request);
       }
 
       const req = request as unknown as Record<string, unknown>;
@@ -784,14 +901,22 @@ export function createBetterAuthAdapter(
     if (presented) {
       // An invalid credential on a public route leaves the caller public, as a bad session does.
       const scope = await presented.verify(presented.value, request);
-      if (scope) (request as unknown as { scope: RequestScope }).scope = scope;
+      if (scope) {
+        (request as unknown as { scope: RequestScope }).scope = scope;
+        verifiedFresh.add(request);
+      }
       return;
     }
     try {
       const headers = buildHeaders(request);
-      const sessionData = await getSessionDirect(auth, headers);
+      const sensitive = isSensitiveRoute(request);
+      const sessionData = await getSessionDirect(auth, headers, sensitive && authoritativeRead);
 
       if (!sessionData?.user) return; // No session — continue as unauthenticated
+      if (sensitive) {
+        if (isBannedUser(sessionData.user)) return; // a banned user stays unauthenticated
+        verifiedFresh.add(request);
+      }
 
       const req = request as unknown as Record<string, unknown>;
       req.user = sessionData.user;
@@ -817,6 +942,74 @@ export function createBetterAuthAdapter(
       if (err instanceof ArcError) throw err;
       // Silently ignore — invalid/expired session = treat as unauthenticated
     }
+  };
+
+  // ========================================
+  // Sensitive-session preHandler
+  // ========================================
+
+  /**
+   * Runs after `authenticate`: the session `request.user` came from must still exist in storage
+   * for the same user. Skipped when this request already read authoritatively (a `sensitivePaths`
+   * route, or a registered credential verifier, which arc never caches).
+   */
+  const requireSensitiveSession = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void | FastifyReply> => {
+    if (verifiedFresh.has(request)) return;
+    const unauthorized = (message: string) =>
+      reply.code(401).send({ code: ARC_ERROR_CODES.UNAUTHORIZED, message, status: 401 });
+    const current = (request as unknown as { user?: Record<string, unknown> }).user;
+    if (!current || presentedCredential(request)) return unauthorized("Authentication required");
+    try {
+      const sessionData = await getSessionDirect(auth, buildHeaders(request), authoritativeRead);
+      const freshId = sessionData ? String(sessionData.user.id ?? sessionData.user._id ?? "") : "";
+      if (!freshId || freshId !== String(current.id ?? current._id ?? ""))
+        return unauthorized("Invalid or expired session");
+      if (isBannedUser(sessionData?.user ?? {})) return bannedReply(reply);
+      verifiedFresh.add(request);
+    } catch (err) {
+      if (err instanceof ArcError) throw err;
+      return unauthorized(
+        exposeAuthErrors && err instanceof Error ? err.message : "Authentication required",
+      );
+    }
+  };
+
+  // ========================================
+  // Fresh-session preHandler
+  // ========================================
+
+  /** Better Auth's default `session.freshAge` (seconds): one day. `0` turns the check off. */
+  const DEFAULT_FRESH_AGE_S = 60 * 60 * 24;
+  const freshAgeSeconds = (): number => {
+    const configured = (auth as { options?: { session?: { freshAge?: unknown } } }).options?.session
+      ?.freshAge;
+    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
+      ? configured
+      : DEFAULT_FRESH_AGE_S;
+  };
+
+  const requireFreshSession = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<void | FastifyReply> => {
+    const session = (request as unknown as { session?: Record<string, unknown> }).session;
+    const createdAt = session
+      ? new Date(session.createdAt as string | number | Date).getTime()
+      : NaN;
+    if (!session || presentedCredential(request) || Number.isNaN(createdAt))
+      return reply.code(401).send({
+        code: ARC_ERROR_CODES.UNAUTHORIZED,
+        message: "Authentication required",
+        status: 401,
+      });
+    const freshAge = freshAgeSeconds();
+    if (freshAge !== 0 && Date.now() - createdAt >= freshAge * 1000)
+      return reply
+        .code(403)
+        .send({ code: ARC_ERROR_CODES.FORBIDDEN, message: "Session is not fresh", status: 403 });
   };
 
   // ========================================
@@ -859,10 +1052,12 @@ export function createBetterAuthAdapter(
       options.rateLimit && typeof options.rateLimit === "object"
         ? { config: { rateLimit: options.rateLimit } }
         : {};
-    fastify.all(
-      `${normalizedBase}/*`,
-      routeOpts,
-      async (request: FastifyRequest, reply: FastifyReply) => {
+    // OPTIONS is left to @fastify/cors (preflight); HEAD comes with GET.
+    fastify.route({
+      method: betterAuthRouteMethods(auth.api),
+      url: `${normalizedBase}/*`,
+      ...routeOpts,
+      handler: async (request: FastifyRequest, reply: FastifyReply) => {
         try {
           const fetchRequest = toFetchRequest(request);
           const fetchResponse = await auth.handler(fetchRequest);
@@ -875,7 +1070,7 @@ export function createBetterAuthAdapter(
           });
         }
       },
-    );
+    });
 
     if (!fastify.hasDecorator("authenticate")) {
       fastify.decorate("authenticate", authenticate);
@@ -919,6 +1114,8 @@ export function createBetterAuthAdapter(
     plugin,
     authenticate,
     optionalAuthenticate,
+    requireSensitiveSession,
+    requireFreshSession,
     permissions: {
       requireOrgRole: (...roles: string[]) => requireOrgRole(roles),
       requireOrgMembership: () => requireOrgMembership(),
