@@ -268,6 +268,23 @@ describe("evaluateAndApplyPermission — denial path", () => {
     });
   });
 
+  it("returns 403 (not 401) for a service principal: no user, but authenticated", async () => {
+    const req = makeEvalRequest({
+      scope: { kind: "service", clientId: "key-1", organizationId: "o1" },
+    });
+    const reply = makeReply();
+    const check: PermissionCheck = async () => false;
+
+    await evaluateAndApplyPermission(check, makeContext({ user: null }), req, reply);
+
+    expect(reply.code).toHaveBeenCalledWith(403);
+    expect(reply.send).toHaveBeenCalledWith({
+      code: "arc.forbidden",
+      message: "Permission denied",
+      status: 403,
+    });
+  });
+
   it("uses the decision reason when provided and ≤100 chars", async () => {
     const req = makeEvalRequest();
     const reply = makeReply();

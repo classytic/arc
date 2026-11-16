@@ -222,7 +222,7 @@
       "version",
       "when"
     ],
-    "typesHash": "2dc83751762b3dc1"
+    "typesHash": "d38b56cbc904e3c8"
   },
   "./permissions": {
     "stability": "stable",
@@ -697,7 +697,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "50f59e12e054a782"
+    "typesHash": "47afccd4fc1922f1"
   },
   "./presets": {
     "stability": "stable",
@@ -1005,7 +1005,7 @@
       "getCascadingResourcesWithMetadata",
       "introspectionPlugin"
     ],
-    "typesHash": "5040082925e15a88"
+    "typesHash": "64d5f98929c5e763"
   },
   "./utils": {
     "stability": "stable",
@@ -1303,7 +1303,7 @@
       "ssePlugin",
       "versioningPlugin"
     ],
-    "typesHash": "80a714c2df694dcf"
+    "typesHash": "af3f81711508858a"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1374,17 +1374,21 @@
   "./encryption": {
     "stability": "stable",
     "runtime": [
+      "createFieldSealer",
       "createStaticKeyProvider",
       "decryptField",
       "encryptField",
       "encryptionPlugin",
-      "parseFieldEnvelope"
+      "parseFieldEnvelope",
+      "parseFieldKeyRing"
     ],
     "types": [
       "ActiveKey",
       "EncryptionDirective",
       "EncryptionMode",
       "EncryptionOptions",
+      "FieldKeyRing",
+      "FieldSealer",
       "JweAlg",
       "JweEnc",
       "KeyContext",
@@ -1392,13 +1396,15 @@
       "KeyProvider",
       "ParsedFieldEnvelope",
       "StaticKeyProviderOptions",
+      "createFieldSealer",
       "createStaticKeyProvider",
       "decryptField",
       "encryptField",
       "encryptionPlugin",
-      "parseFieldEnvelope"
+      "parseFieldEnvelope",
+      "parseFieldKeyRing"
     ],
-    "typesHash": "1937e51ba6d86a23"
+    "typesHash": "95c5abd6d3883799"
   },
   "./idempotency": {
     "stability": "stable",
@@ -1673,7 +1679,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "09ee56fffb27c62f"
+    "typesHash": "3e0826b664e63aa6"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1730,6 +1736,7 @@
       "lazyModuleExports",
       "lazyRequiredModuleExports",
       "loadResources",
+      "moduleHandleRef",
       "orderModules",
       "planModules",
       "preloadResources",
@@ -1789,6 +1796,7 @@
       "ModuleGraphMode",
       "ModuleGraphNode",
       "ModuleGraphOptions",
+      "ModuleHandleRef",
       "ModuleKind",
       "ModuleName",
       "ModulePlan",
@@ -1836,6 +1844,7 @@
       "lazyModuleExports",
       "lazyRequiredModuleExports",
       "loadResources",
+      "moduleHandleRef",
       "orderModules",
       "planModules",
       "preloadResources",
@@ -1853,7 +1862,7 @@
       "verifyModuleGraph",
       "withRelayNudge"
     ],
-    "typesHash": "ba3d264c1091a6ed"
+    "typesHash": "ebfd854c22aa16f6"
   },
   "./schemas": {
     "stability": "stable",
@@ -2529,7 +2538,7 @@
     "typesHash": "3531a54ab6da87fe"
   },
   "./auth/social": {
-    "stability": "experimental",
+    "stability": "stable",
     "runtime": [
       "defineSocialProviders",
       "socialAuth"

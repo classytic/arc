@@ -334,3 +334,44 @@ export function lazyRequiredModuleExports(fastify: FastifyInstance, name: string
     return resolved;
   };
 }
+
+/** A sibling module's export for a seam built at COMPOSITION, before any app exists. See `moduleHandleRef`. */
+export interface ModuleHandleRef<T> {
+  /** Call from the consumer's `plugins` arm: records the booting app. */
+  readonly plugins: (fastify: FastifyInstance) => undefined;
+  /** The sibling's export; throws by name when read before the consumer's app booted. */
+  readonly get: () => T;
+  /** The sibling's export, or `undefined` when it is not composed (an OPTIONAL sibling, no edge). */
+  readonly find: () => T | undefined;
+  /** Whether the recording module's app booted; `false` when that module is not composed. */
+  readonly booted: () => boolean;
+}
+
+/**
+ * A handle for seams a module builds at composition but calls at request or event time: spread `plugins`
+ * into the consumer and call `get()` from the seam. Declare a required sibling in the consumer's `dependsOn`.
+ * Pinned by tests/factory/module-handle-ref.test.ts.
+ */
+export function moduleHandleRef<K extends keyof ArcModuleRegistry>(
+  name: K,
+): ModuleHandleRef<ArcModuleRegistry[K]>;
+export function moduleHandleRef<TExports = unknown>(name: string): ModuleHandleRef<TExports>;
+export function moduleHandleRef(name: string): ModuleHandleRef<unknown> {
+  let app: FastifyInstance | undefined;
+  const booted = (): FastifyInstance => {
+    if (!app)
+      throw new Error(
+        `[arc] module handle "${name}" was read before the consuming module's app booted`,
+      );
+    return app;
+  };
+  return {
+    plugins: (fastify) => {
+      app = fastify;
+      return undefined;
+    },
+    get: () => getModuleExports(booted(), name),
+    find: () => getOptionalModuleExports(booted(), name),
+    booted: () => app !== undefined,
+  };
+}

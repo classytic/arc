@@ -14,6 +14,12 @@ export {
   type ParsedFieldEnvelope,
   parseFieldEnvelope,
 } from "./fieldCipher.js";
+export {
+  createFieldSealer,
+  type FieldKeyRing,
+  type FieldSealer,
+  parseFieldKeyRing,
+} from "./fieldSealer.js";
 export { createStaticKeyProvider, type StaticKeyProviderOptions } from "./keyProvider.js";
 export type {
   ActiveKey,

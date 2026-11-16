@@ -28,7 +28,7 @@
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { arcLog } from "../logger/index.js";
-import type { RequestScope } from "../scope/types.js";
+import { isAuthenticated, PUBLIC_SCOPE, type RequestScope } from "../scope/types.js";
 import { ArcError } from "../utils/errors.js";
 import { conjoinPolicyFilters } from "./filter-merge.js";
 import type {
@@ -326,16 +326,20 @@ export async function evaluateAndApplyPermission(
   // Decided → shape denial, or apply side-effects on grant.
   const { decision } = outcome;
   if (decision.effect !== "allow") {
+    // Authenticated = a user OR any non-public scope. A service principal (API key,
+    // client credentials) has no `user` but HAS authenticated, so its denial is a 403:
+    // a 401 would tell a correctly-credentialed client to re-authenticate, and retry.
+    const authenticated = context.user != null || isAuthenticated(request.scope ?? PUBLIC_SCOPE);
     const defaultMsg =
       opts?.defaultDenialMessage?.(context.user) ??
-      (context.user ? "Permission denied" : "Authentication required");
+      (authenticated ? "Permission denied" : "Authentication required");
     const reason =
       decision.reason && decision.reason.length <= MAX_DENIAL_REASON_LENGTH
         ? decision.reason
         : defaultMsg;
-    const status = context.user ? 403 : 401;
+    const status = authenticated ? 403 : 401;
     reply.code(status).send({
-      code: context.user ? "arc.forbidden" : "arc.unauthorized",
+      code: authenticated ? "arc.forbidden" : "arc.unauthorized",
       message: reason,
       status,
     });
