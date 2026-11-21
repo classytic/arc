@@ -62,7 +62,7 @@ const productResource = defineResource({
 
   // Advanced
   skipValidation: false,       // Bypass config validation
-  disableDefaultRoutes: false, // When true, only custom `routes` are mounted
+  crud: { list: true, get: true }, // Allow-list of CRUD ops; `false` mounts only custom `routes`
 });
 
 // Register via the app factory (canonical)
@@ -80,7 +80,7 @@ const app = await createApp({
 In 2.11, `BaseController` was split from a 1,589-LOC god class into a composition of `BaseCrudController` + four preset mixins. **Existing `extends BaseController<Product>` code keeps working** (a declaration-merged interface threads `TDoc` through every method), but hosts can now pick smaller surfaces:
 
 ```typescript
-import { BaseController } from '@classytic/arc';
+import { BaseController, ValidationError } from '@classytic/arc';
 import type { IRequestContext, IControllerResponse } from '@classytic/arc';
 
 // Full surface — every preset method available (drop-in for pre-2.11 code)
@@ -92,7 +92,7 @@ class ProductController extends BaseController<Product> {
   // Override CRUD methods
   async create(req: IRequestContext): Promise<IControllerResponse<Product>> {
     if (!req.body.sku) {
-      return { success: false, error: 'SKU required', status: 400 };
+      throw new ValidationError('SKU required');
     }
     return super.create(req);  // Call parent implementation
   }
@@ -102,7 +102,7 @@ class ProductController extends BaseController<Product> {
     const products = await this.repository.getAll({
       filter: { isFeatured: true },
     });
-    return { success: true, data: products };
+    return { data: products };
   }
 }
 ```
@@ -175,15 +175,14 @@ interface IRequestContext {
 
 ```typescript
 interface IControllerResponse<T> {
-  success: boolean;                      // true/false
-  data?: T;                              // Response payload
-  error?: string;                        // Error message
-  status?: number;                       // HTTP status (default: 200/400)
-  meta?: Record<string, unknown>;        // Pagination, counts, etc.
-  details?: Record<string, unknown>;     // Debug info
+  data: T;                               // Response payload, sent as the body (no envelope)
+  status?: number;                       // HTTP status (default: 200)
   headers?: Record<string, string>;      // Custom response headers
+  meta?: Record<string, unknown>;        // Merged into list-shaped responses
 }
 ```
+
+Errors are thrown (`NotFoundError`, `ValidationError`, any `ArcError`), not returned. The error handler answers with `{ code, message, status, details? }`. See [Response Format](./responses).
 
 **Custom response headers** — set headers like `X-Total-Count`, `ETag`, or `Link` from your controller:
 
@@ -191,7 +190,6 @@ interface IControllerResponse<T> {
 async list(req: IRequestContext): Promise<IControllerResponse> {
   const { docs, total } = await this.repository.findAll(req.query);
   return {
-    success: true,
     data: docs,
     headers: { 'X-Total-Count': String(total) },
   };
@@ -338,7 +336,7 @@ If `allowedPopulate` / `allowedLookups` are not set, all paths/collections are a
 Create custom parsers for other databases:
 
 ```typescript
-import type { QueryParserInterface, ParsedQuery } from '@classytic/arc';
+import type { QueryParserInterface, ParsedQuery } from '@classytic/arc/types';
 
 class PgQueryParser implements QueryParserInterface {
   parse(query: Record<string, unknown> | null | undefined): ParsedQuery {
@@ -444,14 +442,15 @@ defineResource({
     {
       method: 'GET',
       path: '/featured',
-      handler: 'getFeatured',       // Controller method (arc pipeline)
+      operation: 'getFeatured',     // stable MCP tool + pipeline name
+      handler: (ctx) => productController.getFeatured(ctx), // arc pipeline + MCP tool
       permissions: allowPublic(),
       summary: 'Get featured products',
     },
     {
       method: 'GET',
       path: '/:id/download',
-      rawHandler: 'downloadFile',    // Fastify request/reply — skips the arc pipeline
+      rawHandler: (req, reply) => productController.downloadFile(req, reply), // Fastify request/reply — skips the arc pipeline
       permissions: requireAuth(),
       summary: 'Download product file',
     },
@@ -461,7 +460,7 @@ defineResource({
       handler: async (req: IRequestContext) => {
         // Inline handler (Arc context)
         const result = await importProducts(req.body);
-        return { success: true, data: result };
+        return { data: result };
       },
       permissions: requireRoles(['admin']),
     },
@@ -482,7 +481,7 @@ class ProductController extends BaseController {
       filter: { isFeatured: true, organizationId },
     });
 
-    return { success: true, data: products };
+    return { data: products };
   }
 }
 ```
@@ -528,7 +527,7 @@ async create(req: IRequestContext): Promise<IControllerResponse> {
     price: calculatedPrice,
   });
 
-  return { success: true, data: product };
+  return { data: product };
 }
 ```
 
@@ -620,7 +619,7 @@ defineResource({
 Low-level route creation. Used internally by defineResource.
 
 ```typescript
-import { createCrudRouter } from '@classytic/arc';
+import { createCrudRouter } from '@classytic/arc/core';
 
 createCrudRouter(fastify, controller, {
   resourceName: 'product',  // Required for hooks!

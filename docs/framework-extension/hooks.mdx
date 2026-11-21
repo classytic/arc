@@ -134,7 +134,7 @@ async create(req: IRequestContext): Promise<IControllerResponse> {
     tax: calculatedPrice * taxRate,
   });
 
-  return { success: true, data: product };
+  return { data: product };
 }
 ```
 
@@ -143,10 +143,11 @@ async create(req: IRequestContext): Promise<IControllerResponse> {
 For advanced usage:
 
 ```typescript
-import { hookSystem } from '@classytic/arc/hooks';
+// Instance-scoped: available once arc's core plugin is registered (createApp does this)
+const hooks = fastify.arc.hooks;
 
 // Register hook
-const unsubscribe = hookSystem.register({
+const unsubscribe = hooks.register({
   resource: 'product',
   operation: 'create',
   phase: 'after',
@@ -158,8 +159,8 @@ const unsubscribe = hookSystem.register({
 unsubscribe();
 
 // Manually execute hooks
-await hookSystem.executeBefore('product', 'create', data, { user, metadata });
-await hookSystem.executeAfter('product', 'create', result, { user, metadata });
+await hooks.executeBefore('product', 'create', data, { user, meta });
+await hooks.executeAfter('product', 'create', result, { user, meta });
 ```
 
 ## Execution Order

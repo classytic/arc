@@ -14,6 +14,7 @@ import { ARC_ERROR_CODES, type ErrorContract } from "@classytic/repo-core/errors
 import { fingerprintRequest, IdempotencyError } from "@classytic/repo-core/idempotency";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { warnDeprecated } from "../logger/deprecation.js";
 import { createDomainError } from "../utils/errors.js";
 import { requireSingleHeaderValue } from "../utils/headers.js";
 import { operationIdentity as scopedOperationIdentity } from "../utils/operationIdentity.js";
@@ -94,7 +95,13 @@ export interface IdempotencyPluginOptions {
    * remain as the runtime backstop.
    */
   selfCheck?: boolean;
-  /** Migration escape for legacy custom stores without atomic completion fencing; warns at boot. */
+  /**
+   * Migration escape for legacy custom stores without atomic completion fencing.
+   *
+   * @deprecated Implement `setIfLocked` (atomic fenced completion) on the custom
+   * store; the built-in stores already do. Warns once per process; removed in
+   * the next minor.
+   */
   allowUnfencedCompletion?: boolean;
 }
 
@@ -205,6 +212,12 @@ const idempotencyPlugin: FastifyPluginAsync<IdempotencyPluginOptions> = async (
    */
   const ownsStore = !explicitStore;
 
+  if (opts.allowUnfencedCompletion !== undefined) {
+    warnDeprecated(
+      "The idempotencyPlugin `allowUnfencedCompletion` option",
+      "Implement atomic `setIfLocked` completion fencing on the custom store.",
+    );
+  }
   if (
     enabled &&
     (typeof store.setIfLocked !== "function" || store.supportsFencedCompletion === false)

@@ -90,9 +90,8 @@ permissions: {
 > requireRoles(['admin'], { includeOrgRoles: false })
 > ```
 
-The `roles()` helper is now an alias of `requireRoles()` and is preserved for
-backwards compatibility — for new code, prefer `requireRoles()` since it
-matches the rest of the `requireXxx()` family.
+The `roles()` alias of `requireRoles()` is deprecated: it warns once per
+process and is removed in the next minor. Use `requireRoles()`.
 
 ### `requireOwnership(ownerField)`
 
@@ -945,5 +944,5 @@ Prefer Arc's built-in `requireOrgRole()` over custom role checks. Only write cus
 ## Examples
 
 See these maintained examples:
-- [examples/01-basic-crud.ts](../../examples/01-basic-crud.ts)
+- [examples/02-basic-crud.ts](../../examples/02-basic-crud.ts)
 - [examples/03-multi-tenant.ts](../../examples/03-multi-tenant.ts)

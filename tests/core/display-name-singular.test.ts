@@ -28,7 +28,7 @@ describe("displayName — singular default (2.15.5)", () => {
     const r = defineResource({
       name: "shot",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     expect(r.displayName).toBe("Shot");
   });
@@ -39,7 +39,7 @@ describe("displayName — singular default (2.15.5)", () => {
     const r = defineResource({
       name: "voice-clip",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     expect(r.displayName).toBe("Voice-clip");
   });
@@ -52,7 +52,7 @@ describe("displayName — singular default (2.15.5)", () => {
     const r = defineResource({
       name: "voice-clip",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     expect(r.tag).toBe("Voice-clips");
   });
@@ -62,7 +62,7 @@ describe("displayName — singular default (2.15.5)", () => {
       name: "post",
       displayName: "Blog Post",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     expect(r.displayName).toBe("Blog Post");
     expect(r.tag).toBe("Blog Posts");

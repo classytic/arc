@@ -57,7 +57,15 @@ function ledger(
     tenantField: false,
     adapter: stubAdapter(),
     permissions: { list: open, get: open, create: open, update: open, delete: open },
-    disabledRoutes,
+    ...(disabledRoutes.length > 0
+      ? {
+          crud: Object.fromEntries(
+            (["list", "get", "create", "update", "delete"] as const)
+              .filter((op) => !disabledRoutes.includes(op))
+              .map((op) => [op, true]),
+          ),
+        }
+      : {}),
     ...(idempotency ? { idempotency } : {}),
     actions: {
       pay: {

@@ -90,7 +90,15 @@ async function buildApp(opts?: {
       delete: [sentinel("delete")],
     },
     ...(opts?.updateMethod ? { updateMethod: opts.updateMethod } : {}),
-    ...(opts?.disabledRoutes ? { disabledRoutes: opts.disabledRoutes } : {}),
+    ...(opts?.disabledRoutes
+      ? {
+          crud: Object.fromEntries(
+            (["list", "get", "create", "update", "delete"] as const)
+              .filter((op) => !opts.disabledRoutes?.includes(op))
+              .map((op) => [op, true]),
+          ),
+        }
+      : {}),
   });
 
   const app = await createApp({

@@ -161,14 +161,13 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   onFieldWriteDenied?: "reject" | "strip";
   /**
    * What to do when an UPDATE body carries an `immutable` /
-   * `immutableAfterCreate` field. Default `'strip'`.
+   * `immutableAfterCreate` field. Default `'reject'` (403);
+   * `ARC_STRICT_IMMUTABLE_WRITES=false` makes `'strip'` the fleet-wide default.
    *
-   * `'reject'` answers 403 instead of 200-with-the-field-unchanged. Kept
-   * separate from `onFieldWriteDenied` (which defaults to `'reject'`) because a
-   * full-object PATCH echoing an immutable field back UNCHANGED is legitimate,
-   * and the sanitizer has no stored document to tell that from a real change.
-   * Hosts sending partial patches should turn it on; `ARC_STRICT_IMMUTABLE_WRITES`
-   * sets it fleet-wide.
+   * `'strip'` answers 200 with the field unchanged. Kept separate from
+   * `onFieldWriteDenied` so a host whose clients echo a full object back in a
+   * PATCH can relax this alone: the sanitizer has no stored document to tell an
+   * unchanged echo from a real change.
    */
   onImmutableWrite?: "reject" | "strip";
   middlewares?: MiddlewareConfig;
@@ -193,22 +192,22 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    * **Path collisions with auto-CRUD are detected at `defineResource()` time.**
    * If you declare a route that shares method+path with an auto-CRUD op
    * (e.g. `POST /` collides with `create`), validation throws with the
-   * exact `disabledRoutes` line to add. Use one of:
-   *   - `disabledRoutes: ['create']` — suppress the auto-CRUD op
-   *   - `crud: { list: true, get: true }` — opt-in allow-list (preferred)
-   *   - `disableDefaultRoutes: true` — turn off all auto-CRUD on this resource
+   * exact `crud` line to add. Use one of:
+   *   - `crud: { list: true, get: true, update: true, delete: true }` — leave `create` out
+   *   - `crud: false` — turn off all auto-CRUD on this resource
    *
    * @example Custom route alongside default CRUD:
    * ```typescript
    * routes: [
-   *   { method: 'GET', path: '/stats', handler: 'getStats', permissions: auth() },
-   *   { method: 'POST', path: '/webhook', rawHandler: webhookFn, permissions: auth() },
+   *   { method: 'GET', path: '/stats', permissions: requireAuth(),
+   *     handler: async (ctx) => ({ data: await stats(ctx.scope) }) },
+   *   { method: 'POST', path: '/webhook', rawHandler: webhookFn, permissions: allowPublic() },
    * ]
    * ```
    *
    * @example Custom POST replacing the auto-CRUD `create`:
    * ```typescript
-   * disabledRoutes: ['create'],
+   * crud: { list: true, get: true, update: true, delete: true },
    * routes: [
    *   { method: 'POST', path: '/', handler: customCreate, permissions: requireAuth() },
    * ]
@@ -226,7 +225,7 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    *   approve: async (id, data, req) => service.approve(id, req.user._id),
    *   cancel: {
    *     handler: async (id, data, req) => service.cancel(id, data.reason, req.user._id),
-   *     permissions: roles('admin'),
+   *     permissions: requireRoles(['admin']),
    *     schema: { reason: { type: 'string' } },
    *   },
    * },
@@ -265,34 +264,30 @@ export interface ResourceConfig<TDoc = AnyRecord> {
    */
   aggregations?: import("../../core/aggregation/types.js").AggregationsMap;
   /**
-   * Turn off ALL auto-CRUD routes for this resource (custom `routes` /
-   * `actions` / `aggregations` still mount). The canonical kill-switch —
-   * `crud: false` is its declarative equivalent.
+   * Turn off ALL auto-CRUD routes for this resource.
    *
-   * Note: there is no `disableCrud` alias. A short-lived `disableCrud`
-   * field shipped in the type but was never read by the router, so it
-   * silently no-opped — removed in 2.18.0 so the only kill-switch is the
-   * one that actually works.
+   * @deprecated Use `crud: false`. Warns once per process; removed in the
+   * next minor.
    */
   disableDefaultRoutes?: boolean;
-  /** Specific routes to disable (negative-form opt-out). */
+  /**
+   * Specific routes to disable (negative-form opt-out).
+   *
+   * @deprecated Use the `crud` allow-list: `disabledRoutes: ['delete']`
+   * becomes `crud: { list: true, get: true, create: true, update: true }`.
+   * Warns once per process; removed in the next minor.
+   */
   disabledRoutes?: CrudRouteKey[];
   /**
    * Declarative CRUD allow-list — what's ENABLED is explicit (positive form).
-   *
-   * Mutually exclusive with `disabledRoutes` — passing both is a config
-   * error and throws at boot. Use this when you want least-privilege
-   * defaults: a new CRUD op added in a future arc release won't silently
-   * leak through your `disabledRoutes` list because every op is opt-in.
+   * The one CRUD-disable spelling. A new CRUD op added in a future arc release
+   * never mounts silently, because every op is opt-in.
    *
    * - `crud: { list: true, get: true }` — only `list` + `get` mount;
    *   `create` / `update` / `delete` are NOT mounted.
-   * - `crud: false` — equivalent to `disableDefaultRoutes: true` (no CRUD at all).
-   * - `crud: undefined` (default) — every op mounts (legacy behaviour).
-   *
-   * 2.16: prefer this over `disabledRoutes` for new resources. The
-   * negative form stays for back-compat but won't be the documented
-   * default going forward.
+   * - `crud: false` — no auto-CRUD at all (custom `routes` / `actions` /
+   *   `aggregations` still mount).
+   * - `crud: undefined` (default) — every op mounts.
    *
    * @example
    * ```ts
@@ -370,15 +365,13 @@ export interface ResourceConfig<TDoc = AnyRecord> {
   /** Don't register in introspection */
   skipRegistry?: boolean;
   /**
-   * Fail-closed permission invariant. When `true`, any enabled CRUD WRITE
-   * (create/update/delete) that mounts WITHOUT a permission gate is a FATAL
-   * define-time error — `defineResource()` throws instead of shipping an
-   * unauthenticated write with only a warning. Reads that are ungated stay a
-   * non-fatal `info` hint (public catalogs are legitimate).
+   * Fail-closed permission invariant. When `true`, any enabled CRUD op — read
+   * or write — that mounts WITHOUT a permission gate is a FATAL define-time
+   * error: `defineResource()` throws. A public catalog states it:
+   * `permissions: { list: allowPublic(), get: allowPublic() }`.
    *
-   * Off by default (public-by-omission still only warns) so existing hosts are
-   * not broken. Opt in per-resource here, or app-wide via the
-   * `ARC_STRICT_PERMISSIONS=true` env — the recommended production posture.
+   * On by default. `false` here, or `ARC_STRICT_PERMISSIONS=false` app-wide,
+   * downgrades an ungated write to a warning and an ungated read to `info`.
    */
   strictPermissions?: boolean;
   /**

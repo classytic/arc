@@ -7,7 +7,12 @@
  */
 
 import { requireRoles } from "../permissions/index.js";
-import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
+import type {
+  PresetController,
+  PresetResult,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../types/index.js";
 
 export function softDeletePreset(): PresetResult {
   // `_presetSource` is an internal marker the MCP layer reads to
@@ -19,23 +24,28 @@ export function softDeletePreset(): PresetResult {
   // `defineResource` so the field is set once at preset-emit time.
   return {
     name: "softDelete",
-    routes: (permissions: ResourcePermissions): RouteDefinition[] => [
+    routes: (
+      permissions: ResourcePermissions,
+      controller: PresetController<"getDeleted" | "restore">,
+    ): RouteDefinition[] => [
       {
         method: "GET",
         path: "/deleted",
-        handler: "getDeleted",
+        handler: controller.getDeleted,
         summary: "Get soft-deleted items",
         permissions: permissions.list ?? requireRoles(["admin"]),
         operation: "listDeleted",
+        _tenantSlot: "list",
         _presetSource: "softDelete",
       },
       {
         method: "POST",
         path: "/:id/restore",
-        handler: "restore",
+        handler: controller.restore,
         summary: "Restore soft-deleted item",
         permissions: permissions.update ?? requireRoles(["admin"]),
         operation: "restore",
+        _tenantSlot: "update",
         _presetSource: "softDelete",
       },
     ],

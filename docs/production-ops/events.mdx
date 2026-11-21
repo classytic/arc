@@ -111,7 +111,7 @@ interface EventPluginOptions {
   deadLetterQueue?: {          // For events that exhaust retries
     store?: (event, errors) => Promise<void>; // Custom store (default: publishes to '$deadLetter')
   };
-  wal?: {                      // Write-Ahead Log for at-least-once delivery
+  wal?: {                      // DEPRECATED (warns once): use the outbox instead
     save: (event) => Promise<void>;        // Persist before publish
     acknowledge?: (eventId) => Promise<void>; // Mark as delivered
   };
@@ -129,8 +129,8 @@ interface EventPluginOptions {
 - `false`: transport errors propagate to caller — use for business-critical events (billing,
   notifications) where silent loss is unacceptable.
 
-> **Best practice:** Set `failOpen: false` for business events and use `wal` for at-least-once
-> delivery. Use `failOpen: true` (default) only for fire-and-forget analytics.
+> **Best practice:** Set `failOpen: false` for business events and use the outbox
+> (`createOutboxModule` / `EventOutbox`) for at-least-once delivery. Use `failOpen: true` (default) only for fire-and-forget analytics.
 
 ## Publishing Events
 
@@ -396,7 +396,7 @@ const transport = new RedisStreamTransport(redis, {
 Implement `EventTransport` interface for any message broker (RabbitMQ, Kafka, NATS, SQS):
 
 ```typescript
-import type { EventTransport, DomainEvent, EventHandler } from '@classytic/arc/events';
+import type { EventTransport, DomainEvent, EventHandler } from '@classytic/primitives/events';
 
 class NatsEventTransport implements EventTransport {
   readonly name = 'nats';
@@ -474,7 +474,7 @@ await outbox.store({
 });
 
 // Relay cron (runs every few seconds)
-const relayed = await outbox.relay();  // publishes pending → transport
+const { relayed } = await outbox.relayBatch();  // publishes pending → transport
 ```
 
 When you pass `repository`, arc adapts it to the `OutboxStore` contract
@@ -595,8 +595,8 @@ const outbox = new EventOutbox({
   leaseMs: 30_000, // 30s lease
 });
 
-// On every tick, relay() claims its own batch — safe to run on N workers
-setInterval(() => outbox.relay(), 1_000);
+// On every tick, relayBatch() claims its own batch — safe to run on N workers
+setInterval(() => outbox.relayBatch(), 1_000);
 ```
 
 `EventOutbox` automatically detects `claimPending` and uses it over `getPending`.

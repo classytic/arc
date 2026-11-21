@@ -36,7 +36,11 @@ export function TreeMixin<TBase extends MixinConstructor<BaseCrudController<obje
         throw createError(501, "Tree structure not implemented");
       }
 
-      const options = this.queryResolver.resolve(req, this.meta(req));
+      // The list scope (filters) plus the tenant context `list` hands the repository.
+      const options = {
+        ...this.queryResolver.resolve(req, this.meta(req)),
+        ...this.tenantRepoOptions(req),
+      };
       const tree = await repo.getTree(options);
 
       return { data: tree, status: 200 };
@@ -55,7 +59,11 @@ export function TreeMixin<TBase extends MixinConstructor<BaseCrudController<obje
       const self = this as unknown as { _presetFields: { parentField?: string } };
       const parentField = self._presetFields.parentField ?? "parent";
       const parentId = (req.params[parentField] ?? req.params.parent ?? req.params.id) as string;
-      const options = this.queryResolver.resolve(req, this.meta(req));
+      // The list scope (filters) plus the tenant context `list` hands the repository.
+      const options = {
+        ...this.queryResolver.resolve(req, this.meta(req)),
+        ...this.tenantRepoOptions(req),
+      };
       const children = await repo.getChildren(parentId, options);
 
       return { data: children, status: 200 };

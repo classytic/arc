@@ -25,7 +25,12 @@
  */
 
 import { requireAuth } from "../permissions/index.js";
-import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
+import type {
+  PresetController,
+  PresetResult,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../types/index.js";
 
 // ============================================================================
 // Types
@@ -50,15 +55,19 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
 
   return {
     name: "bulk",
-    routes: (permissions: ResourcePermissions): RouteDefinition[] => {
+    routes: (
+      permissions: ResourcePermissions,
+      controller: PresetController<"bulkCreate" | "bulkUpdate" | "bulkDelete">,
+    ): RouteDefinition[] => {
       const routes: RouteDefinition[] = [];
 
       if (operations.includes("createMany")) {
         routes.push({
           method: "POST",
           path: "/bulk",
-          handler: "bulkCreate",
+          handler: controller.bulkCreate,
           operation: "bulkCreate",
+          _tenantSlot: "create",
           summary: "Create multiple items",
           permissions: permissions.create ?? requireAuth(),
           schema: {
@@ -82,8 +91,9 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
         routes.push({
           method: "PATCH",
           path: "/bulk",
-          handler: "bulkUpdate",
+          handler: controller.bulkUpdate,
           operation: "bulkUpdate",
+          _tenantSlot: "update",
           summary: "Update multiple items matching filter",
           permissions: permissions.update ?? requireAuth(),
           schema: {
@@ -113,8 +123,9 @@ export function bulkPreset(opts?: BulkPresetOptions): PresetResult {
         routes.push({
           method: "DELETE",
           path: "/bulk",
-          handler: "bulkDelete",
+          handler: controller.bulkDelete,
           operation: "bulkDelete",
+          _tenantSlot: "delete",
           summary: "Delete multiple items matching filter",
           permissions: permissions.delete ?? requireAuth(),
           schema: {

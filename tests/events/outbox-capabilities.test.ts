@@ -46,7 +46,7 @@ describe("Outbox — backward compatibility", () => {
 
     await outbox.store(makeEvent("evt-1"));
     await outbox.store(makeEvent("evt-2"));
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
 
     expect(relayed).toBe(2);
     expect(acked).toEqual(["evt-1", "evt-2"]);
@@ -81,7 +81,7 @@ describe("Outbox — backward compatibility", () => {
     await outbox.store(makeEvent("evt-2"));
     await outbox.store(makeEvent("evt-3"));
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
     expect(relayed).toBe(1); // stopped at 2nd event
     expect(publish).toHaveBeenCalledTimes(2);
   });
@@ -141,7 +141,7 @@ describe("Outbox — claimPending path", () => {
     const outbox = new EventOutbox({ store, transport, consumerId: "worker-1" });
 
     await outbox.store(makeEvent("evt-1"));
-    await outbox.relay();
+    await outbox.relayBatch();
 
     expect(claimSpy).toHaveBeenCalledWith(
       expect.objectContaining({ consumerId: "worker-1", leaseMs: expect.any(Number) }),
@@ -291,7 +291,7 @@ describe("Outbox — fail hook path", () => {
     await outbox.store(makeEvent("evt-2"));
     await outbox.store(makeEvent("evt-3"));
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
 
     expect(relayed).toBe(2); // evt-1 and evt-3 succeeded
     expect(failSpy).toHaveBeenCalledTimes(1);
@@ -353,7 +353,7 @@ describe("Outbox — fail hook path", () => {
     });
 
     await outbox.store(makeEvent("evt-1"));
-    await outbox.relay();
+    await outbox.relayBatch();
 
     expect(store._getEntry("evt-1")?.lastError?.message).toBe("string error");
   });
@@ -369,7 +369,7 @@ describe("Outbox — fail hook path", () => {
     });
 
     await outbox.store(makeEvent("evt-1"));
-    await outbox.relay();
+    await outbox.relayBatch();
 
     expect(store._getEntry("evt-1")?.lastError).toEqual({
       message: "nope",
@@ -503,7 +503,7 @@ describe("Outbox — malformed event handling in relay", () => {
       onError: (info) => errors.push({ kind: info.kind, message: info.error.message }),
     });
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
 
     // Batch aborted on malformed event — valid event not processed this cycle
     expect(relayed).toBe(0);
@@ -576,7 +576,7 @@ describe("Outbox — relay error reporting", () => {
     });
 
     await outbox.store(makeEvent("evt-1"));
-    await outbox.relay();
+    await outbox.relayBatch();
 
     expect(errors).toContain("publish_failed");
   });
@@ -609,7 +609,7 @@ describe("Outbox — relay error reporting", () => {
       onError: (info) => errors.push({ kind: info.kind, eventId: info.event?.meta.id }),
     });
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
 
     // Publish happened but ack was rejected — not counted as relayed
     expect(publishCount.n).toBe(1);
@@ -635,7 +635,7 @@ describe("Outbox — relay error reporting", () => {
     await outbox.store(makeEvent("evt-2"));
 
     // Should not throw — callback errors are swallowed
-    await expect(outbox.relay()).resolves.toBe(0);
+    await expect(outbox.relayBatch().then((r) => r.relayed)).resolves.toBe(0);
   });
 });
 
@@ -674,7 +674,7 @@ describe("Outbox — real-world scenarios", () => {
     // Race: each worker keeps relaying until nothing is pending
     const runUntilEmpty = async (outbox: EventOutbox) => {
       while (true) {
-        const n = await outbox.relay();
+        const n = (await outbox.relayBatch()).relayed;
         if (n === 0) return;
       }
     };
@@ -743,7 +743,7 @@ describe("Outbox — real-world scenarios", () => {
 
     // Keep draining
     for (let i = 0; i < 10; i++) {
-      const n = await outbox.relay();
+      const n = (await outbox.relayBatch()).relayed;
       if (n === 0 && (await store.getPending(10)).length === 0) break;
     }
 
@@ -803,7 +803,7 @@ describe("Outbox — real-world scenarios", () => {
     // Drain with small sleeps to respect visibleAt
     const start = Date.now();
     while (Date.now() - start < 500) {
-      const n = await outbox.relay();
+      const n = (await outbox.relayBatch()).relayed;
       if (n > 0) break;
       await new Promise((r) => setTimeout(r, 5));
     }
@@ -890,7 +890,7 @@ describe("Outbox — real-world scenarios", () => {
       leaseMs: 60_000,
     });
 
-    const relayed = await workerB.relay();
+    const relayed = (await workerB.relayBatch()).relayed;
     expect(relayed).toBe(5);
     expect(delivered).toHaveLength(5);
     expect(await store.getPending(10)).toHaveLength(0);

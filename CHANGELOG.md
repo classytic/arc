@@ -6,6 +6,7 @@ Release **index** — one line per minor, newest first. Full notes + migration s
 
 | Version | Headline |
 |---|---|
+| [2.53](changelog/v2.md#2530) | ⚠ Rate limit keyed per user (anonymous per IP) + `ipCeiling`; ⚠ CORS exposes `x-request-id`; ⚠ tracing on OTel SDK 3 (semconv keys, `{METHOD} {route}`); module `facts`/`invariants`; ⚠ `ArcBootError`; ⚠ readiness drops error text; ⚠ ungated reads fail strict boot; ⚠ legacy spellings deprecated (warn once). |
 | [2.52](changelog/v2.md#2520) | `createFieldSealer` / `parseFieldKeyRing` (`./encryption`: string sealing at rest, key-ring rotation); `moduleHandleRef` (`./factory`: a seam built at composition reads a sibling module's export). Fixed: a denied service principal (API key, client credentials) gets 403, not 401. |
 | [2.51](changelog/v2.md#2510) | Better Auth catch-all registers only the verbs Better Auth routes (was `all()`: TRACE/QUERY, false CORS warning); Request keeps the Host port; `BETTER_AUTH_CLIENT_IP_HEADER` for per-IP rate limits; opt-in sensitive-session routes (`sensitivePaths`, `requireSensitiveSession`: revoked/banned refused despite the cookie cache); `requireFreshSession` (Better Auth `freshAge`); social sign-in by config (`./auth/social`, experimental: env presets, verified Google id token, `socialAuth()` bearer handoff); peers primitives >=0.37, better-auth >=1.7.18, bullmq >=6.7.2. |
 | [2.50](changelog/v2.md#2500) | ⚠ Stream frame vocabulary (`STREAM_FRAMES` + frame types) moves to `@classytic/repo-core/sync`; no longer exported from `./utils`. Peer repo-core >=0.38. |

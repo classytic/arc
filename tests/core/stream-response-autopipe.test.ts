@@ -140,7 +140,7 @@ describe("streamResponse execution-model invariant", () => {
     expect(() =>
       defineResource({
         name: "stream-pipeline",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [{ ...base, streamResponse: true, handler: async () => ({ data: 1 }) }],
       }),
     ).toThrow(/`streamResponse: true` requires `rawHandler`/);
@@ -150,7 +150,7 @@ describe("streamResponse execution-model invariant", () => {
     expect(() =>
       defineResource({
         name: "stream-ctrl-method",
-        disableDefaultRoutes: true,
+        crud: false,
         controller: { stream: async () => ({ data: 1 }) } as never,
         routes: [
           {
@@ -167,7 +167,7 @@ describe("streamResponse execution-model invariant", () => {
     expect(() =>
       defineResource({
         name: "stream-none",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [{ ...base, streamResponse: true } as never],
       }),
     ).toThrow(/`streamResponse: true` requires `rawHandler`/);
@@ -177,7 +177,7 @@ describe("streamResponse execution-model invariant", () => {
     expect(() =>
       defineResource({
         name: "stream-ok",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [
           {
             ...base,
@@ -199,7 +199,7 @@ describe("streamResponse execution-model invariant", () => {
     // was switched on.
     const resource = defineResource({
       name: "stream-this",
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",

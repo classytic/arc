@@ -298,13 +298,13 @@ describe("idempotencyPlugin — error handling", () => {
       delete: async () => {},
       deleteByPrefix: async () => 0,
       findByPrefix: async () => undefined,
+      setIfLocked: async () => false,
     };
 
     const app = Fastify({ logger: false });
     await app.register(idempotencyPlugin, {
       enabled: true,
       store: brokenStore,
-      allowUnfencedCompletion: true,
       // This stub deliberately cannot round-trip a key (get always misses) —
       // the boot self-check would rightly refuse it. Opt out because THIS
       // test targets the runtime error path (tryLock infrastructure error →

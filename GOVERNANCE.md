@@ -18,7 +18,8 @@ unlabelled subpath fails CI) and by the public API surface gate:
 
 The authoritative tier of any subpath is the label in `package.json`, not
 this table. Current experimental subpaths: `./usage`, `./integrations/event-gateway`,
-`./outbox-admin`.
+`./outbox-admin`, `./http-cache`, `./http-cache/cloudflare`, `./http-cache/fastly`,
+`./http-cache/testing`.
 
 ## Versioning policy (pre-3.0)
 

@@ -5,13 +5,18 @@
  * are properly wrapped with Fastify adapter to return correct response format.
  *
  * Prevents type mismatches that could expose internal structures.
+ *
+ * DEPRECATED forms (one-minor window): string `handler` / `rawHandler`. A
+ * function handler that calls the controller replaces them. These tests keep
+ * the legacy dispatch honest until removal and pin the deprecation warning.
  */
 
 import type { StandardRepo } from "@classytic/repo-core/repository";
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/index.js";
+import { resetDeprecationWarnings } from "../../src/logger/deprecation.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import type { AnyRecord, DataAdapter, IRequestContext } from "../../src/types/index.js";
 import { createError } from "../../src/utils/errors.js";
@@ -93,7 +98,7 @@ describe("Security: String Handler Response Adapter", () => {
       name: "test",
       adapter: createTestAdapter(repo),
       controller,
-      disableDefaultRoutes: false, // Keep CRUD routes for testing
+      // Keep CRUD routes for testing
       routes: [
         {
           method: "GET",
@@ -297,7 +302,7 @@ describe("Security: String Handler Response Adapter", () => {
       name: "native",
       adapter: createTestAdapter(repo),
       controller: fastifyNativeController as any,
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -342,7 +347,7 @@ describe("Security: String Handler Response Adapter", () => {
       name: "icontroller",
       adapter: createTestAdapter(repo),
       controller: iControllerStyleController as any,
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -383,7 +388,7 @@ describe("Security: String Handler Response Adapter", () => {
       name: "forcewrap",
       adapter: createTestAdapter(repo),
       controller: fastifyNativeController as any,
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -423,7 +428,7 @@ describe("Security: String Handler Response Adapter", () => {
       name: "forcenowrap",
       adapter: createTestAdapter(repo),
       controller: iControllerStyleController as any,
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -447,5 +452,35 @@ describe("Security: String Handler Response Adapter", () => {
     expect(res.statusCode).toBe(200);
 
     await app7.close();
+  });
+
+  it("string `handler` and string `rawHandler` warn once each, naming the function form", () => {
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const name of ["dep-string-a", "dep-string-b"]) {
+        defineResource({
+          name,
+          prefix: `/${name}`,
+          adapter: createTestAdapter(new TestRepository()),
+          controller: new TestController(new TestRepository()),
+          crud: false,
+          routes: [
+            { method: "GET", path: "/a", handler: "customAction", permissions: allowPublic() },
+            { method: "GET", path: "/b", rawHandler: "customAction", permissions: allowPublic() },
+          ],
+        });
+      }
+      const lines = warn.mock.calls.map((c) => c.join(" "));
+      const handler = lines.filter((l) => l.includes("A string route `handler` is deprecated"));
+      const raw = lines.filter((l) => l.includes("A string route `rawHandler` is deprecated"));
+      expect(handler).toHaveLength(1);
+      expect(raw).toHaveLength(1);
+      expect(handler[0]).toContain("handler: (ctx) => controller.method(ctx)");
+      expect(handler[0]).toContain("GET /a of resource 'dep-string-a'");
+      expect(raw[0]).toContain("rawHandler: (request, reply) => controller.method(request, reply)");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

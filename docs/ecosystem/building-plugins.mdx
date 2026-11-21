@@ -172,7 +172,7 @@ export const analytics = createPlugin<AnalyticsRootOptions, AnalyticsResourceOpt
           {
             method: 'GET',
             path: '/analytics',
-            handler: 'getAnalytics',
+            handler: async (ctx) => ({ data: await analyticsReport(ctx) }),
             permissions: 'list',
           },
         ],
@@ -225,7 +225,7 @@ For **reusable patterns** that add routes, middleware, and hooks to any resource
 
 ```typescript
 import { registerPreset } from '@classytic/arc/presets';
-import type { PresetResult } from '@classytic/arc/presets';
+import type { PresetController, PresetResult } from '@classytic/arc/types';
 
 // Define options
 interface VersioningOptions {
@@ -240,18 +240,22 @@ function versioningPreset(options: VersioningOptions = {}): PresetResult {
   return {
     name: 'versioning',
 
-    // Custom routes — function form receives the resource's permission table
-    routes: (permissions) => [
+    // Custom routes — the function form receives the resource's permission table
+    // and its controller (the host's, or the BaseController arc builds). Each
+    // handler is a controller method; a method read this way is verified at boot.
+    routes: (permissions, controller: PresetController<'getVersions' | 'revertToVersion'>) => [
       {
         method: 'GET',
         path: '/:id/versions',
-        handler: 'getVersions',
+        handler: controller.getVersions,
+        operation: 'getVersions',
         permissions: permissions.get,
       },
       {
         method: 'POST',
         path: '/:id/revert/:versionId',
-        handler: 'revertToVersion',
+        handler: controller.revertToVersion,
+        operation: 'revertToVersion',
         permissions: permissions.update,
       },
     ],
@@ -451,7 +455,7 @@ import type {
   DomainEvent,
   EventHandler,
   EventLogger,
-} from '@classytic/arc/events';
+} from '@classytic/primitives/events';
 
 export interface KafkaTransportOptions {
   brokers: string[];
@@ -645,7 +649,6 @@ export function createSupabaseAdapter(options: {
 ```typescript
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
-import { createApp, defineResource } from '@classytic/arc';
 import myPlugin from 'arc-plugin-my-plugin';
 
 describe('arc-plugin-my-plugin', () => {

@@ -154,7 +154,7 @@ await fastify.register(idempotencyPlugin, {
 
 ```typescript
 import { createClient } from 'redis';
-import { RedisIdempotencyStore } from '@classytic/arc/idempotency';
+import { RedisIdempotencyStore } from '@classytic/arc/idempotency/redis';
 
 const redis = createClient({ url: process.env.REDIS_URL });
 await redis.connect();

@@ -237,7 +237,7 @@ describe("resource-root actions — MCP tool surface", () => {
       prefix: "/actionroot-mcp",
       adapter: createMongooseAdapter({ model: Model, repository: repo as never }),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         recordPayment: {
           handler: async (id, data) => ({ id, data }),
@@ -277,7 +277,7 @@ describe("resource-root actions — registry route enumeration", () => {
       prefix: "/actionroot-registry",
       adapter: createMongooseAdapter({ model: Model, repository: repo as never }),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         approve: {
           handler: async (id) => ({ id }),
@@ -311,7 +311,7 @@ describe("resource-root actions — registry route enumeration", () => {
       prefix: "/actionroot-legacy",
       adapter: createMongooseAdapter({ model: Model, repository: repo as never }),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         approve: { handler: async (id) => ({ id }), permissions: allowPublic() },
         reject: { handler: async (id) => ({ id }), permissions: allowPublic() },

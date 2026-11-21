@@ -34,6 +34,7 @@
 
 import { readEnv } from "@classytic/primitives/environment";
 import type { DataAdapter } from "@classytic/repo-core/adapter";
+import { createPresetControllerHandle } from "../presets/controllerHandle.js";
 import type { ActionsMap, AnyRecord, ResourceConfig } from "../types/index.js";
 import type { InternalResourceConfig } from "./defineResource/config.js";
 import {
@@ -41,6 +42,7 @@ import {
   assertTransactionCapability,
   resolveOrAutoCreateController,
 } from "./defineResource/controller.js";
+import { warnDeprecatedConfig } from "./defineResource/deprecations.js";
 import type { ResourceDiagnostic } from "./defineResource/diagnostics.js";
 import { wireHooks } from "./defineResource/hooks.js";
 import { resolveIdField } from "./defineResource/idField.js";
@@ -49,6 +51,7 @@ import {
   applyPresetsAndAutoInject,
   collectUngatedCrudDiagnostics,
   computeHasCrudRoutes,
+  resolvePresetRoutePermissions,
 } from "./defineResource/presets.js";
 import {
   type ResolvedResourceConfig,
@@ -108,6 +111,7 @@ export function defineResource<TDoc = AnyRecord>(
   // `./defineResource/normalizeConfig.ts`. Explicit narrow settings
   // always win over shorthands. Pure transformation — `config` itself
   // stays untouched; the rest of the pipeline reads the normalised copy.
+  warnDeprecatedConfig(config);
   const normalisedConfig = normalizeResourceConfig(config);
 
   // Phase 1 — validate. Hard errors throw synchronously; non-fatal
@@ -128,8 +132,11 @@ export function defineResource<TDoc = AnyRecord>(
   const repository = normalisedConfig.adapter?.repository;
   const configWithId = resolveIdField(normalisedConfig, repository);
 
-  // Phase 3 — apply presets + auto-inject tenant-field rules
-  const resolvedConfig = applyPresetsAndAutoInject<TDoc>(configWithId);
+  // Phase 3 — apply presets + auto-inject tenant-field rules. Presets run before
+  // the controller exists (they feed the auto-built one), so their route builders
+  // get a handle that Phase 4 binds; its methods resolve per request.
+  const presetController = createPresetControllerHandle(configWithId.name);
+  const resolvedConfig = applyPresetsAndAutoInject<TDoc>(configWithId, presetController.controller);
   const hasCrudRoutes = computeHasCrudRoutes(resolvedConfig);
 
   // Post-preset diagnostic: CRUD ops that will mount with NO permission
@@ -137,9 +144,9 @@ export function defineResource<TDoc = AnyRecord>(
   // inject permissions, and flagging those would be a false positive.
   //
   // Strict mode (resource `strictPermissions: true` OR the
-  // `ARC_STRICT_PERMISSIONS` env) upgrades an ungated WRITE from a warning to a
-  // FATAL error, so unauthenticated writes cannot ship silently. ON by default; an explicit
-  // `false` (resource or env) downgrades it to a warning.
+  // `ARC_STRICT_PERMISSIONS` env) makes ANY ungated CRUD op — read or write — a
+  // FATAL error, so nothing ships public by omission. ON by default; an explicit
+  // `false` (resource or env) downgrades it to a warning (write) or info (read).
   // NOT behind `skipValidation`. That flag means "skip SCHEMA validation" and is
   // set implicitly by `customRoutesOnly`, so hiding a security invariant behind
   // it let a documented-as-structural switch silently disable the ungated-write
@@ -149,6 +156,7 @@ export function defineResource<TDoc = AnyRecord>(
   const strict =
     resolvedConfig.strictPermissions ?? readEnv(process.env).bool("ARC_STRICT_PERMISSIONS", true);
   diagnostics = diagnostics.concat(collectUngatedCrudDiagnostics(resolvedConfig, strict));
+  diagnostics = diagnostics.concat(resolvePresetRoutePermissions(resolvedConfig, strict));
   diagnostics = diagnostics.concat(
     collectSchemaSlotDiagnostics(
       resolvedConfig,
@@ -161,7 +169,11 @@ export function defineResource<TDoc = AnyRecord>(
   // the host sees every offending resource slot at once.
   const fatal = diagnostics.filter((d) => d.severity === "error");
   if (fatal.length > 0) {
-    throw new Error(fatal.map((d) => d.message).join("\n\n"));
+    // `code` is the first fatal diagnostic's stable code, so a host or test can
+    // match the failure without parsing prose.
+    throw Object.assign(new Error(fatal.map((d) => d.message).join("\n\n")), {
+      code: fatal[0]?.code,
+    });
   }
 
   // Phase 4 — reuse user controller or auto-create BaseController.
@@ -176,6 +188,12 @@ export function defineResource<TDoc = AnyRecord>(
     repository,
     hasCrudRoutes,
   );
+  presetController.bind(controller);
+  // Methods preset route builders read (`handler: controller.getBySlug`) must exist:
+  // a missing one fails boot, not the first request. `skipValidation` defers it to
+  // registration, where string-handler routes used to fail.
+  const verifyPresetRoutes = () => presetController.verify(resolvedConfig.routes ?? []);
+  if (!normalisedConfig.skipValidation) verifyPresetRoutes();
 
   // Phase 5 — build ResourceDefinition + validate controller methods
   const resource = new ResourceDefinition({
@@ -201,6 +219,7 @@ export function defineResource<TDoc = AnyRecord>(
   // function commonly runs at module import, before `beforeBoot()` connects,
   // and an unresolved topology reports `transactions: false` by design.
   const deferred: Array<() => void> = [];
+  if (normalisedConfig.skipValidation) deferred.push(verifyPresetRoutes);
   if (resolvedConfig.transactional === true) {
     const name = resolvedConfig.name;
     deferred.push(() => assertTransactionCapability(repository, name));

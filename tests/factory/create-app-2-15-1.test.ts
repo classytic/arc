@@ -120,9 +120,9 @@ describe("createApp — arcPlugins.health accepts HealthOptions inline (2.15.1)"
     // healthPlugin returns `status: 'ready'` on /_health/ready when all
     // checks pass. (`/_health/live` returns `status: 'live'`.)
     expect(body.status).toBe("ready");
-    // Both checks should have been invoked exactly once for the readiness probe.
-    expect(mongoCheck).toHaveBeenCalledTimes(1);
-    expect(engineCheck).toHaveBeenCalledTimes(1);
+    // Once by the boot health summary at ready, once by the readiness probe.
+    expect(mongoCheck).toHaveBeenCalledTimes(2);
+    expect(engineCheck).toHaveBeenCalledTimes(2);
   });
 
   it("returns 503 when any readiness check fails", async () => {

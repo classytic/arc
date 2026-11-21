@@ -71,6 +71,7 @@ describe("arc doctor — healthy project", () => {
           "@fastify/helmet": "^13.0.0",
           "@fastify/cors": "^11.0.0",
           "better-auth": "^1.5.5",
+          "@classytic/mongokit": "^3.13.0",
         },
       }),
     );
@@ -366,19 +367,32 @@ describe("arc doctor — tsconfig validation", () => {
 // Environment Variable Checks
 // ============================================================================
 
-describe("arc doctor — environment variables", () => {
-  it("should warn when MONGO_URI is not set", async () => {
-    const projectDir = path.join(testRoot, "no-env");
+describe("arc doctor — environment variables (derived from the project)", () => {
+  async function runIn(
+    name: string,
+    files: Record<string, string>,
+    env: Record<string, string | undefined> = {},
+  ): Promise<string> {
+    const projectDir = path.join(testRoot, name);
     await fs.mkdir(projectDir, { recursive: true });
-    await fs.writeFile(path.join(projectDir, "package.json"), JSON.stringify({ dependencies: {} }));
-
+    for (const [file, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(projectDir, file)), { recursive: true });
+      await fs.writeFile(path.join(projectDir, file), content);
+    }
+    const watched = [
+      "MONGO_URI",
+      "MONGODB_URI",
+      "DATABASE_URL",
+      "BETTER_AUTH_SECRET",
+      "REDIS_URL",
+      "SMTP_HOST",
+    ];
+    const saved = Object.fromEntries(watched.map((k) => [k, process.env[k]]));
+    for (const k of watched) delete process.env[k];
+    for (const [k, v] of Object.entries(env)) if (v !== undefined) process.env[k] = v;
     const originalCwd = process.cwd();
     const originalExitCode = process.exitCode;
-    const originalMongoUri = process.env.MONGO_URI;
-    delete process.env.MONGO_URI;
-    delete process.env.BETTER_AUTH_SECRET;
     process.chdir(projectDir);
-
     const capture = captureConsoleLog();
     try {
       await doctor([]);
@@ -386,13 +400,73 @@ describe("arc doctor — environment variables", () => {
       capture.restore();
       process.chdir(originalCwd);
       process.exitCode = originalExitCode;
-      if (originalMongoUri) process.env.MONGO_URI = originalMongoUri;
+      for (const k of watched) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
     }
+    return capture.logs.join("\n");
+  }
 
-    const output = capture.logs.join("\n");
-    expect(output).toContain("[warn]");
-    expect(output).toContain("MONGO_URI not set");
-    expect(output).toContain("BETTER_AUTH_SECRET not set");
+  it("checks no database or auth env when the project installs neither", async () => {
+    const output = await runIn("env-none", {
+      "package.json": JSON.stringify({ dependencies: {} }),
+    });
+    expect(output).not.toContain("MONGO_URI");
+    expect(output).not.toContain("BETTER_AUTH_SECRET");
+  });
+
+  it("warns for the env an installed dependency needs", async () => {
+    const output = await runIn("env-deps", {
+      "package.json": JSON.stringify({
+        dependencies: { "better-auth": "^1.7.18", "@classytic/mongokit": "^3.13.0" },
+      }),
+    });
+    expect(output).toContain("[warn] BETTER_AUTH_SECRET not set");
+    expect(output).toContain("[warn] MONGO_URI not set");
+    expect(output).toContain("@classytic/mongokit installed");
+  });
+
+  it("accepts an alternate name, or a key set in ./.env", async () => {
+    const output = await runIn(
+      "env-alt",
+      {
+        "package.json": JSON.stringify({
+          dependencies: { "better-auth": "^1.7.18", mongoose: "^9.0.0" },
+        }),
+        ".env": "BETTER_AUTH_SECRET=from-dotenv\n",
+      },
+      { MONGODB_URI: "mongodb://localhost/x" },
+    );
+    expect(output).toContain("[pass] MONGODB_URI set");
+    expect(output).toContain("[pass] BETTER_AUTH_SECRET set");
+  });
+
+  it("warns for keys the project's .env.example declares", async () => {
+    const output = await runIn("env-example", {
+      "package.json": JSON.stringify({ dependencies: {} }),
+      ".env.example": "# mail\nSMTP_HOST=\nexport REDIS_URL=redis://localhost\n",
+    });
+    expect(output).toContain("[warn] SMTP_HOST not set (declared in .env.example)");
+    expect(output).toContain("[warn] REDIS_URL not set (declared in .env.example)");
+  });
+
+  it("notes an unset trustProxy and missing readiness checks, without counting them as warnings", async () => {
+    const output = await runIn("notes", {
+      "package.json": JSON.stringify({ dependencies: { fastify: "^5.8.4" } }),
+      "src/app.ts":
+        "export const app = await createApp({ preset: 'production', runtime: 'memory' });\n",
+    });
+    expect(output).toContain("[info] trustProxy not set in source");
+    expect(output).toContain("[info] no readiness checks found in source");
+
+    const quiet = await runIn("notes-quiet", {
+      "package.json": JSON.stringify({ dependencies: { fastify: "^5.8.4" } }),
+      "src/app.ts":
+        "await createApp({ trustProxy: 'loopback', arcPlugins: { health: { checks: [db] } } });\n",
+    });
+    expect(quiet).not.toContain("trustProxy not set");
+    expect(quiet).not.toContain("no readiness checks");
   });
 });
 

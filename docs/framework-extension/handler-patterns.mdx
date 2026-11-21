@@ -31,7 +31,6 @@ class ProductController extends BaseController {
     });
 
     return {
-      success: true,
       data: products,
       status: 200,
     };
@@ -39,20 +38,27 @@ class ProductController extends BaseController {
 }
 
 // Resource definition
+const controller = new ProductController(productRepository);
 defineResource({
   name: 'product',
-  controller: new ProductController(productRepository),
+  controller,
   routes: [
     {
       method: 'GET',
       path: '/category/:category',
-      handler: 'getByCategory',
+      operation: 'getByCategory',               // stable MCP tool + pipeline name
+      handler: (ctx) => controller.getByCategory(ctx),
       permissions: allowPublic(),
       // (`handler` — not `rawHandler` — so arc wraps it in its pipeline)
     },
   ],
 });
 ```
+
+A function `handler` runs the full pipeline and becomes an MCP tool. Call the
+controller method from it. The string form (`handler: 'getByCategory'`) and
+`controllerMethod` are deprecated: they warn once per process and are removed
+in the next minor.
 
 ### Available Fields in `req: IRequestContext`
 
@@ -72,14 +78,14 @@ defineResource({
 
 ```typescript
 {
-  success: boolean;                      // true/false
-  data?: T;                              // Response payload
-  error?: string;                        // Error message
-  status?: number;                       // HTTP status (default: 200/400)
-  meta?: Record<string, unknown>;        // Pagination, counts, etc.
-  details?: Record<string, unknown>;     // Debug info
+  data: T;                               // Response payload, sent as the body (no envelope)
+  status?: number;                       // HTTP status (default: 200)
+  headers?: Record<string, string>;      // Custom response headers
+  meta?: Record<string, unknown>;        // Merged into list-shaped responses
 }
 ```
+
+Errors are thrown (`NotFoundError`, `ValidationError`, any `ArcError`), not returned. The error handler answers with `{ code, message, status, details? }`.
 
 ---
 
@@ -127,14 +133,15 @@ class ReportController {
 }
 
 // Resource definition
+const reports = new ReportController();
 defineResource({
   name: 'report',
-  controller: new ReportController(),
+  controller: reports,
   routes: [
     {
       method: 'GET',
       path: '/:id/download',
-      rawHandler: 'downloadPDF',  // ✅ Native Fastify handler, no arc pipeline
+      rawHandler: (request, reply) => reports.downloadPDF(request, reply),  // ✅ Native Fastify handler, no arc pipeline
       permissions: requireAuthenticated(),
     },
   ],
@@ -255,19 +262,21 @@ class NotificationController {
 
 The field a route fills declares its calling convention. `handler` is the arc
 pipeline (one `IRequestContext`); `rawHandler` is Fastify-native
-(`request, reply`, owns the response). Mixing them is a **type error** for
-inline functions — but a controller-method NAME is a runtime lookup, so it is
-still worth getting right:
+(`request, reply`, owns the response). Pass functions, and mixing them is a
+**type error**:
 
 ```typescript
 // IRequestContext handler → `handler`, so arc wraps it
 async getConfig(req: IRequestContext): Promise<IControllerResponse> { ... }
-routes: [{ handler: 'getConfig' }]
+routes: [{ handler: (ctx) => controller.getConfig(ctx) }]
 
 // Fastify-native handler → `rawHandler`, bypassing the pipeline
 async downloadFile(req: FastifyRequest, reply: FastifyReply): Promise<void> { ... }
-routes: [{ rawHandler: 'downloadFile' }]
+routes: [{ rawHandler: (req, reply) => controller.downloadFile(req, reply) }]
 ```
+
+A controller-method NAME (`handler: 'getConfig'`) is a runtime lookup the
+compiler cannot check; it is deprecated and warns once per process.
 
 Declaring BOTH fields on one route throws at boot. Before arc 2.31 this was a
 `raw: boolean` flag beside a single `handler`, and both mismatches were legal
@@ -281,23 +290,18 @@ and silent.
 
 **A**: You have two options:
 
-### Option 1: Return header in metadata (if Arc supports it)
+### Option 1: Return `headers` on the response
 
 ```typescript
 async getConfig(req: IRequestContext): Promise<IControllerResponse> {
   return {
-    success: true,
     data: config,
-    meta: {
-      headers: {
-        'Cache-Control': 'max-age=3600',
-      },
+    headers: {
+      'Cache-Control': 'max-age=3600',
     },
   };
 }
 ```
-
-*Note: Check if Arc's `createFastifyHandler` supports this - it may not currently!*
 
 ### Option 2: Switch to Native Fastify pattern
 
@@ -476,8 +480,8 @@ when a verb is declared:
 ### Registration-time refusals
 
 A declared verb that can never run is decoration, so these are **errors**, not
-warnings: the slot is in `disabledRoutes`, `disableDefaultRoutes: true` is set,
-or the resource has no adapter repository to mount a controller against.
+warnings: the slot is left out of `crud`, `crud: false` is set, or the resource
+has no adapter repository to mount a controller against.
 
 ### `transactional: true` — running the write inside a transaction (2.33)
 

@@ -8,6 +8,7 @@
 import type { FastifyInstance, FastifyReply, FastifySchema, RouteHandlerMethod } from "fastify";
 
 import { CRUD_OPERATIONS, DEFAULT_UPDATE_METHOD } from "../constants.js";
+import { routeTenantMiddlewares } from "../permissions/tenantPreparation.js";
 import type { PermissionCheck } from "../permissions/types.js";
 import type { PipelineConfig } from "../pipeline/types.js";
 import type { ControllerHandler } from "../types/handlers.js";
@@ -122,8 +123,8 @@ function createCustomRoutes<TDoc = unknown>(
     pluginMw: RouterPluginMw;
     pipeline?: PipelineConfig;
     routeGuards: RouteHandlerMethod[];
-    /** Multi-tenant preset's `tenantScope` slot; `undefined` when no such preset is wired. */
-    tenantScopeMw?: readonly RouteHandlerMethod[];
+    /** The resource's middleware slots; tenant ones are picked per route by `routeTenantMiddlewares`. */
+    middlewares: NonNullable<CrudRouterOptions["middlewares"]>;
     /** Resource-level field permissions (`defineResource({ fields })`). */
     fieldPermissions?: import("../permissions/fields.js").FieldPermissionMap;
     /** Resource-level `onFieldWriteDenied` policy (default: 'reject'). */
@@ -140,7 +141,7 @@ function createCustomRoutes<TDoc = unknown>(
     pluginMw,
     pipeline,
     routeGuards,
-    tenantScopeMw,
+    middlewares,
     fieldPermissions,
     onFieldWriteDenied,
     extensions,
@@ -166,13 +167,13 @@ function createCustomRoutes<TDoc = unknown>(
     if (hasHandler && hasControllerMethod) {
       throw new Error(
         `Route ${route.method} ${route.path}: pass either \`handler\` or \`controllerMethod\`, not both. ` +
-          "Prefer `controllerMethod: (c: MyController) => c.method` for typed handler refs (TS catches typos).",
+          "Prefer a function `handler: (ctx) => controller.method(ctx)`; `controllerMethod` is deprecated.",
       );
     }
     if (!hasHandler && !hasControllerMethod) {
       throw new Error(
-        `Route ${route.method} ${route.path}: must declare one of \`handler\` (arc pipeline), ` +
-          "`rawHandler` (Fastify-native), or `controllerMethod: (c) => c.method` (typed function-ref form).",
+        `Route ${route.method} ${route.path}: must declare a function \`handler\` (arc pipeline) ` +
+          "or a function `rawHandler` (Fastify-native).",
       );
     }
 
@@ -284,18 +285,20 @@ function createCustomRoutes<TDoc = unknown>(
       `${route.method} ${route.path}`,
     );
 
-    // Prepend the preset's tenant filter + injection. Fail-fast without a preset:
-    // the route would otherwise silently return all-org data.
+    // Prepend the multiTenant guard (see `RouteDefinition.tenantScope`). `true` without a
+    // preset fails fast: the route would otherwise silently return all-org data.
     if (route.tenantScope === true) {
-      if (!tenantScopeMw || tenantScopeMw.length === 0) {
+      if (!middlewares.tenantScope?.length) {
         throw new Error(
           `Route ${route.method} ${route.path}: \`tenantScope: true\` requires a multi-tenant preset. ` +
             `Add \`multiTenantPreset()\` to the resource's \`presets\`, ` +
             `or remove the \`tenantScope\` flag from this route.`,
         );
       }
-      customPreHandlers.unshift(...(tenantScopeMw as RouteHandlerMethod[]));
     }
+    customPreHandlers.unshift(
+      ...routeTenantMiddlewares(route, middlewares as Record<string, RouteHandlerMethod[]>),
+    );
 
     // Field-write permissions on body-bearing custom routes (auto-CRUD gets this via
     // `BodySanitizer`); without it custom routes accept restricted fields.
@@ -458,9 +461,6 @@ export function createCrudRouter<TDoc = unknown>(
     delete: (middlewares.delete ?? []) as RouteHandlerMethod[],
   };
 
-  // Emitted by `multiTenantPreset` for custom routes with `tenantScope: true`.
-  const tenantScopeMw = middlewares.tenantScope as RouteHandlerMethod[] | undefined;
-
   const idParamsSchema = {
     type: "object" as const,
     properties: { id: { type: "string" as const } },
@@ -593,7 +593,7 @@ export function createCrudRouter<TDoc = unknown>(
       pluginMw,
       pipeline,
       routeGuards,
-      tenantScopeMw,
+      middlewares,
       fieldPermissions,
       onFieldWriteDenied,
       extensions,

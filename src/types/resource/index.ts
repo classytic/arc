@@ -32,7 +32,12 @@ export type { EventDefinition } from "./events.js";
 export type { ResourceExtensions } from "./extensions.js";
 export type { ArcFieldRule, FieldRule } from "./fields.js";
 export type { ResourceHookContext, ResourceHooks } from "./hooks.js";
-export type { PresetFunction, PresetHook, PresetResult } from "./presets.js";
+export type {
+  PresetController,
+  PresetFunction,
+  PresetHook,
+  PresetResult,
+} from "./presets.js";
 export type { RateLimitConfig } from "./rate-limit.js";
 export type { RouteDefinition, RouteMcpConfig, RouteMethod } from "./routes.js";
 export type {

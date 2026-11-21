@@ -4,8 +4,13 @@
  * Adds a route to get resource by slug.
  */
 
-import { allowPublic } from "../permissions/index.js";
-import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
+import type {
+  PresetController,
+  PresetResult,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../types/index.js";
+import { presetPermission } from "./presetPermission.js";
 
 export interface SlugLookupOptions {
   slugField?: string;
@@ -16,14 +21,18 @@ export function slugLookupPreset(options: SlugLookupOptions = {}): PresetResult 
 
   return {
     name: "slugLookup",
-    routes: (permissions: ResourcePermissions): RouteDefinition[] => [
+    routes: (
+      permissions: ResourcePermissions,
+      controller: PresetController<"getBySlug">,
+    ): RouteDefinition[] => [
       {
         method: "GET",
         path: `/slug/:${slugField}`,
-        handler: "getBySlug",
+        handler: controller.getBySlug,
         summary: "Get by slug",
-        permissions: permissions.get ?? allowPublic(),
+        permissions: presetPermission(permissions.get, { preset: "slugLookup", inherits: "get" }),
         operation: "getBySlug",
+        _tenantSlot: "get",
       },
     ],
     controllerOptions: {

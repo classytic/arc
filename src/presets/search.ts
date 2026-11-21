@@ -49,15 +49,18 @@ export interface SearchableRepository {
   embed?(input: unknown): Promise<number[]>;
 }
 
-import { allowPublic, requireAuth } from "../permissions/index.js";
+import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
+import { requireAuth } from "../permissions/index.js";
 import type { ControllerHandler, IControllerResponse, IRequestContext } from "../types/handlers.js";
 import type {
   PermissionCheck,
+  PresetController,
   PresetResult,
   ResourcePermissions,
   RouteDefinition,
   RouteMcpConfig,
 } from "../types/index.js";
+import { presetPermission } from "./presetPermission.js";
 
 // ============================================================================
 // Types
@@ -82,7 +85,7 @@ export interface SearchRouteConfig {
   path?: string;
   /** HTTP method. Default: `POST`. */
   method?: "GET" | "POST";
-  /** Permission check. Defaults: search/similar fall back to `permissions.list ?? allowPublic()`; embed → `requireAuth()`. */
+  /** Permission check. Defaults: search/similar inherit `permissions.list` (unset: boot error under strict permissions); embed → `requireAuth()`. */
   permissions?: PermissionCheck;
   /** Fastify/AJV route schema (body/querystring/params/headers/response). */
   schema?: RouteDefinition["schema"];
@@ -151,6 +154,8 @@ interface BuiltinSpec {
   readonly defaultDescription: string;
   /** Which resource-level permission to fall back to when the user hasn't set `permissions` on the route config. */
   readonly permissionFallback: (resourcePerms: ResourcePermissions) => PermissionCheck;
+  /** The CRUD slot whose tenant middlewares the route shares under multiTenant. */
+  readonly tenantSlot?: "list";
 }
 
 const BUILTINS: readonly BuiltinSpec[] = [
@@ -158,17 +163,29 @@ const BUILTINS: readonly BuiltinSpec[] = [
     key: "search",
     defaultPath: "/search",
     defaultOperation: "search",
+    tenantSlot: "list",
     defaultSummary: "Search",
     defaultDescription: "Full-text / engine-backed search. Delegates to the configured backend.",
-    permissionFallback: (p) => p.list ?? allowPublic(),
+    permissionFallback: (p) =>
+      presetPermission(p.list, {
+        preset: "search",
+        inherits: "list",
+        option: "searchPreset({ search: { permissions } })",
+      }),
   },
   {
     key: "similar",
     defaultPath: "/search-similar",
     defaultOperation: "searchSimilar",
+    tenantSlot: "list",
     defaultSummary: "Semantic search",
     defaultDescription: "Vector / similarity search. Delegates to the configured backend.",
-    permissionFallback: (p) => p.list ?? allowPublic(),
+    permissionFallback: (p) =>
+      presetPermission(p.list, {
+        preset: "search",
+        inherits: "list",
+        option: "searchPreset({ similar: { permissions } })",
+      }),
   },
   {
     key: "embed",
@@ -224,29 +241,49 @@ type RawSearchHandler = (req: IRequestContext) => Promise<unknown>;
  * `undefined` when the method isn't present so the caller can fall back to
  * an explicit `cfg.handler` or skip the route.
  *
- * Conventions (verified against mongokit 3.6):
+ * Row scope: the reads run under the scope `list` applies (`controller.listScope`:
+ * permission filters, tenant filter, tenant repo options), so a member never sees
+ * another organisation's rows.
  *
- * - **`search`** (mongokit `elasticSearchPlugin`):
- *   `search(query, { limit?, from?, mongoOptions? })` — positional. `query`
- *   is the engine-native DSL (e.g. ES `match` clause). Arc passes
- *   `(body.query, body)` so the rest of the body flows into options.
- *
- * - **`searchSimilar`** (mongokit `vectorPlugin`):
- *   `searchSimilar(params: VectorSearchParams)` — **single object**. `params`
- *   carries `query` (vector, text, or multimodal), `limit`, `filter`,
- *   `numCandidates`, `exact`, `field`, `minScore`, etc. Arc passes `body`
- *   directly so the shapes align. Passing positional args here would
- *   silently break (first arg becomes the whole `params`, second arg
- *   is ignored).
- *
- * - **`embed`** (mongokit `vectorPlugin`):
- *   `embed(input: string | EmbeddingInput)` — single arg. Arc passes
- *   `body.input ?? body`, so callers may wrap as `{ input: "…" }` or send
- *   the `EmbeddingInput` shape directly.
+ * - **`search`** (mongokit `elasticSearchPlugin`): `search(query, options)`. The
+ *   contract takes no filter (mongokit hydrates the engine's ids by `_id` only), so the
+ *   returned rows are POST-filtered with `allows(doc)`, the check `getBySlug` uses;
+ *   `total` drops by the rows removed. Scope options are spread last.
+ * - **`searchSimilar`** (mongokit `vectorPlugin`): one `VectorSearchParams` object.
+ *   The scope filter is AND-ed into `filter` (the `$vectorSearch` pre-filter: each path
+ *   must be a filter field on the index) and the tenant options are spread last.
+ * - **`embed`**: `embed(body.input ?? body)`; reads no rows, so no scope.
  */
+interface ListScope {
+  filter: Record<string, unknown>;
+  options: Record<string, unknown>;
+  allows: (doc: unknown) => boolean;
+}
+type ScopeOf = (req: IRequestContext) => Promise<ListScope>;
+
+function postFilter(result: unknown, allows: (doc: unknown) => boolean): unknown {
+  if (Array.isArray(result)) return result.filter(allows);
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    Array.isArray((result as { data?: unknown }).data)
+  ) {
+    const page = result as { data: unknown[]; total?: unknown };
+    const data = page.data.filter(allows);
+    const removed = page.data.length - data.length;
+    return {
+      ...page,
+      data,
+      ...(typeof page.total === "number" ? { total: Math.max(0, page.total - removed) } : {}),
+    };
+  }
+  return result;
+}
+
 function autoHandlerFor(
   repo: SearchPresetOptions["repository"] | undefined,
   method: "search" | "searchSimilar" | "embed",
+  scopeOf: () => ScopeOf,
 ): RawSearchHandler | undefined {
   if (!repo) return undefined;
   const fn = repo[method];
@@ -255,22 +292,32 @@ function autoHandlerFor(
   if (method === "embed") {
     return async (req) => {
       const body = (req.body ?? {}) as { input?: unknown };
-      return (fn as (input: unknown) => Promise<unknown>)(body.input ?? body);
+      return (fn as (input: unknown) => Promise<unknown>).call(repo, body.input ?? body);
     };
   }
 
+  const scope = scopeOf();
   if (method === "searchSimilar") {
-    // Single-object call — matches mongokit's VectorSearchParams contract.
     return async (req) => {
-      const body = (req.body ?? {}) as Record<string, unknown>;
-      return (fn as (params: unknown) => Promise<unknown>)(body);
+      const { filter: callerFilter, ...body } = (req.body ?? {}) as Record<string, unknown>;
+      const { filter, options } = await scope(req);
+      return (fn as (params: unknown) => Promise<unknown>).call(repo, {
+        ...body,
+        filter: conjoinPolicyFilters(callerFilter as Record<string, unknown> | undefined, filter),
+        ...options,
+      });
     };
   }
 
-  // Full-text search — positional `(query, options)` per elasticSearchPlugin.
   return async (req) => {
     const body = (req.body ?? {}) as { query?: unknown; [k: string]: unknown };
-    return (fn as (q: unknown, o?: unknown) => Promise<unknown>)(body.query, body);
+    const { options, allows } = await scope(req);
+    const result = await (fn as (q: unknown, o?: unknown) => Promise<unknown>).call(
+      repo,
+      body.query,
+      { ...body, ...options },
+    );
+    return postFilter(result, allows);
   };
 }
 
@@ -307,14 +354,25 @@ export function searchPreset(options: SearchPresetOptions = {}): PresetResult {
 
   return {
     name: "search",
-    routes: (permissions: ResourcePermissions): RouteDefinition[] => {
+    routes: (
+      permissions: ResourcePermissions,
+      controller: PresetController<"listScope">,
+    ): RouteDefinition[] => {
       const mounted: RouteDefinition[] = [];
+      // Read while the routes are built, so a resource with no controller (or one
+      // without `listScope`) fails boot instead of serving unscoped rows.
+      let listScope: ScopeOf | undefined;
+      const scopeOf = (): ScopeOf => {
+        listScope ??= controller.listScope as unknown as ScopeOf;
+        return listScope;
+      };
 
       for (const spec of BUILTINS) {
         const cfg = sections[spec.key];
         if (!cfg) continue;
 
-        const handler = cfg.handler ?? autoHandlerFor(options.repository, repoMethodFor[spec.key]);
+        const handler =
+          cfg.handler ?? autoHandlerFor(options.repository, repoMethodFor[spec.key], scopeOf);
         if (!handler) continue; // no explicit handler AND no matching repo method
 
         const route: RouteDefinition = {
@@ -328,6 +386,7 @@ export function searchPreset(options: SearchPresetOptions = {}): PresetResult {
           schema: cfg.schema,
           mcp: cfg.mcp,
           handler: wrapEnvelope(handler),
+          ...(spec.tenantSlot ? { _tenantSlot: spec.tenantSlot } : {}),
         };
         mounted.push(route);
       }

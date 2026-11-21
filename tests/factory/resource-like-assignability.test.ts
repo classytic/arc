@@ -15,7 +15,7 @@ import type { ResourceLike } from "../../src/factory/loadResources.js";
 
 describe("ResourceLike assignability", () => {
   it("ResourceDefinition is assignable to ResourceLike without casting", () => {
-    const product = defineResource({ name: "product", disableDefaultRoutes: true });
+    const product = defineResource({ name: "product", crud: false });
 
     // This is the exact line that failed with the index signature
     const resources: ResourceLike[] = [product];
@@ -45,7 +45,7 @@ describe("ResourceLike assignability", () => {
   });
 
   it("mixed ResourceDefinition + plain objects work together", () => {
-    const product = defineResource({ name: "product", disableDefaultRoutes: true });
+    const product = defineResource({ name: "product", crud: false });
     const webhook: ResourceLike = {
       name: "webhook",
       prefix: "/hooks",

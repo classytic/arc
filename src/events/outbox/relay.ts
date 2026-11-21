@@ -25,6 +25,7 @@ import type {
 import { InvalidOutboxEventError, OutboxOwnershipError } from "@classytic/primitives/outbox";
 import type { RepositoryLike } from "@classytic/repo-core/adapter";
 import { evictToSize, touch } from "../../collections/boundedMap.js";
+import { warnDeprecated } from "../../logger/deprecation.js";
 import type { DeadLetteredEvent, DomainEvent, EventTransport } from "../EventTransport.js";
 import { repositoryAsOutboxStore } from "../repository-outbox-adapter.js";
 import { claimedAttempts } from "./claimed.js";
@@ -383,16 +384,14 @@ export class EventOutbox {
   }
 
   /**
-   * Relay pending events to transport and return the number of successful
-   * publish+acknowledge pairs.
+   * Relay pending events and return the count of published AND acknowledged events.
    *
-   * For richer observability (per-kind counts, publishMany detection, etc.)
-   * use {@link relayBatch} which returns a {@link RelayResult}. This method
-   * is the backward-compatible shortcut that returns just the count.
-   *
-   * @returns Number of successfully published AND acknowledged events
+   * @deprecated Use `(await outbox.relayBatch()).relayed` — {@link relayBatch}
+   * returns the full {@link RelayResult}. Warns once per process; removed in the
+   * next minor.
    */
   async relay(): Promise<number> {
+    warnDeprecated("`EventOutbox.relay()`", "Use `(await outbox.relayBatch()).relayed`.");
     const result = await this.relayBatch();
     return result.relayed;
   }

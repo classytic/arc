@@ -93,7 +93,7 @@ describe("defineResourceVariants — public-slug + admin-_id sharing one repo", 
           name: "article-public",
           prefix: "/articles",
           idField: "slug",
-          disabledRoutes: ["create", "update", "delete"],
+          crud: { list: true, get: true },
           permissions: {
             list: allowPublic(),
             get: allowPublic(),
@@ -255,7 +255,7 @@ describe("defineResourceVariants — combined with permission preset helpers", (
           name: "v-article",
           prefix: "/v/articles",
           idField: "slug",
-          disabledRoutes: ["create", "update", "delete"],
+          crud: { list: true, get: true },
           permissions: readOnly(),
         },
         admin: {

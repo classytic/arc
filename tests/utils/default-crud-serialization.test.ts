@@ -88,7 +88,7 @@ describe("default CRUD serialization", () => {
             },
           },
           permissions: { list: allowPublic(), get: allowPublic() },
-          disabledRoutes: ["create", "update", "delete"],
+          crud: { list: true, get: true },
         }),
       ],
     });

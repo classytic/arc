@@ -108,14 +108,14 @@ describe("resolveCorsOptions — pure CORS policy", () => {
 
   it("always exposes arc auth response headers — creating exposedHeaders when absent", () => {
     const { options } = resolveCorsOptions({ cors: {} });
-    expect(options.exposedHeaders).toEqual(["set-auth-token"]);
+    expect(options.exposedHeaders).toEqual(["set-auth-token", "x-request-id"]);
   });
 
   it("normalizes string-form exposedHeaders and merges without dupes", () => {
     const { options } = resolveCorsOptions({
       cors: { exposedHeaders: "x-total-count, Set-Auth-Token" },
     });
-    expect(options.exposedHeaders).toEqual(["x-total-count", "Set-Auth-Token"]);
+    expect(options.exposedHeaders).toEqual(["x-total-count", "Set-Auth-Token", "x-request-id"]);
   });
 
   it("defaults preflight maxAge to 24h; respects an explicit 0", () => {

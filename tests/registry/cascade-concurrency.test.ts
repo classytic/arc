@@ -72,7 +72,7 @@ function buildResource(opts: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     adapter: opts.adapter as any,
     permissions: { list: allowPublic(), get: allowPublic() },
-    disableDefaultRoutes: true,
+    crud: false,
     onTenantDelete: opts.onTenantDelete,
   });
 }

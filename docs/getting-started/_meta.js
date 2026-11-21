@@ -9,5 +9,4 @@ export default {
   'files-upload': 'Files Upload',
   'tree-shaking': 'Tree-Shaking',
   examples: 'Examples',
-  'migration-2.11': 'Migration to 2.11',
 };

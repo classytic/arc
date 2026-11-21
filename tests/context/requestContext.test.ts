@@ -1,17 +1,33 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { requestContext } from "../../src/context/requestContext.js";
+import { resetDeprecationWarnings } from "../../src/logger/deprecation.js";
 
 describe("requestContext", () => {
   it("returns undefined outside a run() scope", () => {
     expect(requestContext.get()).toBeUndefined();
-    expect(requestContext.getStore()).toBeUndefined();
+  });
+
+  it("getStore() is a deprecated alias of get(): same value, warns once", () => {
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = { startTime: Date.now(), requestId: "req-alias" };
+    requestContext.run(store, () => {
+      expect(requestContext.getStore()).toBe(store);
+      expect(requestContext.getStore()).toBe(store);
+    });
+    const lines = warn.mock.calls.map((c) => c.join(" "));
+    const deprecations = lines.filter((l) =>
+      l.includes("`requestContext.getStore()` is deprecated"),
+    );
+    expect(deprecations).toHaveLength(1);
+    expect(deprecations[0]).toContain("requestContext.get()");
+    warn.mockRestore();
   });
 
   it("provides store inside run() scope", () => {
     const store = { startTime: Date.now(), requestId: "req-1" };
     requestContext.run(store, () => {
       expect(requestContext.get()).toBe(store);
-      expect(requestContext.getStore()).toBe(store);
     });
   });
 

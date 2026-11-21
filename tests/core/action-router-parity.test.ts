@@ -281,7 +281,7 @@ describe("disableDefaultRoutes — custom-routes-only resource", () => {
       name: "customonly",
       prefix: "/customonly",
       // No adapter / controller — nothing to CRUD. Custom routes only.
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",

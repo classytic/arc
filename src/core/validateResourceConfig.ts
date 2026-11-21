@@ -176,9 +176,9 @@ export function validateResourceConfig(
         field: "writes",
         message:
           `Resource declares write verb(s) [${declared.join(", ")}] but ` +
-          "`disableDefaultRoutes: true` means no CRUD slot will call them",
+          "`crud: false` means no CRUD slot will call them",
         suggestion:
-          "Drop `disableDefaultRoutes` so the slots mount, or move the command into a " +
+          "Allow the slots in `crud` so they mount, or move the command into a " +
           "custom route / action and remove `writes`",
       });
     } else if (declared.length > 0) {
@@ -190,7 +190,7 @@ export function validateResourceConfig(
             `Write verb(s) [${notMounted.join(", ")}] are declared but those CRUD ` +
             "slots are disabled, so the verbs can never run",
           suggestion:
-            `Remove [${notMounted.join(", ")}] from \`disabledRoutes\`, or delete the ` +
+            `Allow [${notMounted.join(", ")}] in \`crud\`, or delete the ` +
             "matching `writes` entr(ies) — a command nothing calls is decoration",
         });
       }
@@ -420,7 +420,7 @@ function validatePresetOptions(
  * Without this check, a custom `POST /` on the same prefix as auto-CRUD's
  * `create` boots fine through `defineResource()` and only blows up at
  * `app.register()` time with Fastify's opaque `FST_ERR_DUPLICATED_ROUTE`.
- * That error doesn't mention `disabledRoutes` and doesn't distinguish
+ * That error doesn't mention `crud` and doesn't distinguish
  * "you collided with auto-CRUD" from "you collided with yourself" — so
  * the consumer has to grep arc's source to discover the fix.
  *
@@ -464,9 +464,13 @@ function validateRouteCrudCollisions(config: ResourceConfig, errors: ConfigError
         field: `routes[${i}]`,
         message: `Route ${route.method} ${route.path} collides with auto-CRUD "${crud.op}"`,
         suggestion:
-          `Add \`disabledRoutes: ['${crud.op}']\` to suppress the auto-CRUD route, ` +
+          `Leave "${crud.op}" out of the \`crud\` allow-list (\`crud: { ${CRUD_OPERATIONS.filter(
+            (op) => op !== crud.op && !disabled.has(op),
+          )
+            .map((op) => `${op}: true`)
+            .join(", ")} }\`) to suppress the auto-CRUD route, ` +
           `or move your custom handler to a different path. ` +
-          `Set \`disableDefaultRoutes: true\` to disable all auto-CRUD on this resource.`,
+          `Set \`crud: false\` to disable all auto-CRUD on this resource.`,
       });
     }
   }
@@ -512,9 +516,9 @@ function validateRoutes(routes: RouteDefinition[], errors: ConfigError[]): void 
       errors.push({
         field: `routes[${i}].handler`,
         message:
-          "Route must declare one of `handler` (arc pipeline), `rawHandler` (Fastify-native), or `controllerMethod`",
+          "Route must declare a function `handler` (arc pipeline) or a function `rawHandler` (Fastify-native)",
         suggestion:
-          "Prefer `controllerMethod: (c: MyController) => c.method` for typed handler refs.",
+          "Call the controller from a function handler: `handler: (ctx) => controller.method(ctx)`.",
       });
     }
     // The two execution models are mutually exclusive — declaring both is

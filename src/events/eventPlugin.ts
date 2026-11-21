@@ -19,6 +19,7 @@ import { isProductionEnv } from "@classytic/primitives/environment";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
 import { requestContext } from "../context/requestContext.js";
+import { warnDeprecated } from "../logger/deprecation.js";
 import { arcLog } from "../logger/index.js";
 import { createDomainError } from "../utils/errors.js";
 import { isAdmittedWork, registerShutdownParticipant, runAdmittedWork } from "../utils/shutdown.js";
@@ -87,7 +88,7 @@ export interface EventPluginOptions {
    *
    * **Important:** With `failOpen: true` (default), a transport outage will
    * silently drop events while requests continue succeeding. Pair with the
-   * `onPublishError` callback to monitor failures, or use `wal` for
+   * `onPublishError` callback to monitor failures, or use the outbox for
    * at-least-once delivery guarantees.
    *
    * Never applies to a type the `registry` declares `durability: 'durable'`: the facade
@@ -95,24 +96,13 @@ export interface EventPluginOptions {
    */
   failOpen?: boolean;
   /**
-   * Low-level write-ahead hook called BEFORE the transport publish, with an
-   * optional acknowledge() called AFTER a successful publish.
+   * Write-ahead hook called BEFORE the transport publish, with an optional
+   * acknowledge() AFTER a successful publish. NOT at-least-once on its own:
+   * nothing replays a saved-but-unpublished row.
    *
-   * **Important**: this is NOT at-least-once delivery on its own. If
-   * `transport.publish()` throws after `wal.save()`, the saved row stays
-   * but arc does NOT relay it on next boot — there is no replay loop here.
-   * For at-least-once you must EITHER:
-   *
-   *   1. Run a relay loop yourself (read unacknowledged WAL rows on boot,
-   *      republish, ack on success), or
-   *   2. Use `EventOutbox` ([./outbox.ts]) — `outbox.relay()` is the
-   *      production-grade at-least-once primitive with claim/lease,
-   *      retry/DLQ, multi-worker safety, and `repository`-backed durable
-   *      storage. New code should prefer `EventOutbox` over `wal`.
-   *
-   * The `wal` slot is kept for hosts that want to integrate with custom
-   * write-ahead infrastructure (Kafka producer transactions, S3 batch
-   * archives, debug audit logs) without arc's outbox claim/lease semantics.
+   * @deprecated Use the outbox (`createOutboxModule` / `EventOutbox`), which
+   * has claim/lease, retry/DLQ and a relay loop. Warns once per process;
+   * removed in the next minor.
    */
   wal?: {
     save: (event: DomainEvent) => Promise<void>;
@@ -261,6 +251,12 @@ const eventPlugin: FastifyPluginAsync<EventPluginOptions> = async (
     validateMode: rawValidateMode,
     warnOnDuplicate: rawWarnOnDuplicate,
   } = opts;
+  if (wal) {
+    warnDeprecated(
+      "The eventPlugin `wal` option",
+      "Use the outbox (`createOutboxModule` / `EventOutbox`) for at-least-once delivery.",
+    );
+  }
 
   /** A host telemetry callback — isolated like an observer, so it can never change delivery. */
   const notify = (

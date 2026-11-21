@@ -40,7 +40,7 @@ Boot fails when a listed op is not mounted or the plugin is disabled. Custom rou
 
 ```typescript
 routes: [{
-  method: 'POST', path: '/:id/charge', handler: 'charge',
+  method: 'POST', path: '/:id/charge', handler: (ctx) => payments.charge(ctx),
   config: { idempotency: { required: true } },            // any method, DELETE included
 }]
 // action routes: { requiredActions: ['refund'] }
@@ -74,7 +74,7 @@ repository: new Repository(IdempotencyModel, [methodRegistryPlugin(), batchOpera
 
 ## IdempotencyStore contract
 
-Required: `name`, `get`, `set`, `tryLock`, `unlock`, `isLocked`, `delete`, `deleteByPrefix`, `findByPrefix`. Optional: `acquire` (atomic check-and-lock), `setIfLocked` (fenced completion), `supportsFencedCompletion`, `completionReleasesLock`, `close`. A custom store without fencing needs `allowUnfencedCompletion: true`. `unlock` after a non-2xx must leave no claim behind (the repository store deletes a result-less row it locks).
+Required: `name`, `get`, `set`, `tryLock`, `unlock`, `isLocked`, `delete`, `deleteByPrefix`, `findByPrefix`. Optional: `acquire` (atomic check-and-lock), `setIfLocked` (fenced completion), `supportsFencedCompletion`, `completionReleasesLock`, `close`. A custom store must implement `setIfLocked`. `unlock` after a non-2xx must leave no claim behind (the repository store deletes a result-less row it locks).
 
 ## Gotchas
 

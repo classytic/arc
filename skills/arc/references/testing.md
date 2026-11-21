@@ -76,7 +76,7 @@ createHttpTestHarness(productResource, () => ({
 })).runAll();                 // or runCrud() / runPermissions() / runValidation()
 ```
 
-Reads the resource config (`disabledRoutes`, `updateMethod`) and probes each enabled route. Pass a getter when the app is built in `beforeAll`.
+Reads the resource config (`crud`, `updateMethod`) and probes each enabled route. Pass a getter when the app is built in `beforeAll`.
 
 ## Fixtures
 

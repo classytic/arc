@@ -18,12 +18,24 @@ import { z } from "zod";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
 import { allowPublic, requireAuth } from "../../src/permissions/index.js";
+import { unresolvedPresetPermission } from "../../src/presets/presetPermission.js";
 import { searchPreset } from "../../src/presets/search.js";
-import type { ResourcePermissions, RouteDefinition } from "../../src/types/index.js";
+import type {
+  PresetController,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../../src/types/index.js";
+
+/** An unscoped list scope, as a resource with no tenant and no permission filters has. */
+const openController = {
+  listScope: async () => ({ filter: {}, options: {}, allows: () => true }),
+} as unknown as PresetController;
 
 function extractRoutes(preset: ReturnType<typeof searchPreset>): RouteDefinition[] {
   const perms: ResourcePermissions = {};
-  return typeof preset.routes === "function" ? preset.routes(perms) : (preset.routes ?? []);
+  return typeof preset.routes === "function"
+    ? preset.routes(perms, openController)
+    : (preset.routes ?? []);
 }
 
 describe("searchPreset — route definitions", () => {
@@ -100,6 +112,14 @@ describe("searchPreset — route definitions", () => {
     expect(byPath["/search-similar"]?.permissions).toBe(listGate);
     // No explicit permission override → embed gets requireAuth()
     expect(typeof byPath["/embed"]?.permissions).toBe("function");
+    expect(unresolvedPresetPermission(byPath["/embed"]?.permissions)).toBeUndefined();
+
+    // No list permission → search/similar are unresolved, never public.
+    const ungated = Object.fromEntries(preset.routes({}).map((r) => [r.path, r]));
+    expect(unresolvedPresetPermission(ungated["/search"]?.permissions)?.inherits).toBe("list");
+    expect(unresolvedPresetPermission(ungated["/search-similar"]?.permissions)?.option).toBe(
+      "searchPreset({ similar: { permissions } })",
+    );
   });
 
   it("appends the `routes` array after built-ins, preserving order", () => {
@@ -332,7 +352,7 @@ describe("searchPreset — end-to-end via createApp", () => {
     const productResource = defineResource({
       name: "product",
       prefix: "/products",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: { list: allowPublic() },
       presets: [
         searchPreset({
@@ -416,7 +436,7 @@ describe("searchPreset — end-to-end via createApp", () => {
     const resource = defineResource({
       name: "product",
       prefix: "/products",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: { list: allowPublic() },
       presets: [
         searchPreset({
@@ -488,7 +508,7 @@ describe("searchPreset — end-to-end via createApp", () => {
       defineResource({
         name,
         prefix,
-        disableDefaultRoutes: true,
+        crud: false,
         permissions: { list: allowPublic() },
         presets: [
           searchPreset({
@@ -533,7 +553,7 @@ describe("searchPreset — end-to-end via createApp", () => {
       defineResource({
         name,
         prefix,
-        disableDefaultRoutes: true,
+        crud: false,
         permissions: { list: allowPublic() },
         presets: [searchPreset({ search: { handler: async () => [] } })],
       });
@@ -553,7 +573,7 @@ describe("searchPreset — end-to-end via createApp", () => {
     await app.ready();
 
     expect(app.mcp?.resourceNames).toEqual(["product"]);
-    const toolNames = app.mcp?.toolNames ?? [];
+    const toolNames = app.mcp?.get("/mcp")?.toolNames ?? [];
     expect(toolNames.every((t) => !t.includes("admin"))).toBe(true);
   });
 
@@ -564,7 +584,7 @@ describe("searchPreset — end-to-end via createApp", () => {
     const resource = defineResource({
       name: "doc",
       prefix: "/docs",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: { list: allowPublic() },
       presets: [
         searchPreset({

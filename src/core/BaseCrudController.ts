@@ -844,6 +844,31 @@ export class BaseCrudController<
     return this.dispatchExists(req);
   }
 
+  /**
+   * The row scope `list` applies, for reads that bypass `getAll` (the search preset):
+   * `filter` (record dialect: permission filters AND tenant), the repository `options`
+   * `list` passes (tenant context; the tenant key and `bypassTenant` are always present so
+   * spreading them last overrides a caller-supplied value), and `allows(doc)`, the
+   * post-fetch check `getBySlug` uses, for repositories that cannot take a filter.
+   */
+  listScope(req: IRequestContext): {
+    filter: AnyRecord;
+    options: AnyRecord;
+    allows: (doc: unknown) => boolean;
+  } {
+    const meta = this.meta(req);
+    const tenantKeys: AnyRecord = { bypassTenant: undefined };
+    if (this.tenantField) tenantKeys[this.tenantField] = undefined;
+    return {
+      filter: this.queryResolver.scopeFilter(meta),
+      options: { ...tenantKeys, ...this.tenantRepoOptions(req) },
+      allows: (doc) =>
+        doc !== null &&
+        typeof doc === "object" &&
+        this.accessControl.validateItemAccess(doc as AnyRecord, req),
+    };
+  }
+
   /** Resolve filter + tenant/audit options for a dispatch verb. */
   private resolveDispatchScope(req: IRequestContext): {
     filter: AnyRecord;

@@ -7,17 +7,47 @@
  * - Permission inheritance
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { allowPublic, requireRoles } from "../../src/permissions/index.js";
 import { applyPresets } from "../../src/presets/index.js";
+import { unresolvedPresetPermission } from "../../src/presets/presetPermission.js";
 import { slugLookupPreset } from "../../src/presets/slugLookup.js";
-import type { PresetResult, ResourceConfig, ResourcePermissions } from "../../src/types/index.js";
+import type {
+  ControllerHandler,
+  IRequestContext,
+  PresetController,
+  PresetResult,
+  ResourceConfig,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../../src/types/index.js";
 
-function getPresetRoutes(result: PresetResult, permissions: ResourcePermissions = {}) {
+function getPresetRoutes(
+  result: PresetResult,
+  permissions: ResourcePermissions = {},
+  controller: Record<string, unknown> = {},
+) {
   if (result.routes) {
-    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
+    return typeof result.routes === "function"
+      ? result.routes(permissions, controller as PresetController)
+      : result.routes;
   }
   return [];
+}
+
+/** The route's function handler calls `controller[method]` and returns its response. */
+async function expectCallsController(
+  build: (controller: Record<string, unknown>) => RouteDefinition | undefined,
+  method: string,
+) {
+  const response = { data: method };
+  const fn = vi.fn(async () => response);
+  const route = build({ [method]: fn });
+  const ctx = { params: {} } as unknown as IRequestContext;
+  const handler = route?.handler as ControllerHandler;
+  expect(typeof handler).toBe("function");
+  await expect(handler(ctx)).resolves.toBe(response);
+  expect(fn).toHaveBeenCalledWith(ctx);
 }
 
 describe("slugLookup preset", () => {
@@ -27,13 +57,16 @@ describe("slugLookup preset", () => {
       expect(result.name).toBe("slugLookup");
     });
 
-    it("should add GET /slug/:slug route with default slug field", () => {
+    it("should add GET /slug/:slug route with default slug field", async () => {
       const routes = getPresetRoutes(slugLookupPreset(), { get: allowPublic() });
       const slugRoute = routes.find((r) => r.path.includes("/slug/"));
       expect(slugRoute).toBeDefined();
       expect(slugRoute?.method).toBe("GET");
       expect(slugRoute?.path).toBe("/slug/:slug");
-      expect(slugRoute?.handler).toBe("getBySlug");
+      await expectCallsController(
+        (c) => getPresetRoutes(slugLookupPreset(), {}, c).find((r) => r.path.includes("/slug/")),
+        "getBySlug",
+      );
     });
 
     it("should use get permission for slug route", () => {
@@ -43,11 +76,14 @@ describe("slugLookup preset", () => {
       expect(slugRoute?.permissions).toBe(getPermission);
     });
 
-    it("should default to allowPublic if get permission not defined", () => {
+    it("marks the route unresolved (never public) when get permission is not defined", () => {
       const routes = getPresetRoutes(slugLookupPreset(), {});
       const slugRoute = routes.find((r) => r.path.includes("/slug/"));
-      expect(slugRoute?.permissions).toBeDefined();
-      expect(typeof slugRoute?.permissions).toBe("function");
+      expect(unresolvedPresetPermission(slugRoute?.permissions)).toEqual({
+        preset: "slugLookup",
+        inherits: "get",
+      });
+      expect(slugRoute?.permissions._isPublic).toBeUndefined();
     });
 
     it("should provide controllerOptions with slugField", () => {

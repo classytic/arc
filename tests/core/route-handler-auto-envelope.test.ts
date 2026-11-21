@@ -48,7 +48,7 @@ describe("custom route handler — auto-envelope of bare returns", () => {
       prefix: "/stats",
       adapter: mockAdapter(repo),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -77,7 +77,7 @@ describe("custom route handler — auto-envelope of bare returns", () => {
       prefix: "/tags",
       adapter: mockAdapter(repo),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -110,7 +110,7 @@ describe("custom route handler — auto-envelope of bare returns", () => {
       prefix: "/counts",
       adapter: mockAdapter(repo),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -137,7 +137,7 @@ describe("custom route handler — auto-envelope of bare returns", () => {
       prefix: "/stats",
       adapter: mockAdapter(repo),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -173,7 +173,7 @@ describe("custom route handler — auto-envelope of bare returns", () => {
       fields: {
         password: fieldsHelpers.hidden(),
       },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",

@@ -21,8 +21,8 @@ Never redeclare the bags as `Record<string, unknown>`: that forces `as never` at
 
 | Slot kind | Merge |
 |---|---|
-| top-level arrays (`routes`, `middlewares`, `presets`, `routeGuards`, `disabledRoutes`) | concat, base first |
-| plain objects (`permissions`, `actions`, `schemaOptions`, `fieldRules`, `aggregations`, `customSchemas`, `fields`, `cache`, `events`) | recursive per key; nested arrays replace |
+| top-level arrays (`routes`, `middlewares`, `presets`, `routeGuards`) | concat, base first |
+| plain objects (`permissions`, `actions`, `crud`, `schemaOptions`, `fieldRules`, `aggregations`, `customSchemas`, `fields`, `cache`, `events`) | recursive per key; nested arrays replace (`crud: false` is a scalar: last wins) |
 | class instances and scalars (`adapter`, `controller`, `queryParser`) | last wins |
 
 ```ts

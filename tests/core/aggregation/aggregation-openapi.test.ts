@@ -23,7 +23,7 @@ function buildRegistryEntry(): RegistryEntry {
     name: "order",
     prefix: "/orders",
     skipValidation: true, // docs-only test — no adapter/controller wiring needed
-    disableDefaultRoutes: true,
+    crud: false,
     permissions: {
       list: allowPublic(),
       get: allowPublic(),

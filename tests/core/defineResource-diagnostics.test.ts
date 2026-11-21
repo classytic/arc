@@ -238,7 +238,9 @@ describe("defineResource — boot-time diagnostics", () => {
       const diags = byOmission(defineResource({ name: "wideopen", adapter: noopAdapter() }));
       expect(diags[0]?.message).toContain("ARC_STRICT_PERMISSIONS=true");
       expect(diags[0]?.message).toContain("strictPermissions: true");
-      expect(diags[0]?.message).toContain("v3 default");
+      expect(diags[0]?.message).toContain(
+        "Strict permissions is the default; this resource or app has switched it off.",
+      );
     });
 
     it("the ERROR does NOT repeat the switch — it is already on", () => {
@@ -308,7 +310,7 @@ describe("defineResource — boot-time diagnostics", () => {
         name: "reads-with-disabled-writes",
         adapter: noopAdapter(),
         permissions: { list: allowPublic(), get: allowPublic() },
-        disabledRoutes: ["create", "update", "delete"],
+        crud: { list: true, get: true },
       });
       expect(byOmission(resource)).toHaveLength(0);
     });
@@ -366,16 +368,66 @@ describe("defineResource — boot-time diagnostics", () => {
         ).not.toThrow();
       });
 
-      it("ungated READS stay non-fatal (info) even under strictPermissions", () => {
-        // Public catalogs are legitimate — strict mode only fails ungated writes.
+      it("THROWS when an ungated READ mounts under strictPermissions, with a code and a fix line", () => {
+        let thrown: unknown;
+        try {
+          defineResource({
+            name: "strict-catalog",
+            adapter: noopAdapter(),
+            strictPermissions: true,
+            permissions: { create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+          });
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toBeInstanceOf(Error);
+        expect((thrown as { code?: string }).code).toBe("crud-public-by-omission");
+        const message = (thrown as Error).message;
+        expect(message).toContain("ungated READ is fatal");
+        expect(message).toContain("no permission gate: list, get");
+        expect(message).toContain("permissions: { list: allowPublic(), get: allowPublic(), ... }");
+      });
+
+      it("allowPublic() on the reads states intent — no throw, no diagnostic", () => {
         const resource = defineResource({
-          name: "strict-catalog",
+          name: "strict-public-catalog",
           adapter: noopAdapter(),
           strictPermissions: true,
+          permissions: fullyGated(),
+        });
+        expect(byOmission(resource)).toHaveLength(0);
+      });
+
+      it("a read-only catalog gated with allowPublic() and crud allow-list passes", () => {
+        const resource = defineResource({
+          name: "strict-readonly-catalog",
+          adapter: noopAdapter(),
+          strictPermissions: true,
+          crud: { list: true, get: true },
+          permissions: { list: allowPublic(), get: allowPublic() },
+        });
+        expect(byOmission(resource)).toHaveLength(0);
+      });
+
+      it("crud: false resources are unaffected under strictPermissions", () => {
+        expect(() =>
+          defineResource({
+            name: "strict-no-crud",
+            adapter: noopAdapter(),
+            strictPermissions: true,
+            crud: false,
+          }),
+        ).not.toThrow();
+      });
+
+      it("strict off keeps today's levels: an ungated read is info", () => {
+        const resource = defineResource({
+          name: "lax-catalog",
+          adapter: noopAdapter(),
+          strictPermissions: false,
           permissions: { create: allowPublic(), update: allowPublic(), delete: allowPublic() },
         });
-        const diags = byOmission(resource);
-        expect(diags[0]?.severity).toBe("info");
+        expect(byOmission(resource)[0]?.severity).toBe("info");
       });
 
       it("honors the ARC_STRICT_PERMISSIONS env as the app-wide switch", () => {

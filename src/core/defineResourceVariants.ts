@@ -14,7 +14,7 @@
  *   { adapter },
  *   {
  *     articlePublic: { name: 'article', prefix: '/articles', idField: 'slug',
- *                      disabledRoutes: ['create', 'update', 'delete'],
+ *                      crud: { list: true, get: true },
  *                      permissions: readOnly() },
  *     articleAdmin:  { name: 'article-admin', prefix: '/admin/articles',
  *                      permissions: adminOnly() },

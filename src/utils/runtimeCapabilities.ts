@@ -25,6 +25,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { ArcBootError } from "./bootError.js";
 
 /** What a subsystem declares about the state it holds. */
 export interface RuntimeCapabilityDeclaration {
@@ -140,11 +141,16 @@ export function auditRuntimeCapabilities(
     const lines = violations
       .map((d) => `  - ${d.subsystem}${d.detail ? ` — ${d.detail}` : ""}`)
       .join("\n");
-    throw new Error(
+    throw new ArcBootError(
       `runtime: 'distributed' — ${violations.length} subsystem(s) hold PER-PROCESS state that ` +
         `multi-replica deployment breaks:\n${lines}\n` +
         "Wire a shared store for each, or — where per-process is genuinely intended — have the " +
         "declarant pass `accepted: true` with a reason.",
+      violations.map((d) => ({
+        code: "runtime-memory-state",
+        message: `${d.subsystem} holds per-process state${d.detail ? ` — ${d.detail}` : ""}`,
+        fix: `wire a shared store for ${d.subsystem}, or declare it with accepted: true and a reason`,
+      })),
     );
   }
 }

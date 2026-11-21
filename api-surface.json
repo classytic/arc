@@ -151,6 +151,7 @@
       "PaginationResult",
       "PermissionCheck",
       "PermissionContext",
+      "PresetController",
       "PresetFunction",
       "PresetResult",
       "PublicPolicy",
@@ -222,7 +223,7 @@
       "version",
       "when"
     ],
-    "typesHash": "d38b56cbc904e3c8"
+    "typesHash": "903cd40ca58bc5a5"
   },
   "./permissions": {
     "stability": "stable",
@@ -380,7 +381,7 @@
       "scopeOf",
       "when"
     ],
-    "typesHash": "b5a0320313be0954"
+    "typesHash": "aa80d4b668d1103b"
   },
   "./cache": {
     "stability": "stable",
@@ -489,6 +490,7 @@
       "PermissionCheck",
       "PermissionContext",
       "PopulateOption",
+      "PresetController",
       "PresetFunction",
       "PresetHook",
       "PresetResult",
@@ -524,7 +526,7 @@
       "WriteContext",
       "WriteVerbKey"
     ],
-    "typesHash": "5bddd5e34d93effb"
+    "typesHash": "ec6aeb6bc0ccc2d8"
   },
   "./types/storage": {
     "stability": "stable",
@@ -697,7 +699,7 @@
       "sendControllerResponse",
       "validateResourceConfig"
     ],
-    "typesHash": "47afccd4fc1922f1"
+    "typesHash": "d3e7abcf972a3122"
   },
   "./presets": {
     "stability": "stable",
@@ -753,7 +755,7 @@
       "softDeletePreset",
       "treePreset"
     ],
-    "typesHash": "4156dcb0f96a361a"
+    "typesHash": "5410c2178c963d3c"
   },
   "./presets/tenant": {
     "stability": "stable",
@@ -765,7 +767,7 @@
       "TenantFieldSpec",
       "multiTenantPreset"
     ],
-    "typesHash": "aab93f94e34c0a2e"
+    "typesHash": "f1182715d15dd2d7"
   },
   "./presets/files-upload": {
     "stability": "stable",
@@ -785,7 +787,7 @@
       "StorageUploadInput",
       "filesUploadPreset"
     ],
-    "typesHash": "1c2f0bc68620d5f8"
+    "typesHash": "6c8cee83fabb78fd"
   },
   "./presets/search": {
     "stability": "stable",
@@ -800,7 +802,7 @@
       "SearchableRepository",
       "searchPreset"
     ],
-    "typesHash": "3346c17d3dc2cb13"
+    "typesHash": "06aa506e8dd1c969"
   },
   "./auth": {
     "stability": "stable",
@@ -836,7 +838,7 @@
       "extractBetterAuthOpenApi",
       "mirrorTrustedOriginsFromCors"
     ],
-    "typesHash": "12fb4573f7cc127a"
+    "typesHash": "17519d33045a33aa"
   },
   "./hooks": {
     "stability": "stable",
@@ -870,7 +872,7 @@
       "createHookSystem",
       "defineHook"
     ],
-    "typesHash": "e1c2fd6775fff154"
+    "typesHash": "580df67cef10cc02"
   },
   "./middleware": {
     "stability": "stable",
@@ -888,7 +890,7 @@
       "multipartBody",
       "sortMiddlewares"
     ],
-    "typesHash": "05eaf5bd4a0a9592"
+    "typesHash": "e9d92a6a7b7958c6"
   },
   "./pipeline": {
     "stability": "stable",
@@ -917,7 +919,7 @@
       "pipe",
       "transform"
     ],
-    "typesHash": "83d2b1e39aee2b8d"
+    "typesHash": "ef9fd3d4e983692c"
   },
   "./context": {
     "stability": "stable",
@@ -945,7 +947,7 @@
       "transactionContext",
       "workSeedFromEvent"
     ],
-    "typesHash": "37b55c0f56c8b490"
+    "typesHash": "361d0d77da772da7"
   },
   "./logger": {
     "stability": "stable",
@@ -1005,7 +1007,7 @@
       "getCascadingResourcesWithMetadata",
       "introspectionPlugin"
     ],
-    "typesHash": "64d5f98929c5e763"
+    "typesHash": "d930130660065575"
   },
   "./utils": {
     "stability": "stable",
@@ -1190,7 +1192,7 @@
       "toJsonSchema",
       "withCompensation"
     ],
-    "typesHash": "a6815257dd2ded6f"
+    "typesHash": "4f069bb611d324cf"
   },
   "./cli": {
     "stability": "stable",
@@ -1303,7 +1305,7 @@
       "ssePlugin",
       "versioningPlugin"
     ],
-    "typesHash": "af3f81711508858a"
+    "typesHash": "ec30b4393730b2f8"
   },
   "./plugins/tracing": {
     "stability": "stable",
@@ -1350,7 +1352,7 @@
       "createAuditEntry",
       "repositoryAsAuditStore"
     ],
-    "typesHash": "08ea6faafedd4b2d"
+    "typesHash": "b786fedf0dc48fe5"
   },
   "./docs": {
     "stability": "stable",
@@ -1369,7 +1371,7 @@
       "openApiPlugin",
       "scalarPlugin"
     ],
-    "typesHash": "523e0192fd7cde19"
+    "typesHash": "721684aea52b69d1"
   },
   "./encryption": {
     "stability": "stable",
@@ -1430,7 +1432,7 @@
       "idempotencyPlugin",
       "repositoryAsIdempotencyStore"
     ],
-    "typesHash": "5d4ad78db38b54ae"
+    "typesHash": "f406bb2f12965bdf"
   },
   "./idempotency/redis": {
     "stability": "stable",
@@ -1542,7 +1544,7 @@
       "wrapWithBoundary",
       "wrapWithSchema"
     ],
-    "typesHash": "415c131688da8740"
+    "typesHash": "01e36b7f6ff1b7e2"
   },
   "./events/redis": {
     "stability": "stable",
@@ -1679,7 +1681,7 @@
       "testActorHeaders",
       "waitFor"
     ],
-    "typesHash": "3e0826b664e63aa6"
+    "typesHash": "a11ef4e097f85ee6"
   },
   "./testing/storage": {
     "stability": "stable",
@@ -1708,6 +1710,7 @@
   "./factory": {
     "stability": "stable",
     "runtime": [
+      "ArcBootError",
       "ArcFactory",
       "DEFAULT_LOGGER_REDACT_PATHS",
       "activateBridges",
@@ -1755,6 +1758,7 @@
       "withRelayNudge"
     ],
     "types": [
+      "ArcBootError",
       "ArcCompositionConfig",
       "ArcFactory",
       "ArcModule",
@@ -1768,7 +1772,9 @@
       "AuthOption",
       "BetterAuthOption",
       "BootDisposer",
+      "BootProblem",
       "ClosureNode",
+      "ComposedModuleFacts",
       "CompositionProblem",
       "CreateAppHttpOptions",
       "CreateAppOptions",
@@ -1790,6 +1796,7 @@
       "ModuleContribution",
       "ModuleDisposer",
       "ModuleExtension",
+      "ModuleFacts",
       "ModuleGraph",
       "ModuleGraphAnalysis",
       "ModuleGraphIssue",
@@ -1797,6 +1804,7 @@
       "ModuleGraphNode",
       "ModuleGraphOptions",
       "ModuleHandleRef",
+      "ModuleInvariant",
       "ModuleKind",
       "ModuleName",
       "ModulePlan",
@@ -1862,7 +1870,7 @@
       "verifyModuleGraph",
       "withRelayNudge"
     ],
-    "typesHash": "ebfd854c22aa16f6"
+    "typesHash": "abee1a4322637f8b"
   },
   "./schemas": {
     "stability": "stable",
@@ -1973,7 +1981,7 @@
       "WorkflowLike",
       "WorkflowRunLike"
     ],
-    "typesHash": "a710eb07699602fe"
+    "typesHash": "33806b265bee04fc"
   },
   "./integrations/streamline": {
     "stability": "stable",
@@ -2132,7 +2140,7 @@
       "webhookDeliveryFailurePolicy",
       "webhookPlugin"
     ],
-    "typesHash": "99bf6ee29369bbf4"
+    "typesHash": "dec650f49f0a5b49"
   },
   "./auth/redis": {
     "stability": "stable",
@@ -2352,7 +2360,7 @@
       "resolveOrgFromHeader",
       "scopeFirstCtx"
     ],
-    "typesHash": "472dd2dac1416cab"
+    "typesHash": "07f5fd2314063023"
   },
   "./mcp": {
     "stability": "stable",
@@ -2462,7 +2470,7 @@
       "toCallToolSuccess",
       "toolInputShape"
     ],
-    "typesHash": "3f89a4145761d2fd"
+    "typesHash": "fb75aec2873fdd11"
   },
   "./mcp/testing": {
     "stability": "stable",
@@ -2477,7 +2485,7 @@
       "connectMcpTestClient",
       "createTestMcpClient"
     ],
-    "typesHash": "7411f2098ad2ac31"
+    "typesHash": "4baf98eb0d9e5a43"
   },
   "./scim": {
     "stability": "stable",
@@ -2662,7 +2670,7 @@
       "createDataCleanupModule",
       "recipeFromSteps"
     ],
-    "typesHash": "f3961ec3ef921974"
+    "typesHash": "91b62842875c13a4"
   },
   "./outbox-admin": {
     "stability": "experimental",
@@ -2675,7 +2683,7 @@
       "OutboxAdminStore",
       "createOutboxAdminModule"
     ],
-    "typesHash": "82c86bb882975019"
+    "typesHash": "08acfbc0870c0853"
   },
   "./testing/outbox": {
     "stability": "stable",
@@ -2699,6 +2707,6 @@
       "RequiredPortsResult",
       "assertRequiresPorts"
     ],
-    "typesHash": "414966f947cd3af2"
+    "typesHash": "9e8509bda6411637"
   }
 }

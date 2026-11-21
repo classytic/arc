@@ -7,6 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type { EventHandler } from "../../events/EventTransport.js";
 import { wrapWithAttribution, wrapWithBoundary } from "../../events/subscribe-helpers.js";
 import { withSubscriberId } from "../../events/subscriberIdentity.js";
+import { bootError } from "../../utils/bootError.js";
 import type { HandlerDurabilityFact } from "./graph.js";
 import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule, EventHandlerDefinition } from "./types.js";
@@ -44,25 +45,34 @@ export async function subscribeModuleEventHandlers(
       if (handlers.length === 0) continue;
       const bus = (fastify as { events?: EventBusLike }).events;
       if (!bus) {
-        throw new Error(
-          `[arc] module "${m.name}" declares eventHandlers but the event subsystem is unavailable (fastify.events). Enable arcPlugins.events.`,
-        );
+        throw bootError({
+          code: "module-events-unavailable",
+          module: m.name,
+          message: `[arc] module "${m.name}" declares eventHandlers but the event subsystem is unavailable (fastify.events). Enable arcPlugins.events.`,
+          fix: "enable arcPlugins.events, or drop the module's eventHandlers",
+        });
       }
       for (const [index, def] of handlers.entries()) {
         if (def.name !== undefined) {
           const prior = owner.get(def.name);
           if (prior !== undefined) {
-            throw new Error(
-              `[arc] duplicate event-handler name "${def.name}" — declared by module "${prior}" and module "${m.name}". Named event handlers must be unique across the module graph; prefix names with the owning module.`,
-            );
+            throw bootError({
+              code: "duplicate-event-handler",
+              module: m.name,
+              message: `[arc] duplicate event-handler name "${def.name}" — declared by module "${prior}" and module "${m.name}". Named event handlers must be unique across the module graph; prefix names with the owning module.`,
+              fix: "rename one of the handlers; prefix names with the owning module",
+            });
           }
           owner.set(def.name, m.name);
         }
         const patterns = Array.isArray(def.event) ? def.event : [def.event as string];
         if (def.durability === "retry" && def.boundary) {
-          throw new Error(
-            `[arc] event handler "${def.name ?? patterns.join(",")}" in module "${m.name}" declares durability 'retry' and a boundary — a boundary swallows, so it is 'boundary'.`,
-          );
+          throw bootError({
+            code: "event-handler-retry-with-boundary",
+            module: m.name,
+            message: `[arc] event handler "${def.name ?? patterns.join(",")}" in module "${m.name}" declares durability 'retry' and a boundary — a boundary swallows, so it is 'boundary'.`,
+            fix: "drop the boundary for durability 'retry', or declare durability 'boundary'",
+          });
         }
         const label = handlerLabel(def, m.name, patterns, index);
         const identity = def.name ?? [...patterns].sort().join(",");
@@ -77,9 +87,12 @@ export async function subscribeModuleEventHandlers(
                 .join(",") === identity,
           )
         ) {
-          throw new Error(
-            `[arc] module "${m.name}" has ambiguous unnamed event handlers for "${identity}" — give each handler a stable name.`,
-          );
+          throw bootError({
+            code: "ambiguous-event-handlers",
+            module: m.name,
+            message: `[arc] module "${m.name}" has ambiguous unnamed event handlers for "${identity}" — give each handler a stable name.`,
+            fix: "give each event handler a stable name",
+          });
         }
         const handler = withSubscriberId(
           `${m.name}:${identity}`,

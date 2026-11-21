@@ -28,67 +28,30 @@ export interface RouteMcpConfig {
 /**
  * Route definition — single custom-route shape (user-facing + internal).
  *
- * - `handler: 'string'` → controller method → full Arc pipeline + MCP tool
- * - `handler: function` → inline handler → full Arc pipeline + MCP tool
- * - `rawHandler` → raw Fastify handler → no pipeline, no MCP by default
+ * - `handler: function` → arc pipeline + MCP tool (the normal form)
+ * - `rawHandler: function` → raw Fastify handler → no pipeline, no MCP by default
+ *   (streams, raw-body webhooks, files, redirects)
  */
 export interface RouteDefinition {
   readonly method: RouteMethod;
   /** Path relative to resource prefix */
   readonly path: string;
   /**
-   * Route handler.
-   * - String: controller method name (Arc pipeline) — runtime lookup, no TS coverage on typos.
-   * - Function: receives IRequestContext, returns IControllerResponse (Arc pipeline)
-   * - For a raw Fastify handler `(request, reply)`, use {@link rawHandler}
+   * Route handler: receives `IRequestContext`, returns `IControllerResponse`
+   * (arc pipeline + MCP tool). To reach a controller method, call it:
+   * `handler: (ctx) => controller.getStats(ctx)`. For a raw Fastify handler
+   * `(request, reply)`, use {@link rawHandler}.
    *
-   * Prefer `controllerMethod` (2.16) over the string form when you want the
-   * compiler to catch typos. `handler` stays optional when `controllerMethod`
-   * is set — exactly one of the two must be declared.
+   * The STRING form (a controller method name) is deprecated: it warns once per
+   * process and is removed in the next minor.
    */
   readonly handler?: string | ControllerHandler;
   /**
-   * Typed function-reference handler (2.16). Receives the live controller
-   * instance and returns the method to invoke — TypeScript catches typos
-   * and surfaces autocomplete on the controller's method names. Prefer
-   * this over the string `handler` form for any host that uses a typed
-   * controller subclass.
+   * Function-reference handler: receives the controller, returns the method.
    *
-   * Resolved ONCE at route-registration time (the same path string
-   * handlers go through), so there's no per-request lookup overhead.
-   * The returned method is bound to the controller before dispatch.
-   *
-   * PIPELINE-ONLY: the referenced method is invoked as a `ControllerHandler`
-   * (one `IRequestContext`), because the router derives "is this raw?" from
-   * {@link rawHandler} alone and this field is mutually exclusive with it.
-   * There is no flag that could make a `controllerMethod` route raw. For a
-   * Fastify-native controller method, put its NAME in `rawHandler` — the
-   * lookup is the same, and the field states the calling convention.
-   *
-   * Mutually exclusive with `handler` — passing both throws at boot
-   * with a clear "pick one" message.
-   *
-   * Typed loosely (`(controller: unknown) => …`) at the type-system
-   * boundary because `RouteDefinition` is not generic over the
-   * controller shape — host code annotates the parameter to opt in:
-   *
-   * @example
-   * ```ts
-   * class PostController extends BaseController<Post> {
-   *   async getStats(ctx: IRequestContext) { … }
-   * }
-   *
-   * defineResource({
-   *   controller: new PostController(repo),
-   *   routes: [{
-   *     method: 'GET',
-   *     path: '/stats',
-   *     controllerMethod: (c: PostController) => c.getStats,
-   *     //                       ^^^^^^^^^^^^^^ TS catches typos here
-   *     permissions: requireAuth(),
-   *   }],
-   * });
-   * ```
+   * @deprecated Use a function `handler` that calls the controller method:
+   * `handler: (ctx) => controller.getStats(ctx)`. Warns once per process;
+   * removed in the next minor.
    */
   readonly controllerMethod?: (controller: unknown) => ControllerHandler;
   /** Permission check — REQUIRED */
@@ -147,9 +110,9 @@ export interface RouteDefinition {
    * {@link RawRouteHandler} for why arc declares its own rather than reusing
    * `RouteHandlerMethod` directly.
    *
-   * Accepts a controller-method NAME as well, same as {@link handler} — the
-   * lookup is identical and only the calling convention differs, so a
-   * Fastify-native controller method stays reachable by name.
+   * The STRING form (a controller method name) is deprecated: pass the function,
+   * `rawHandler: (request, reply) => controller.download(request, reply)`. It
+   * warns once per process and is removed in the next minor.
    *
    * An async raw handler that calls `reply.send()` must `return reply` (as `handleRaw`
    * does): resolving `undefined` while an async `preSerialization` hook runs sends an empty body.
@@ -168,23 +131,24 @@ export interface RouteDefinition {
   /** Pre-auth handlers (run before authentication) */
   readonly preAuth?: RouteHandlerMethod[];
   /**
-   * Opt this custom route into the multiTenant preset's tenant scoping.
+   * The multiTenant preset's guard on this route. On a resource with `multiTenantPreset`:
    *
-   * When `true` AND the resource declares `multiTenantPreset`, arc
-   * prepends the preset's tenant
-   * filter + injection middleware to this route's chain — the same
-   * pair `update` gets. The handler can then read the resolved tenant
-   * via `getOrgId(req.scope)` / `req._tenantFields` (or, for write
-   * routes, off `req.body` after injection) without re-implementing
-   * the scope read + header fallback + 400 boilerplate.
+   * - omitted: a `handler` route gets the tenant filter (401 anonymous, 403 without an
+   *   organization, rows pinned to the caller's), as CRUD and actions do; a preset route
+   *   gets exactly what the CRUD route it maps to gets. A `rawHandler` route gets nothing.
+   * - `true`: filter plus body injection (what `update` gets), on any route, raw included.
+   * - `false`: no tenant middleware; the route handles tenancy itself.
    *
-   * Throws at boot if set when no multiTenant preset is wired — the
-   * misconfiguration would otherwise be silently insecure (read routes
-   * returning every tenant's rows).
-   *
-   * @default false
+   * `true` without a multiTenant preset throws at boot.
    */
   readonly tenantScope?: boolean;
+  /**
+   * INTERNAL — the CRUD slot whose tenant middlewares a built-in preset route shares
+   * (`slugLookup` → `get`, `tree` → `list`). Hosts must not set this.
+   *
+   * @internal
+   */
+  readonly _tenantSlot?: "list" | "get" | "create" | "update" | "delete";
   /**
    * SSE streaming mode. Requires {@link rawHandler} — the handler is invoked
    * with `(request, reply)` and owns the response. Two shapes work:

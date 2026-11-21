@@ -7,15 +7,15 @@
  *
  * @example
  * ```typescript
- * import { permissions } from '@classytic/arc';
+ * import { publicRead, requireRoles } from '@classytic/arc/permissions';
  *
  * // Public read, authenticated write
- * defineResource({ name: 'product', permissions: permissions.publicRead() });
+ * defineResource({ name: 'product', permissions: publicRead() });
  *
  * // Override specific operations
  * defineResource({
  *   name: 'product',
- *   permissions: permissions.publicRead({ delete: requireRoles(['superadmin']) }),
+ *   permissions: publicRead({ delete: requireRoles(['superadmin']) }),
  * });
  * ```
  */
@@ -228,7 +228,7 @@ export function fullPublic<TDoc = Record<string, unknown>>(
  * Writes carry an explicit `denyAll` check — an omitted CRUD permission
  * mounts the route with NO gate (public-by-omission), so leaving
  * create/update/delete undefined here would expose unauthenticated writes.
- * Hosts that disable write routes entirely (`disabledRoutes`) are unaffected.
+ * Hosts that disable write routes entirely (`crud: { list: true, get: true }`) are unaffected.
  */
 export function readOnly<TDoc = Record<string, unknown>>(
   overrides?: PermissionOverrides<TDoc>,

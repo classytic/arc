@@ -24,10 +24,11 @@ const app = await createApp({
 | `create` | `create_{name}` | not destructive, not idempotent |
 | `update`, `delete` | `update_{name}`, `delete_{name}` | `destructiveHint`, `idempotentHint` |
 | `actions` | `{action}_{name}` (input: `id` + action schema) | `destructiveHint` |
-| custom routes (function or string handler) | `{operation or slug}_{name}` | by HTTP method: GET/HEAD read-only; PUT/DELETE destructive + idempotent; POST/PATCH destructive |
+| custom routes | `{operation or slug}_{name}` | by HTTP method: GET/HEAD read-only; PUT/DELETE destructive + idempotent; POST/PATCH destructive |
 
 - CRUD hints are all explicit and include `openWorldHint: false`; an omitted hint means the cautious spec default.
-- A CRUD op becomes a tool only when `permissions.<op>` is declared and the op is not in `disabledRoutes`.
+- A CRUD op becomes a tool only when `permissions.<op>` is declared and the op is not left out of a `crud` allow-list.
+- `crud: false` mounts no CRUD routes but keeps every permitted CRUD tool. For "no HTTP CRUD, only these tools", pair it with `overrides: { <resource>: { operations: ['list', 'get'] } }`.
 - Tools run the same controller pipeline as REST: auth, tenant scope, permission policy, hooks, field masking, events.
 - `list_*` accepts `page`, `limit`, `cursor` (keyset; `page` ignored when set), `sort`, `search`, `select`, `populate`, filters. `get_*` accepts `id`, `select`. `limit` max follows the resource `queryParser.maxLimit`.
 - Mutating tools accept `_idempotencyKey` when an idempotency store is wired (register `idempotencyPlugin` before `mcpPlugin`). `idempotency.required` on a resource without a store throws at boot.

@@ -63,26 +63,33 @@ Reads `accept-version` (`headerName`), sets `x-api-version` (`responseHeader`) a
 ## Rate limiting
 
 ```typescript
-import { createTenantKeyGenerator } from '@classytic/arc/scope';
-
 createApp({
   rateLimit: {
-    max: 100, timeWindow: '1 minute',
-    redis,                                              // shared store, required with runtime 'distributed'
-    keyGenerator: createTenantKeyGenerator(),           // or { strategy: (ctx) => ctx.ip }
-    skipPaths: ['/api/auth/*'],
+    max: 100, timeWindow: '1 minute',   // per signed-in user; per IP when anonymous
+    redis,                              // shared store, required with runtime 'distributed'
+    ipCeiling: 2000,                    // early per-IP flood guard (default max(2000, 20 × max)); false drops it
   },
 });
 ```
 
-| Scope kind | Key |
-|---|---|
-| `member`, `service` | `organizationId` |
-| `authenticated` | `userId` |
-| `elevated` | `organizationId ?? userId` |
-| `public` | IP |
+Default key (no `keyGenerator`, no `plan`): the signed-in user's id when the scope has one, else the client IP (IPv6 grouped by /64). It runs at `preHandler`, after auth, so one office Wi-Fi or carrier NAT never throttles colleagues together, while sign-in, sign-up and reset (no user yet) stay limited per IP. An `allowList` of addresses also matches signed-in callers from those addresses. The `ipCeiling` counts every request per IP at `onRequest` (before auth, unmatched routes included) on the same store; routes with `config: { rateLimit: false }` skip it.
 
-Pre-auth paths see the public scope and key by IP: exempt them with `skipPaths`. Per-resource budgets: `defineResource({ rateLimit })`.
+Pick another key with `createTenantKeyGenerator` (`@classytic/arc/scope`); arc moves it to `preHandler` too:
+
+```typescript
+import { createTenantKeyGenerator } from '@classytic/arc/scope';
+
+rateLimit: { max: 1000, keyGenerator: createTenantKeyGenerator({ strategy: 'organization' }) }   // one quota per org
+rateLimit: { max: 100, keyGenerator: (req) => req.ip }                                         // per IP, as before 2.53
+```
+
+| `strategy` | Key |
+|---|---|
+| `'user'` (createApp default) | `user:<userId>`, else IP |
+| `'organization'` (when omitted) | `member`/`service`: `organizationId`; `authenticated`: `userId`; `elevated`: `organizationId ?? userId`; `public`: IP |
+| `(ctx) => string` | yours (`ctx.ip`, `ctx.scope`) |
+
+A host `keyGenerator` or `plan` gets no `ipCeiling`. Per-resource budgets: `defineResource({ rateLimit })`.
 
 Shared store down (`redis`/`store`): every call is bounded (`storeFallback.timeoutMs`, 250) and an error or timeout is answered from per-instance memory counters (still limited, never hangs or 500s); one warning per outage, probed every `retryAfterMs` (5000), resumes on its first answer; `storeFallback.onStatus` reports each switch for a health/metrics signal. `storeFallback: false` = the plugin's own behaviour.
 

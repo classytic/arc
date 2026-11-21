@@ -13,7 +13,8 @@ Arc maintains a central registry of all defined resources, enabling:
 ## Programmatic Access
 
 ```typescript
-import { resourceRegistry } from '@classytic/arc/registry';
+// Instance-scoped: available once arc's core plugin is registered (createApp does this)
+const resourceRegistry = fastify.arc.registry;
 
 // Get all resources
 const resources = resourceRegistry.getAll();

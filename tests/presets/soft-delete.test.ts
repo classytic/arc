@@ -7,24 +7,44 @@
  * - Route registration
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { allowPublic, requireRoles } from "../../src/permissions/index.js";
 import { applyPresets } from "../../src/presets/index.js";
 import { softDeletePreset } from "../../src/presets/softDelete.js";
-import type { ResourceConfig, ResourcePermissions } from "../../src/types/index.js";
+import type {
+  ControllerHandler,
+  IRequestContext,
+  PresetController,
+  ResourceConfig,
+  ResourcePermissions,
+} from "../../src/types/index.js";
 
 /** Extract routes from preset result (supports both `routes` and legacy `routes`). */
 function getPresetRoutes(
   result: ReturnType<typeof softDeletePreset>,
   permissions: ResourcePermissions = {},
+  controller: Record<string, unknown> = {},
 ) {
   if (result.routes) {
-    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
-  }
-  if (result.routes) {
-    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
+    return typeof result.routes === "function"
+      ? result.routes(permissions, controller as PresetController)
+      : result.routes;
   }
   return [];
+}
+
+/** The route's function handler calls `controller[method]` and returns its response. */
+async function expectCallsController(path: string, method: string) {
+  const response = { data: method };
+  const fn = vi.fn(async () => response);
+  const route = getPresetRoutes(softDeletePreset(), {}, { [method]: fn }).find(
+    (r) => r.path === path,
+  );
+  const ctx = { params: { id: "1" } } as unknown as IRequestContext;
+  const handler = route?.handler as ControllerHandler;
+  expect(typeof handler).toBe("function");
+  await expect(handler(ctx)).resolves.toBe(response);
+  expect(fn).toHaveBeenCalledWith(ctx);
 }
 
 describe("softDelete preset", () => {
@@ -34,22 +54,22 @@ describe("softDelete preset", () => {
       expect(result.name).toBe("softDelete");
     });
 
-    it("should add GET /deleted route", () => {
+    it("should add GET /deleted route", async () => {
       const routes = getPresetRoutes(softDeletePreset(), { list: allowPublic() });
       const deletedRoute = routes.find((r) => r.path === "/deleted");
       expect(deletedRoute).toBeDefined();
       expect(deletedRoute?.method).toBe("GET");
-      expect(deletedRoute?.handler).toBe("getDeleted");
+      await expectCallsController("/deleted", "getDeleted");
     });
 
-    it("should add POST /:id/restore route", () => {
+    it("should add POST /:id/restore route", async () => {
       const routes = getPresetRoutes(softDeletePreset(), {
         update: requireRoles(["admin"]),
       });
       const restoreRoute = routes.find((r) => r.path === "/:id/restore");
       expect(restoreRoute).toBeDefined();
       expect(restoreRoute?.method).toBe("POST");
-      expect(restoreRoute?.handler).toBe("restore");
+      await expectCallsController("/:id/restore", "restore");
     });
 
     it("should use list permission for /deleted route", () => {
@@ -108,7 +128,7 @@ describe("softDelete preset", () => {
           {
             method: "GET",
             path: "/custom",
-            handler: "custom",
+            handler: async () => ({ data: null }),
             permissions: allowPublic(),
           },
         ],

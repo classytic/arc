@@ -4,8 +4,13 @@
  * Adds routes for hierarchical tree structures.
  */
 
-import { allowPublic } from "../permissions/index.js";
-import type { PresetResult, ResourcePermissions, RouteDefinition } from "../types/index.js";
+import type {
+  PresetController,
+  PresetResult,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../types/index.js";
+import { presetPermission } from "./presetPermission.js";
 
 export interface TreeOptions {
   parentField?: string;
@@ -16,22 +21,27 @@ export function treePreset(options: TreeOptions = {}): PresetResult {
 
   return {
     name: "tree",
-    routes: (permissions: ResourcePermissions): RouteDefinition[] => [
+    routes: (
+      permissions: ResourcePermissions,
+      controller: PresetController<"getTree" | "getChildren">,
+    ): RouteDefinition[] => [
       {
         method: "GET",
         path: "/tree",
-        handler: "getTree",
+        handler: controller.getTree,
         summary: "Get hierarchical tree",
-        permissions: permissions.list ?? allowPublic(),
+        permissions: presetPermission(permissions.list, { preset: "tree", inherits: "list" }),
         operation: "getTree",
+        _tenantSlot: "list",
       },
       {
         method: "GET",
         path: `/:${parentField}/children`,
-        handler: "getChildren",
+        handler: controller.getChildren,
         summary: "Get children of parent",
-        permissions: permissions.list ?? allowPublic(),
+        permissions: presetPermission(permissions.list, { preset: "tree", inherits: "list" }),
         operation: "getChildren",
+        _tenantSlot: "list",
       },
     ],
     controllerOptions: {

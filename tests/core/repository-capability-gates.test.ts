@@ -160,7 +160,7 @@ describe("read-only repository — write-route gate", () => {
       message = (err as Error).message;
     }
     expect(message).toMatch(/create, update, delete/);
-    expect(message).toMatch(/disabledRoutes/);
+    expect(message).toContain("crud: { list: true, get: true }");
     expect(message).toMatch(/unsafeWritable/);
   });
 
@@ -170,7 +170,7 @@ describe("read-only repository — write-route gate", () => {
         name: "user",
         permissions: PERMISSIONS,
         adapter: adapterFor(readOnlyRepo()),
-        disabledRoutes: ["create", "update", "delete"],
+        crud: { list: true, get: true },
       }),
     ).not.toThrow();
   });
@@ -181,7 +181,7 @@ describe("read-only repository — write-route gate", () => {
         name: "user",
         permissions: PERMISSIONS,
         adapter: adapterFor(readOnlyRepo()),
-        disableDefaultRoutes: true,
+        crud: false,
       }),
     ).not.toThrow();
   });

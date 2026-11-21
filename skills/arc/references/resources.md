@@ -24,7 +24,8 @@ export default defineResource({
     query: { allowedPopulate: ['category'], filterableFields: { status: { type: 'string' } } },
   },
   cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
-  routes: [{ method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic() }],
+  routes: [{ method: 'GET', path: '/featured', permissions: allowPublic(),
+             handler: (ctx) => controller.getFeatured(ctx) }],
   actions: { approve: { handler: approve, permissions: requireRoles(['admin']) } },
 });
 ```
@@ -35,11 +36,10 @@ Auto-generated: `GET /`, `GET /:id`, `POST /`, `PATCH /:id`, `DELETE /:id`. Pres
 
 | Field | Signature | Behaviour |
 |---|---|---|
-| `handler` | `(ctx: IRequestContext)` or controller-method name | arc pipeline: envelope, field-write permissions, MCP tool |
-| `rawHandler` | `(request, reply)` or controller-method name | Fastify-native: owns the response, no pipeline, no MCP unless `mcpHandler` |
-| `controllerMethod` | `(c: MyController) => c.method` | typed ref, TS catches typos |
+| `handler` | `(ctx: IRequestContext)` | arc pipeline: envelope, field-write permissions, MCP tool. The normal form |
+| `rawHandler` | `(request, reply)` | Fastify-native: owns the response, no pipeline, no MCP unless `mcpHandler`. Streams, raw-body webhooks, files, redirects |
 
-Both on one route throws at boot. `streamResponse: true` needs `rawHandler`. Custom endpoints belong in `routes:` / `actions:` (they inherit auth, OpenAPI, MCP); a bare `fastify.get()` bypasses all of it. Declare the schema with `routeInput` (see `references/validation.md`).
+To reach a controller method, call it: `handler: (ctx) => controller.getStats(ctx)`; set `operation` to keep a stable MCP tool and pipeline name. Both on one route throws at boot. `streamResponse: true` needs `rawHandler`. Custom endpoints belong in `routes:` / `actions:` (they inherit auth, OpenAPI, MCP); a bare `fastify.get()` bypasses all of it. Declare the schema with `routeInput` (see `references/validation.md`).
 
 Actions share one `POST /:id/action` mount (`id: false` mounts `POST /action`); throttle one by making it a route with `rateLimit`. An action with no permission and no `permissions.update` fallback throws at boot (`allowPublic()` to opt out).
 
@@ -81,6 +81,8 @@ Model constraints win; `fieldRules` supplements what the model lacks.
 | `filesUpload` | `POST /upload`, `GET /:id`, `DELETE /:id` | `{ storage, allowedMimeTypes?, maxFileSize? }` |
 | `search` | `POST /search`, `/search-similar`, `/embed` | `{ repository?, search?, similar?, embed? }` |
 
+- Preset read routes inherit the CRUD key (`slugLookup`, `filesUpload` read → `get`; `tree`, `search` → `list`); with none they fail boot under `strictPermissions` (`preset-route-public-by-omission`). Public is `allowPublic()`.
+- `multiTenant` guards every route: preset routes get their CRUD route's tenant guard, custom `handler` routes the filter; `tenantScope: true` adds body injection (and covers `rawHandler`), `false` opts out.
 - `tenantField: false` disables the org filter (lookup tables, platform settings).
 - `idField` picks the `:id` lookup column (default `_id`). A 404 on `PATCH` when `GET` works is usually a permission `filters` clause, not `idField`.
 - Presets compose and order matters. A custom `controller` does not receive preset-injected fields: forward `tenantField` / `schemaOptions` / `idField` through `super()` and also pass them to `defineResource`, or extend `BaseController`.
@@ -90,7 +92,7 @@ Model constraints win; `fieldRules` supplements what the model lacks.
 | Behaviour | Default | Switch |
 |---|---|---|
 | non-writable field in body | 403 with the denied list | `onFieldWriteDenied: 'strip'` |
-| write to an `immutable` field | stripped, 200 | `onImmutableWrite: 'reject'` or `ARC_STRICT_IMMUTABLE_WRITES=true` |
+| write to an `immutable` field | 403 | `onImmutableWrite: 'strip'` or `ARC_STRICT_IMMUTABLE_WRITES=false` |
 | ungated CRUD write | fatal at define time | `strictPermissions: false` (not recommended) |
 | multiTenant on update | body org overwritten with caller's scope | none |
 

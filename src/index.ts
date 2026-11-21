@@ -252,6 +252,7 @@ export type {
   OwnershipCheck,
   // Pagination discriminated union (arc-owned; individual shapes ship from repo-core)
   PaginationResult,
+  PresetController,
   PresetFunction,
   // Presets
   PresetResult,

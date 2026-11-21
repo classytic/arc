@@ -48,7 +48,7 @@ describe("createApp — resourceDir option", () => {
     const resource = defineResource({
       name: "priority-test",
       prefix: "/priority",
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         ping: async () => ({ pong: true }),
       },
@@ -199,7 +199,7 @@ describe("createApp — resourceDir option", () => {
       defineResource({
         name,
         prefix,
-        disableDefaultRoutes: true,
+        crud: false,
         actions: {
           ping: async () => ({ pong: true }),
         },
@@ -365,7 +365,7 @@ describe("createApp — resourceDir option", () => {
       const resource = defineResource({
         name: "zero-count-happy-path",
         prefix: "/zcHP",
-        disableDefaultRoutes: true,
+        crud: false,
         actions: { ping: async () => ({ pong: true }) },
         actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
       });
@@ -395,7 +395,7 @@ describe("createApp — resourceDir option", () => {
         defineResource({
           name,
           prefix,
-          disableDefaultRoutes: true,
+          crud: false,
           actions: { ping: async () => ({ pong: true }) },
           actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
         });
@@ -434,7 +434,7 @@ describe("createApp — resourceDir option", () => {
         defineResource({
           name,
           prefix,
-          disableDefaultRoutes: true,
+          crud: false,
           actions: { ping: async () => ({ pong: true }) },
           actionPermissions: (() => true) as import("../../src/types/index.js").PermissionCheck,
         });

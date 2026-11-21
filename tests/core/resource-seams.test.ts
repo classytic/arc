@@ -152,7 +152,7 @@ describe("ResourceSeams — the cast-free module-author flow (type contract)", (
       adapter: hostAdapter,
       tag: "Storefront",
       cache: { staleTime: 60 },
-      disabledRoutes: ["delete"],
+      crud: { list: true, get: true, create: true, update: true },
       permissions: { list: allowPublic() },
     };
 

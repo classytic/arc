@@ -18,19 +18,25 @@
 
 import { CRUD_OPERATIONS, DEFAULT_TENANT_FIELD } from "../../constants.js";
 import { arcLog } from "../../logger/index.js";
+import { allowPublic } from "../../permissions/index.js";
 import { applyPresets } from "../../presets/index.js";
-import type { ResourceConfig } from "../../types/index.js";
+import { unresolvedPresetPermission } from "../../presets/presetPermission.js";
+import type { PresetController, ResourceConfig } from "../../types/index.js";
 import { autoInjectTenantFieldRules } from "../schemaOptions.js";
 import type { InternalResourceConfig } from "./config.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 
+const PRESET_ROUTE_PUBLIC_BY_OMISSION = "preset-route-public-by-omission";
+
 /**
  * Run the Phase 3 pipeline: clone → apply presets → infer tenant
  * field → auto-inject system-managed rules. Returns the resolved
- * `InternalResourceConfig` that every later phase consumes.
+ * `InternalResourceConfig` that every later phase consumes. `controller` is the
+ * handle preset `routes(permissions, controller)` builders receive; Phase 4 binds it.
  */
 export function applyPresetsAndAutoInject<TDoc>(
   config: ResourceConfig<TDoc>,
+  controller: PresetController,
 ): InternalResourceConfig<TDoc> {
   const originalPresets = (config.presets ?? []).map((p) =>
     typeof p === "string" ? p : (p as { name: string }).name,
@@ -50,7 +56,7 @@ export function applyPresetsAndAutoInject<TDoc>(
   );
 
   const resolvedConfig = (
-    config.presets?.length ? applyPresets(config, config.presets) : { ...config }
+    config.presets?.length ? applyPresets(config, config.presets, controller) : { ...config }
   ) as InternalResourceConfig<TDoc>;
 
   resolvedConfig._appliedPresets = originalPresets;
@@ -127,6 +133,41 @@ export function computeHasCrudRoutes<TDoc>(config: ResourceConfig<TDoc>): boolea
   return !config.disableDefaultRoutes && CRUD_OPERATIONS.some((op) => !disabled.has(op));
 }
 
+/**
+ * Preset routes whose permission resolved to nothing (no preset option, no resource
+ * permission to inherit; see `presetPermission`). The CRUD-read ladder: `error` under
+ * `strict`; otherwise `info`, and the route is mounted public (`allowPublic()`), as an
+ * ungated CRUD read is. Rewrites `config.routes` (a fresh array owned by `resolvedConfig`).
+ */
+export function resolvePresetRoutePermissions<TDoc>(
+  config: InternalResourceConfig<TDoc>,
+  strict = false,
+): ResourceDiagnostic[] {
+  const diagnostics: ResourceDiagnostic[] = [];
+  const routes = config.routes?.map((route) => {
+    const unresolved = unresolvedPresetPermission(route.permissions);
+    if (!unresolved) return route;
+    const { preset, inherits, option } = unresolved;
+    const where = `${route.method} ${route.path}`;
+    diagnostics.push({
+      severity: strict ? "error" : "info",
+      code: PRESET_ROUTE_PUBLIC_BY_OMISSION,
+      message:
+        `[Arc] Resource '${config.name}': preset '${preset}' route ${where} has no permission ` +
+        `(it inherits permissions.${inherits}, which is not set).\n` +
+        (strict
+          ? "strictPermissions is on and an ungated READ is fatal. State intent explicitly:\n"
+          : "It is mounted WITHOUT auth. State intent explicitly:\n") +
+        `  permissions: { ${inherits}: allowPublic(), ... }  // intentionally public\n` +
+        `  permissions: { ${inherits}: requireAuth(), ... }  // or requireRoles([...])` +
+        (option ? `\n  ${option}  // this route only` : ""),
+    });
+    return strict ? route : { ...route, permissions: allowPublic() };
+  });
+  if (routes && !strict && diagnostics.length > 0) config.routes = routes;
+  return diagnostics;
+}
+
 const WRITE_OPERATIONS = new Set<string>(["create", "update", "delete"]);
 
 /**
@@ -142,18 +183,15 @@ const WRITE_OPERATIONS = new Set<string>(["create", "update", "delete"]);
  * wiring, ...) count as gates and don't false-positive.
  *
  * Severity ladder:
- *   - `error` when any enabled WRITE op is ungated AND `strict` is on — the
- *     resource fails boot (`defineResource()` throws). This is the fail-closed
- *     production invariant: an unauthenticated write must never ship silently.
- *   - `warn` (default) when any enabled WRITE op (create/update/delete) is
- *     ungated — real exposure the host must acknowledge, but non-fatal so
- *     existing hosts are not broken.
- *   - `info` when only reads are ungated — public catalogs
- *     (`referenceData: true`) are a legitimate shape, but the host should
- *     still state intent with `permissions.fullPublic()` / `allowPublic()`.
+ *   - `error` when ANY enabled op is ungated AND `strict` is on — the resource
+ *     fails boot (`defineResource()` throws). An ungated read is as fatal as an
+ *     ungated write: a public catalog states it with `allowPublic()`, so an
+ *     accidental public read never ships.
+ *   - `warn` (strict off) when an enabled WRITE op is ungated.
+ *   - `info` (strict off) when only reads are ungated.
  *
- * `strict` is opt-in (resource `strictPermissions: true` or the
- * `ARC_STRICT_PERMISSIONS` env), so the default behavior is unchanged.
+ * The caller resolves `strict` (resource `strictPermissions`, else the
+ * `ARC_STRICT_PERMISSIONS` env, which is on unless set to false).
  */
 export function collectUngatedCrudDiagnostics<TDoc>(
   config: InternalResourceConfig<TDoc>,
@@ -168,11 +206,12 @@ export function collectUngatedCrudDiagnostics<TDoc>(
   if (ungated.length === 0) return [];
 
   const hasUngatedWrite = ungated.some((op) => WRITE_OPERATIONS.has(op));
-  const severity: ResourceDiagnostic["severity"] = hasUngatedWrite
-    ? strict
-      ? "error"
-      : "warn"
-    : "info";
+  const severity: ResourceDiagnostic["severity"] = strict
+    ? "error"
+    : hasUngatedWrite
+      ? "warn"
+      : "info";
+  const ungatedReads = ungated.filter((op) => !WRITE_OPERATIONS.has(op));
   return [
     {
       severity,
@@ -180,18 +219,21 @@ export function collectUngatedCrudDiagnostics<TDoc>(
       message:
         `[Arc] Resource '${config.name}' mounts ${ungated.length} CRUD route(s) with no permission gate: ${ungated.join(", ")}.\n` +
         (severity === "error"
-          ? "strictPermissions is on and an ungated WRITE is fatal. State intent explicitly:\n"
+          ? `strictPermissions is on and an ungated ${hasUngatedWrite ? "WRITE" : "READ"} is fatal. State intent explicitly:\n`
           : "An omitted permission mounts the route WITHOUT auth. State intent explicitly:\n") +
-        `  permissions: permissions.fullPublic()     // intentionally public\n` +
-        `  permissions: permissions.authenticated()  // require auth on every op\n` +
+        (ungatedReads.length > 0
+          ? `  permissions: { ${ungatedReads.map((op) => `${op}: allowPublic()`).join(", ")}, ... }  // intentionally public reads\n`
+          : "") +
+        `  permissions: fullPublic()     // every op intentionally public\n` +
+        `  permissions: authenticated()  // require auth on every op\n` +
         `  permissions: { ${ungated[0]}: requireAuth(), ... }  // per-operation` +
         // A warning nobody can act on decisively gets filtered. Name the
-        // switch that makes this whole class of mistake impossible —
-        // recommended for production, and the v3 default.
+        // switch that makes this whole class of mistake impossible. It is on
+        // by default, so this branch only runs for a host that turned it off.
         (severity === "warn"
           ? "\nRecommended in production: ARC_STRICT_PERMISSIONS=true (or `strictPermissions: " +
             "true` on the resource) makes an ungated WRITE fail the boot instead of shipping. " +
-            "This is the arc v3 default."
+            "Strict permissions is the default; this resource or app has switched it off."
           : ""),
     },
   ];

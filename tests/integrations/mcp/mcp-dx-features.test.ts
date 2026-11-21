@@ -13,10 +13,10 @@
 
 import { QueryParser, Repository } from "@classytic/mongokit";
 import { createMongooseAdapter } from "@classytic/mongokit/adapter";
+import Fastify from "fastify";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { connectMcpTestClient } from "../../../src/integrations/mcp/testing.js";
 import { BaseController } from "../../../src/core/BaseController.js";
 import { defineResource } from "../../../src/core/defineResource.js";
 import {
@@ -25,6 +25,10 @@ import {
   defineTool,
   resourceToTools,
 } from "../../../src/integrations/mcp/index.js";
+import {
+  connectMcpTestClient,
+  createTestMcpClient,
+} from "../../../src/integrations/mcp/testing.js";
 import { allowPublic } from "../../../src/permissions/index.js";
 
 // ============================================================================
@@ -104,7 +108,7 @@ function makeResource(
         updatedAt: { type: "date", systemManaged: true },
       },
     },
-    disableDefaultRoutes: opts.disableDefaultRoutes,
+    ...(opts.disableDefaultRoutes ? { crud: false as const } : {}),
     routes: opts.routes,
   });
 }
@@ -211,6 +215,44 @@ describe("disableDefaultRoutes + MCP", () => {
     expect(listed.data.length).toBeGreaterThanOrEqual(1);
   });
 
+  // The one way to say "no HTTP CRUD, but these MCP tools": `crud: false` on the
+  // resource + `mcpPlugin({ overrides: { <resource>: { operations } } })`.
+  it("crud: false + an mcpPlugin operations override → exactly those tools, no HTTP CRUD", async () => {
+    const resource = makeResource("product", ProductModel, { disableDefaultRoutes: true });
+
+    const client = await createTestMcpClient({
+      pluginOptions: {
+        resources: [resource],
+        overrides: { product: { operations: ["list", "get"] } },
+      },
+    });
+    try {
+      const names = (await client.listTools()).map((t) => t.name).sort();
+      expect(names).toEqual(["get_product", "list_products"]);
+      const listed = await client.callTool("list_products", {});
+      expect(listed.isError).toBeFalsy();
+    } finally {
+      await client.close();
+    }
+
+    const app = Fastify({ logger: false });
+    await app.register(resource.toPlugin(), { prefix: "/api" });
+    await app.ready();
+    try {
+      for (const [method, url] of [
+        ["GET", "/api/products"],
+        ["GET", "/api/products/x"],
+        ["POST", "/api/products"],
+        ["PATCH", "/api/products/x"],
+        ["DELETE", "/api/products/x"],
+      ] as const) {
+        expect((await app.inject({ method, url })).statusCode, `${method} ${url}`).toBe(404);
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
   it("disabledRoutes still respected — delete disabled means no delete tool", () => {
     const repo = new Repository(ProductModel);
     const resource = defineResource({
@@ -224,7 +266,7 @@ describe("disableDefaultRoutes + MCP", () => {
         update: allowPublic(),
         delete: allowPublic(),
       },
-      disabledRoutes: ["delete"],
+      crud: { list: true, get: true, create: true, update: true },
     });
 
     const tools = resourceToTools(resource);

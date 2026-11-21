@@ -35,11 +35,29 @@ jobs:
 
       - run: npm ci
 
+      - name: Line endings
+        run: npm run check:line-endings
+
       - name: Typecheck (src + enforced type-test lane)
         run: npm run typecheck
 
       - name: Lint
         run: npx biome check src/ --diagnostic-level=error
+
+      - name: Skills and llms.txt
+        run: npm run check:skills
+
+      - name: Docs imports
+        run: npm run check:docs-imports
+
+      - name: Peer skew
+        run: npm run check:peer-skew
+
+      - name: Docs drift
+        run: npm run check:docs-drift
+
+      - name: Removed route API
+        run: npm run check:route-api
 
       - name: Dead code
         run: npx knip
@@ -52,6 +70,9 @@ jobs:
 
       - name: Public API surface
         run: npm run check:api-surface
+
+      - name: Forgotten exports (reads dist)
+        run: npm run check:forgotten-exports
 
       - name: Package standards (publint + attw)
         run: npm run check:package

@@ -14,7 +14,7 @@ import { allowPublic } from "../../src/permissions/index.js";
 function limited(name: string) {
   return defineResource({
     name,
-    disableDefaultRoutes: true,
+    crud: false,
     routes: [
       {
         method: "POST",

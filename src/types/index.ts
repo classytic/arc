@@ -165,6 +165,7 @@ export type {
   MutationWriteContext,
   OnTenantDeleteConfig,
   OpenApiSchemas,
+  PresetController,
   PresetFunction,
   PresetHook,
   PresetResult,

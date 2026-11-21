@@ -34,7 +34,9 @@ import {
   runWithArcLogger,
 } from "../logger/index.js";
 import { enterArcLoggerScope } from "../logger/scope.js";
+import { logBootHealthSummary } from "../plugins/health.js";
 import { createRequestIdGenerator } from "../plugins/requestId.js";
+import { ArcBootError, bootError } from "../utils/bootError.js";
 import { parseJsonBody } from "../utils/jsonBody.js";
 import {
   auditRuntimeCapabilities,
@@ -61,7 +63,7 @@ import type { CreateAppOptions } from "./types/index.js";
  * Reported together at production boot, so an opt-out is never silent.
  */
 const STRICT_ENV_FLAGS: ReadonlyArray<readonly [string, string]> = [
-  ["ARC_STRICT_PERMISSIONS", "An ungated write route warns instead of failing boot."],
+  ["ARC_STRICT_PERMISSIONS", "An ungated CRUD route (read or write) no longer fails boot."],
   ["ARC_STRICT_QUERY_PARAMS", "An unknown filter key is DROPPED, which WIDENS the read."],
   ["ARC_STRICT_IMMUTABLE_WRITES", "A PATCH of an immutable field returns 200, unchanged."],
 ];
@@ -119,11 +121,14 @@ function validateAuthOptions(options: CreateAppOptions): void {
   if (authConfig === false || !authConfig) return;
 
   if (authConfig.type === "jwt" && !authConfig.jwt?.secret && !authConfig.authenticate) {
-    throw new Error(
-      "createApp: JWT secret required when Arc auth is enabled.\n" +
+    throw bootError({
+      code: "auth-jwt-secret-missing",
+      message:
+        "createApp: JWT secret required when Arc auth is enabled.\n" +
         "Provide auth.jwt.secret, auth.authenticate, or set auth: false to disable.\n" +
         "Example: auth: { type: 'jwt', jwt: { secret: process.env.JWT_SECRET } }",
-    );
+      fix: "set auth.jwt.secret (or auth.authenticate), or pass auth: false",
+    });
   }
 }
 
@@ -192,10 +197,15 @@ function validateDistributedRuntime(options: CreateAppOptions): string[] {
 
   if (missing.length > 0) {
     const lines = missing.map((m) => `  • ${m.key.padEnd(20)} → ${m.hint}`).join("\n");
-    throw new Error(
+    throw new ArcBootError(
       "[Arc] runtime: 'distributed' requires durable (Redis/MongoDB) adapters, not memory.\n\n" +
         `Missing:\n${lines}\n\n` +
         "Fix: pass durable adapters under `stores`, or use runtime: 'memory' for single-instance dev.",
+      missing.map((m) => ({
+        code: "distributed-requires-shared-store",
+        message: `runtime: 'distributed' needs ${m.key}`,
+        fix: `pass ${m.hint}`,
+      })),
     );
   }
 
@@ -232,11 +242,14 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
    * loses cross-instance events and caches.
    */
   if (options.preset === "production" && options.runtime === undefined) {
-    throw new Error(
-      "createApp: preset 'production' requires an explicit `runtime` — 'memory' for a single " +
+    throw bootError({
+      code: "production-runtime-undeclared",
+      message:
+        "createApp: preset 'production' requires an explicit `runtime` — 'memory' for a single " +
         "instance, 'distributed' before running a second replica (it requires shared stores and is " +
         "audited at boot).",
-    );
+      fix: "set runtime: 'memory' (one instance) or runtime: 'distributed' (replicas)",
+    });
   }
 
   /**
@@ -248,10 +261,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     (declaredRole === "relay" || declaredRole === "scheduler") &&
     (options.resources !== undefined || options.resourceDir !== undefined)
   ) {
-    throw new Error(
-      `createApp: role '${declaredRole}' declares HTTP resources — a ${declaredRole} ` +
+    throw bootError({
+      code: "role-declares-resources",
+      message:
+        `createApp: role '${declaredRole}' declares HTTP resources — a ${declaredRole} ` +
         "process must not serve routes. Remove `resources`/`resourceDir`, or change the role.",
-    );
+      fix: "remove resources/resourceDir from this process, or change the role",
+    });
   }
 
   /**
@@ -601,6 +617,27 @@ async function buildApp(
   // Capability audit LAST, after every declarant — it validates what hosts
   // actually wired, not just what createApp received.
   auditRuntimeCapabilities(fastify, config.runtime ?? "memory");
+
+  // Boot health summary: every readiness check once, at ready, one log line. Not awaited, so a
+  // stalled dependency cannot delay or fail boot (pluginTimeout covers onReady hooks).
+  if (config.arcPlugins?.health !== false) {
+    const appHealth = config.arcPlugins?.health;
+    const bootChecks = [
+      ...moduleHealthChecks,
+      ...(typeof appHealth === "object" && appHealth !== null ? (appHealth.checks ?? []) : []),
+    ];
+    const production = config.preset === "production";
+    const summarize = () => void logBootHealthSummary(fastify.log, bootChecks, { production });
+    try {
+      fastify.addHook("onReady", (done) => {
+        summarize();
+        done();
+      });
+    } catch {
+      // Already ready: a boot phase injected a request (afterResources), which readies the app.
+      summarize();
+    }
+  }
 
   fastify.log.info(
     {

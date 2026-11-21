@@ -4,7 +4,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { ArcModule, ArcModuleRegistry, PortName } from "./types.js";
+import type { ArcModule, ArcModuleRegistry, ModuleFacts, PortName } from "./types.js";
 
 export { type AsyncApiCatalogEntry, type AsyncApiInfo, toAsyncApi } from "./asyncapi.js";
 export {
@@ -86,9 +86,12 @@ export type {
   ArcModuleRegistry,
   ArcPortRegistry,
   ArcPorts,
+  ComposedModuleFacts,
   EventHandlerDefinition,
   LazyBridge,
   ModuleContribution,
+  ModuleFacts,
+  ModuleInvariant,
   ModuleName,
   ModulePorts,
   ModuleRequirements,
@@ -114,9 +117,10 @@ export function defineModule<
   TExports = unknown,
   const TPorts extends PortName = never,
   const TOptionalPorts extends PortName = never,
+  TFacts extends ModuleFacts = ModuleFacts,
 >(
-  module: ArcModule<TExports, TPorts, TOptionalPorts>,
-): ArcModule<TExports, TPorts, TOptionalPorts> {
+  module: ArcModule<TExports, TPorts, TOptionalPorts, TFacts>,
+): ArcModule<TExports, TPorts, TOptionalPorts, TFacts> {
   return module;
 }
 

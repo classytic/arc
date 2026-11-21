@@ -10,21 +10,21 @@ import { expectArc } from '@classytic/arc/testing';
 const res = await ctx.app.inject({ url: '/jobs/123', headers: admin.headers });
 
 expectArc(res)
-  .ok()                        // 200 + success: true
-  .hasData()                   // body.data defined
-  .hidesField('password')      // body.data.password absent
-  .showsField('title');        // body.data.title present
+  .ok()                        // status 200, body parses as JSON
+  .hasData()                   // body is non-empty
+  .hidesField('password')      // body.password absent
+  .showsField('title');        // body.title present
 ```
 
 Every helper returns the assertion object, so everything chains. `expect` is called internally — import `expectArc` only from files that run under `vitest`.
 
-## Status & envelope
+## Status
 
 | Helper | Checks |
 |---|---|
-| `ok(status = 200)` | status is exactly `status` AND `body.success === true` |
-| `hasStatus(status)` | status is exactly `status` (no envelope check) |
-| `failed(status?)` | status >= 400 (or exactly `status`) AND `body.success === false` |
+| `ok(status = 200)` | status is exactly `status` AND the body parses as JSON |
+| `hasStatus(status)` | status is exactly `status` (body not inspected) |
+| `failed(status?)` | status >= 400 (or exactly `status`) AND `body.code` is set (the error contract) |
 | `unauthorized()` | `.failed(401)` |
 | `forbidden()` | `.failed(403)` |
 | `notFound()` | `.failed(404)` |
@@ -32,27 +32,27 @@ Every helper returns the assertion object, so everything chains. `expect` is cal
 | `conflict()` | `.failed(409)` |
 
 ```typescript
-expectArc(res).ok();                    // 200 + success
-expectArc(res).ok(201);                 // 201 + success (POST create)
-expectArc(res).unauthorized();          // 401 + failed
-expectArc(res).forbidden();             // 403 + failed
-expectArc(res).notFound();              // 404 + failed
+expectArc(res).ok();                    // 200
+expectArc(res).ok(201);                 // 201 (POST create)
+expectArc(res).unauthorized();          // 401 + error body
+expectArc(res).forbidden();             // 403 + error body
+expectArc(res).notFound();              // 404 + error body
 ```
 
 ## Data
 
 ```typescript
-expectArc(res).hasData();                         // body.data defined
-expectArc(res).showsField('id');                  // body.data.id defined
-expectArc(res).hidesField('password');            // body.data.password absent
+expectArc(res).hasData();                         // body is non-empty
+expectArc(res).showsField('id');                  // body.id defined
+expectArc(res).hidesField('password');            // body.password absent
 
-// Raw access for ad-hoc assertions
-expect(expectArc(res).data).toMatchObject({ id: '123', title: 'x' });
+// Raw access for ad-hoc assertions (a single document IS the body)
+expect(expectArc(res).body).toMatchObject({ id: '123', title: 'x' });
 ```
 
 ## Pagination
 
-arc's list envelope flattens `OffsetPaginationResult` to top-level: `docs`, `page`, `limit`, `total`, `pages`, `hasNext`, `hasPrev`.
+A list response is the `OffsetPaginationResult` itself: `data`, `page`, `limit`, `total`, `pages`, `hasNext`, `hasPrev`.
 
 ```typescript
 expectArc(res).paginated({
@@ -63,11 +63,11 @@ expectArc(res).paginated({
   hasPrev: false,
 });
 
-// Without expected values — just asserts the envelope shape
+// Without expected values — just asserts `data` is an array
 expectArc(res).paginated();
 ```
 
-Accepts both shapes: `body.docs = [...]` (flattened, arc default) OR `body.data = [...]` (array under data).
+Requires `body.data` to be an array, so a bare `{ data: [...] }` list passes too.
 
 ## Errors & meta
 
@@ -87,7 +87,7 @@ expectArc(res).hasMeta('traceId');                     // key present, any value
 const a = expectArc(res);
 a.ok();
 console.log(a.body);                         // parsed body (cached)
-console.log(a.data);                         // body.data (cached)
+console.log(a.data);                         // body.data — the array on a list response (cached)
 console.log(a.response.statusCode);          // raw Fastify response
 ```
 
@@ -98,14 +98,14 @@ console.log(a.response.statusCode);          // raw Fastify response
 Every matcher includes context on mismatch so failures read as diagnostics, not "expected true to be false":
 
 ```
-AssertionError: expected 2xx (200) but got 500. Body: {"success":false,"error":"DB unreachable"...
-AssertionError: expected field 'password' to be hidden from response.data
+AssertionError: expected 2xx (200) but got 500. Body: {"code":"…","message":"DB unreachable","status":500}
+AssertionError: expected field 'password' to be hidden from response
 AssertionError: response body is not valid JSON (statusCode=200): Unexpected token '<' ...
 ```
 
 ## When NOT to use
 
-- **Non-arc responses.** Fastify's default 404 handler (for unknown routes) doesn't emit `{ success: false, ... }`. Use `hasStatus(404)` or check `response.body` directly.
+- **Non-arc responses.** `failed()` needs the error contract's `code`; a route answered outside arc's error handler does not carry one. Use `hasStatus(404)` or check `response.body` directly.
 - **Non-JSON bodies.** `expectArc` parses JSON eagerly on first body access. If you're testing a binary download or SSE stream, stick with raw Fastify response assertions.
 
 ## API

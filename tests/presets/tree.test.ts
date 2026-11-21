@@ -7,17 +7,47 @@
  * - Permission inheritance
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { allowPublic, requireRoles } from "../../src/permissions/index.js";
 import { applyPresets } from "../../src/presets/index.js";
+import { unresolvedPresetPermission } from "../../src/presets/presetPermission.js";
 import { treePreset } from "../../src/presets/tree.js";
-import type { PresetResult, ResourceConfig, ResourcePermissions } from "../../src/types/index.js";
+import type {
+  ControllerHandler,
+  IRequestContext,
+  PresetController,
+  PresetResult,
+  ResourceConfig,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../../src/types/index.js";
 
-function getPresetRoutes(result: PresetResult, permissions: ResourcePermissions = {}) {
+function getPresetRoutes(
+  result: PresetResult,
+  permissions: ResourcePermissions = {},
+  controller: Record<string, unknown> = {},
+) {
   if (result.routes) {
-    return typeof result.routes === "function" ? result.routes(permissions) : result.routes;
+    return typeof result.routes === "function"
+      ? result.routes(permissions, controller as PresetController)
+      : result.routes;
   }
   return [];
+}
+
+/** The route's function handler calls `controller[method]` and returns its response. */
+async function expectCallsController(
+  build: (controller: Record<string, unknown>) => RouteDefinition | undefined,
+  method: string,
+) {
+  const response = { data: method };
+  const fn = vi.fn(async () => response);
+  const route = build({ [method]: fn });
+  const ctx = { params: {} } as unknown as IRequestContext;
+  const handler = route?.handler as ControllerHandler;
+  expect(typeof handler).toBe("function");
+  await expect(handler(ctx)).resolves.toBe(response);
+  expect(fn).toHaveBeenCalledWith(ctx);
 }
 
 describe("tree preset", () => {
@@ -27,21 +57,27 @@ describe("tree preset", () => {
       expect(result.name).toBe("tree");
     });
 
-    it("should add GET /tree route", () => {
+    it("should add GET /tree route", async () => {
       const routes = getPresetRoutes(treePreset(), { list: allowPublic() });
       const treeRoute = routes.find((r) => r.path === "/tree");
       expect(treeRoute).toBeDefined();
       expect(treeRoute?.method).toBe("GET");
-      expect(treeRoute?.handler).toBe("getTree");
+      await expectCallsController(
+        (c) => getPresetRoutes(treePreset(), {}, c).find((r) => r.path === "/tree"),
+        "getTree",
+      );
     });
 
-    it("should add GET /:parent/children route with default parent field", () => {
+    it("should add GET /:parent/children route with default parent field", async () => {
       const routes = getPresetRoutes(treePreset(), { list: allowPublic() });
       const childrenRoute = routes.find((r) => r.path.includes("/children"));
       expect(childrenRoute).toBeDefined();
       expect(childrenRoute?.method).toBe("GET");
       expect(childrenRoute?.path).toBe("/:parent/children");
-      expect(childrenRoute?.handler).toBe("getChildren");
+      await expectCallsController(
+        (c) => getPresetRoutes(treePreset(), {}, c).find((r) => r.path === "/:parent/children"),
+        "getChildren",
+      );
     });
 
     it("should use list permission for /tree route", () => {
@@ -51,11 +87,14 @@ describe("tree preset", () => {
       expect(treeRoute?.permissions).toBe(listPermission);
     });
 
-    it("should fallback to allowPublic if list permission not defined", () => {
+    it("marks both routes unresolved (never public) when list permission is not defined", () => {
       const routes = getPresetRoutes(treePreset(), {});
-      const treeRoute = routes.find((r) => r.path === "/tree");
-      expect(treeRoute?.permissions).toBeDefined();
-      expect(typeof treeRoute?.permissions).toBe("function");
+      for (const route of routes) {
+        expect(unresolvedPresetPermission(route.permissions)).toEqual({
+          preset: "tree",
+          inherits: "list",
+        });
+      }
     });
 
     it("should use list permission for children route", () => {

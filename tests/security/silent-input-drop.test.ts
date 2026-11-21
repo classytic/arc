@@ -73,9 +73,10 @@ describe("silent input drop — BodySanitizer immutable fields", () => {
     fieldRules: { type: { immutable: true } },
   };
 
-  it("CURRENT: an immutable field is silently stripped on update", () => {
-    // src/core/BodySanitizer.ts:100-102 — unconditional `delete`.
-    // The caller is told 200 and nothing changed.
+  it("ARC_STRICT_IMMUTABLE_WRITES=false (suite setup): an immutable field is stripped on update", () => {
+    // tests/_helpers/load-env.ts sets the env to false; the shipped default is
+    // 'reject', pinned in tests/factory/production-strict-flags.test.ts.
+    // Under 'strip' the caller is told 200 and nothing changed.
     const sanitizer = new BodySanitizer({ schemaOptions });
     expect(sanitizer.sanitize({ type: "rent" }, "update")).toEqual({});
   });
@@ -100,10 +101,10 @@ describe("silent input drop — BodySanitizer immutable fields", () => {
     expect(sanitizer.sanitize({ type: "rent" }, "update")).toEqual({});
   });
 
-  it("DESIRED: the default stays 'strip' — a published framework must not break callers", () => {
-    // The whole reason this is a separate knob from `onFieldWriteDenied`
-    // (which defaults to 'reject'): a full-object PATCH echoing an unchanged
-    // immutable field is legitimate and the sanitizer cannot detect it.
+  it("ARC_STRICT_IMMUTABLE_WRITES=false (suite setup): no per-resource policy falls back to 'strip'", () => {
+    // Why this is a separate knob from `onFieldWriteDenied`: a full-object
+    // PATCH echoing an unchanged immutable field is legitimate and the
+    // sanitizer cannot detect it, so a host can relax this one alone.
     const sanitizer = new BodySanitizer({ schemaOptions });
     expect(sanitizer.sanitize({ type: "rent" }, "update")).toEqual({});
   });

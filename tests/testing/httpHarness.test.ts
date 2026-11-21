@@ -115,7 +115,7 @@ describe("HttpTestHarness — fully-public resource", () => {
         },
         // No adapter/controller at the harness layer — the runtime app in
         // beforeAll has its own resource plugin registered.
-        disableDefaultRoutes: true,
+        crud: false,
       });
     })(),
     () => ({
@@ -229,7 +229,7 @@ describe("HttpTestHarness — updateMethod: 'both'", () => {
         update: allowPublic(),
         delete: allowPublic(),
       },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     const patchOnly = defineResource({
       name: "hpatch",
@@ -242,7 +242,7 @@ describe("HttpTestHarness — updateMethod: 'both'", () => {
         update: allowPublic(),
         delete: allowPublic(),
       },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     const putOnly = defineResource({
       name: "hput",
@@ -255,7 +255,7 @@ describe("HttpTestHarness — updateMethod: 'both'", () => {
         update: allowPublic(),
         delete: allowPublic(),
       },
-      disableDefaultRoutes: true,
+      crud: false,
     });
 
     const fixtures = { valid: { name: "x" }, update: { name: "y" } };

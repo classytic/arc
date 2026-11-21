@@ -28,6 +28,7 @@
 // reflect that without forcing hosts to also import from /plugins.
 import "../types/fastify-augmentation.js";
 
+export { ArcBootError, type BootProblem } from "../utils/bootError.js";
 /**
  * The redact paths arc layers into Fastify's pino when a host supplies none.
  *
@@ -75,6 +76,7 @@ export {
   assertComposable,
   buildModuleGraph,
   type ClosureNode,
+  type ComposedModuleFacts,
   type CompositionProblem,
   type CrudSurface,
   collectModuleWorkflows,
@@ -101,6 +103,7 @@ export {
   type ModuleContribution,
   type ModuleDisposer,
   type ModuleExtension,
+  type ModuleFacts,
   type ModuleGraph,
   type ModuleGraphAnalysis,
   type ModuleGraphIssue,
@@ -108,6 +111,7 @@ export {
   type ModuleGraphNode,
   type ModuleGraphOptions,
   type ModuleHandleRef,
+  type ModuleInvariant,
   type ModuleKind,
   type ModuleName,
   type ModulePlan,

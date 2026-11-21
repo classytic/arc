@@ -154,7 +154,7 @@ describe("createOutboxModule", () => {
       relay: { relay: () => Promise<unknown> };
     };
 
-    await relay.relay();
+    await relay.relayBatch();
 
     expect(log.error).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "publish_failed", eventId: "evt-log-1" }),

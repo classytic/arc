@@ -85,7 +85,7 @@ describe("customRoutesOnly shorthand", () => {
   it("does not affect resources that omit the shorthand", () => {
     const r = defineResource({
       name: "noop",
-      disableDefaultRoutes: true, // explicit
+      crud: false, // explicit
       skipValidation: true,
       skipRegistry: true,
     });

@@ -66,7 +66,7 @@ describe("EventOutbox — crash/retry semantics", () => {
     await outbox.store(makeEvent("evt-1"));
 
     // First relay — transport is failing.
-    const firstResult = await outbox.relay();
+    const firstResult = (await outbox.relayBatch()).relayed;
     expect(firstResult).toBe(0);
     expect(publishSpy).toHaveBeenCalledTimes(1);
 
@@ -76,7 +76,7 @@ describe("EventOutbox — crash/retry semantics", () => {
 
     // Fix the transport and relay again.
     setFailing(false);
-    const secondResult = await outbox.relay();
+    const secondResult = (await outbox.relayBatch()).relayed;
     expect(secondResult).toBe(1);
     expect(publishSpy).toHaveBeenCalledTimes(2); // one retry, not a fresh duplicate
 
@@ -85,7 +85,7 @@ describe("EventOutbox — crash/retry semantics", () => {
     expect(nowEmpty).toHaveLength(0);
 
     // Final relay — nothing to do, no extra publish.
-    await outbox.relay();
+    await outbox.relayBatch();
     expect(publishSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -121,7 +121,7 @@ describe("EventOutbox — crash/retry semantics", () => {
     });
 
     await outbox.store(makeEvent("evt-ack-crash"));
-    const result = await outbox.relay();
+    const result = (await outbox.relayBatch()).relayed;
 
     expect(ackSpy).toHaveBeenCalledWith("evt-ack-crash", expect.anything());
     // Event must not count as relayed because we never confirmed it to the store.
@@ -161,7 +161,7 @@ describe("EventOutbox — crash/retry semantics", () => {
     await outbox.store(makeEvent("evt-C"));
 
     for (let i = 0; i < 5; i++) {
-      await outbox.relay();
+      await outbox.relayBatch();
     }
 
     // Every event published exactly once (no duplicates, no drops).
@@ -181,7 +181,7 @@ describe("EventOutbox — crash/retry semantics", () => {
     const outbox = new EventOutbox({ store, transport, usePublishMany: false, onError });
     await outbox.store(makeEvent("evt-err"));
 
-    await outbox.relay(); // should NOT throw; onError absorbs
+    await outbox.relayBatch(); // should NOT throw; onError absorbs
 
     expect(onError).toHaveBeenCalled();
     const call = onError.mock.calls[0][0] as { kind: string; error: Error };

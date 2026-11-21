@@ -16,7 +16,7 @@ defineResource({
   fields, onFieldWriteDenied, onImmutableWrite,
   tenantField, onTenantDelete, idField, lookupFields, defaultSort, defaultLimit, maxLimit,
   cache, events, audit, history, rateLimit, idempotency, mcp, queryParser,
-  disableDefaultRoutes, disabledRoutes, crud,
+  crud,                     // { list: true, get: true } or false
   strictPermissions, strictSchemas, skipValidation,
 });
 ```

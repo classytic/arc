@@ -6,6 +6,7 @@
  * `./scope.js`; the dynamic matrix lives in `./dynamic.js`.
  */
 
+import { warnDeprecated } from "../logger/deprecation.js";
 import type { RequestScope } from "../scope/types.js";
 import { getUserId as getScopeUserId, isElevated, isMember } from "../scope/types.js";
 import { normalizeToDecision } from "./authorizationDecision.js";
@@ -331,11 +332,13 @@ export function requirePlatformRole(...args: string[] | [readonly string[]]): Pe
 }
 
 /**
- * Short-form alias of `requireRoles()`. Identical behavior — checks both
- * platform roles AND org roles. Prefer `requireRoles` for new code; this
- * exists for call sites that want a terser name.
+ * Short-form alias of `requireRoles()` — checks platform AND org roles.
+ *
+ * @deprecated Use `requireRoles(...)`. Warns once per process; removed in the
+ * next minor.
  */
 export function roles(...args: string[] | [readonly string[]]): PermissionCheck {
+  warnDeprecated("`roles()` from @classytic/arc/permissions", "Use `requireRoles(...)`.");
   const roleList = normalizeVariadicOrArray(args);
 
   const check: PermissionCheck = (ctx) => {

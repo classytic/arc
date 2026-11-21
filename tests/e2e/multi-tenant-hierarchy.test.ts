@@ -5,7 +5,7 @@
  * - Org → Team → Project hierarchy
  * - tenantField scoping per resource
  * - Company-wide vs org-scoped resources in same app
- * - roles() permission check across levels
+ * - requireRoles() permission check across levels
  *
  * Simulates Better Auth org patterns without requiring BA runtime:
  * - Uses custom authenticator that sets scope from headers
@@ -20,7 +20,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { allowPublic, requireAuth, roles } from "../../src/permissions/index.js";
+import { allowPublic, requireAuth, requireRoles } from "../../src/permissions/index.js";
 import { setupTestDatabase, teardownTestDatabase } from "../setup.js";
 
 describe("Multi-Tenant Hierarchy E2E", () => {
@@ -47,9 +47,9 @@ describe("Multi-Tenant Hierarchy E2E", () => {
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
-        create: roles("admin"),
-        update: roles("admin"),
-        delete: roles("admin"),
+        create: requireRoles("admin"),
+        update: requireRoles("admin"),
+        delete: requireRoles("admin"),
       },
     });
 
@@ -90,9 +90,9 @@ describe("Multi-Tenant Hierarchy E2E", () => {
       permissions: {
         list: requireAuth(),
         get: requireAuth(),
-        create: roles("admin", "member"),
-        update: roles("admin", "member"),
-        delete: roles("admin"),
+        create: requireRoles("admin", "member"),
+        update: requireRoles("admin", "member"),
+        delete: requireRoles("admin"),
       },
       schemaOptions: {
         fieldRules: {
@@ -141,7 +141,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
         get: requireAuth(),
         create: requireAuth(),
         update: requireAuth(),
-        delete: roles("admin"),
+        delete: requireRoles("admin"),
       },
       schemaOptions: {
         fieldRules: {
@@ -379,7 +379,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
       expect(res.statusCode).toBe(201);
     });
 
-    it("non-admin cannot delete task (roles('admin') check)", async () => {
+    it("non-admin cannot delete task (requireRoles('admin') check)", async () => {
       const list = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
       const id = list.json().data[0]._id;
 
@@ -393,7 +393,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
       expect(res.statusCode).toBe(403);
     });
 
-    it("org admin can delete task (roles('admin') checks orgRole)", async () => {
+    it("org admin can delete task (requireRoles('admin') checks orgRole)", async () => {
       const list = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
       const id = list.json().data[0]._id;
 
@@ -407,7 +407,7 @@ describe("Multi-Tenant Hierarchy E2E", () => {
       expect(res.statusCode).toBe(200);
     });
 
-    it("platform admin can delete task (roles('admin') checks userRole)", async () => {
+    it("platform admin can delete task (requireRoles('admin') checks userRole)", async () => {
       const list = await authed({ method: "GET", url: "/tasks", userId: "u1", orgId: "org-a" });
       const id = list.json().data[0]._id;
 

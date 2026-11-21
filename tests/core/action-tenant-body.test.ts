@@ -27,7 +27,7 @@ async function boot(seen: unknown[]) {
         },
       },
     },
-    disableDefaultRoutes: true,
+    crud: false,
   });
   const app = Fastify();
   app.decorate("authenticate", async () => {});

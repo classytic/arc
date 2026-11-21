@@ -48,7 +48,7 @@ export const authResource = defineResource({
   prefix: '/auth',
 
   adapter: createAdapter(User${ts ? " as never" : ""}, userRepository${ts ? " as never" : ""}),
-  disableDefaultRoutes: true,
+  crud: false,
 
   routes: [
     {
@@ -104,7 +104,7 @@ export const userProfileResource = defineResource({
   prefix: '/users',
 
   adapter: createAdapter(User${ts ? " as never" : ""}, userRepository${ts ? " as never" : ""}),
-  disableDefaultRoutes: true,
+  crud: false,
 
   routes: [
     {

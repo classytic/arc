@@ -325,7 +325,7 @@ describe("end to end — enqueue → relay → signed POST → acknowledged", ()
         arc: { modules: Record<string, { relay: { relay(): Promise<unknown> } }> };
       }
     ).arc.modules["webhook-delivery"];
-    await mod!.relay.relay();
+    await mod!.relay.relayBatch();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(await store.getPending(10)).toHaveLength(0);

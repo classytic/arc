@@ -32,7 +32,7 @@ describe("ResourceDefinition leaf-config immutability", () => {
   it("freezes `permissions` so post-define mutation throws in strict mode", () => {
     const resource = defineResource({
       name: "widget",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       permissions: {
         create: requireRoles(["admin"]),
@@ -50,7 +50,7 @@ describe("ResourceDefinition leaf-config immutability", () => {
   it("freezes `routes` so the array can't be mutated after define", () => {
     const resource = defineResource({
       name: "widget",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       routes: [
         {
@@ -76,7 +76,7 @@ describe("ResourceDefinition leaf-config immutability", () => {
     // returns" guarantee covers the full registered surface.
     const resource = defineResource({
       name: "widget",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       routes: [
         {
@@ -101,7 +101,7 @@ describe("ResourceDefinition leaf-config immutability", () => {
   it("freezes `actions` map AND each ActionDefinition entry", () => {
     const resource = defineResource({
       name: "order",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       permissions: { update: requireRoles(["admin"]) },
       actions: {
@@ -131,10 +131,9 @@ describe("ResourceDefinition leaf-config immutability", () => {
   it("freezes `events`, `disabledRoutes`, `customSchemas`, `schemaOptions`", () => {
     const resource = defineResource({
       name: "widget",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       events: { created: { schema: { type: "object" } } },
-      disabledRoutes: ["delete"],
       customSchemas: { create: { body: { type: "object" } } },
       schemaOptions: { stripFields: ["secret"] },
     });
@@ -153,7 +152,7 @@ describe("ResourceDefinition leaf-config immutability", () => {
 
     defineResource({
       name: "widget",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       permissions: userPermissions,
       routes: userRoutes as never,

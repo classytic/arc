@@ -10,7 +10,7 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, permissions } from '@classytic/arc';
+import { defineResource, fullPublic } from '@classytic/arc';
 import { createApp } from '@classytic/arc/factory';
 import { Repository } from '@classytic/mongokit';
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';
@@ -30,7 +30,7 @@ const todoRepository = new Repository(Todo);
 const todoResource = defineResource({
   name: 'todo',
   adapter: createMongooseAdapter(Todo, todoRepository),
-  permissions: permissions.fullPublic(),
+  permissions: fullPublic(),
 });
 
 // App - convention-driven boot. createApp() wires logger, security

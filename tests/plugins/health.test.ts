@@ -7,7 +7,7 @@
 
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
-import healthPlugin from "../../src/plugins/health.js";
+import healthPlugin, { logBootHealthSummary } from "../../src/plugins/health.js";
 
 describe("Health Plugin — Liveness Probe", () => {
   let app: FastifyInstance;
@@ -411,5 +411,116 @@ describe("health checks — abort on timeout", () => {
 
     const res = await abortApp.inject({ method: "GET", url: "/_health/ready" });
     expect(res.statusCode).toBe(200);
+  });
+});
+
+// ============================================================================
+// Readiness detail — names and pass/fail only; error text goes to the log
+// ============================================================================
+
+describe("readiness response carries no error text", () => {
+  it("omits a failing check's error from the 503 body and logs it instead", async () => {
+    const lines: string[] = [];
+    const app = Fastify({
+      logger: { level: "warn", stream: { write: (line: string) => lines.push(line) } },
+    });
+    await app.register(healthPlugin, {
+      checks: [
+        {
+          name: "db",
+          check: () => {
+            throw new Error("connect ECONNREFUSED 10.0.0.7:27017");
+          },
+        },
+      ],
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: "GET", url: "/_health/ready" });
+    expect(res.statusCode).toBe(503);
+    expect(res.body).not.toContain("ECONNREFUSED");
+    expect(res.json().checks).toEqual([
+      { name: "db", healthy: false, duration: expect.any(Number) },
+    ]);
+    expect(lines.join("\n")).toContain("connect ECONNREFUSED 10.0.0.7:27017");
+    await app.close();
+  });
+});
+
+// ============================================================================
+// Boot health summary
+// ============================================================================
+
+describe("logBootHealthSummary", () => {
+  function recorder() {
+    const calls: Array<{ level: string; obj: Record<string, unknown>; msg: string }> = [];
+    return {
+      calls,
+      log: {
+        info: (obj: object, msg: string) =>
+          calls.push({ level: "info", obj: obj as Record<string, unknown>, msg }),
+        warn: (obj: object, msg: string) =>
+          calls.push({ level: "warn", obj: obj as Record<string, unknown>, msg }),
+      },
+    };
+  }
+
+  it("runs each check once and logs ONE line with names, pass/fail and durations", async () => {
+    const r = recorder();
+    let runs = 0;
+    await logBootHealthSummary(r.log, [
+      {
+        name: "db",
+        check: () => {
+          runs++;
+          return true;
+        },
+      },
+      { name: "mail", check: () => false, critical: false },
+      { name: "slow", check: () => new Promise<boolean>(() => {}), timeout: 20 },
+    ]);
+    expect(runs).toBe(1);
+    expect(r.calls).toHaveLength(1);
+    const [call] = r.calls;
+    expect(call?.level).toBe("warn");
+    expect(call?.msg).toMatch(
+      /^\[arc\] boot health: 1\/3 passing — db ok \(\d+ms\), mail FAILED \(\d+ms\), slow FAILED \(\d+ms\)$/,
+    );
+    // Error text belongs in the log record.
+    expect(JSON.stringify(call?.obj)).toContain("Health check timeout");
+  });
+
+  it("logs at info when every check passes; logs nothing for zero checks outside production", async () => {
+    const r = recorder();
+    await logBootHealthSummary(r.log, [{ name: "db", check: () => true }]);
+    await logBootHealthSummary(r.log, []);
+    expect(r.calls.map((c) => c.level)).toEqual(["info"]);
+  });
+
+  it("says so under production when no check is critical", async () => {
+    const r = recorder();
+    await logBootHealthSummary(r.log, [], { production: true });
+    await logBootHealthSummary(r.log, [{ name: "x", check: () => true, critical: false }], {
+      production: true,
+    });
+    expect(r.calls).toHaveLength(2);
+    for (const c of r.calls) {
+      expect(c.level).toBe("info");
+      expect(c.msg).toContain("no critical readiness check is registered");
+    }
+  });
+
+  it("never throws, even when the logger does", async () => {
+    const throwing = {
+      info: () => {
+        throw new Error("sink down");
+      },
+      warn: () => {
+        throw new Error("sink down");
+      },
+    };
+    await expect(
+      logBootHealthSummary(throwing, [{ name: "db", check: () => true }]),
+    ).resolves.toBeUndefined();
   });
 });

@@ -146,9 +146,8 @@ export const productResource = defineResource({
     create: requireRoles(['admin']),
     update: requireRoles(['admin']),
     delete: requireRoles(['admin']),
-    deleted: requireRoles(['admin']),  // softDelete preset
-    restore: requireRoles(['admin']),  // softDelete preset
-    getBySlug: allowPublic(),          // slugLookup preset
+    // softDelete: GET /deleted inherits list, POST /:id/restore inherits update
+    // slugLookup: GET /slug/:slug inherits get
   },
 });
 ```
@@ -291,7 +290,7 @@ npx @classytic/arc generate model customer
 # Show all registered resources from an entry file
 npx @classytic/arc introspect --entry ./dist/index.js
 
-# Output JSON metadata for resources (AI agent friendly)
+# Output JSON metadata for resources, plus module facts and invariant results (AI agent friendly)
 npx @classytic/arc describe ./dist/index.js
 
 # Export OpenAPI specification
@@ -300,6 +299,10 @@ npx @classytic/arc docs ./openapi.json --entry ./dist/index.js
 # Health check environment and dependencies
 npx @classytic/arc doctor
 ```
+
+`arc describe` never boots: it imports the entry file and reads what it exports. Exported module objects that declare `facts` or `invariants` appear under `modules`, each invariant with `ok` and its failure `reason`.
+
+`arc doctor` is static too. Beyond Node, Fastify and tsconfig, it checks only the env vars the project implies: `BETTER_AUTH_SECRET` when `better-auth` is installed, a MongoDB URI (`MONGO_URI`, `MONGODB_URI` or `DATABASE_URL`) when `@classytic/mongokit`, `mongoose` or `mongodb` is, `REDIS_URL` for `ioredis`/`bullmq`, and every key in `.env.example`. A key counts as set in the environment or in `./.env`. It also prints `[info]` notes, not counted as warnings, when the source never sets `trustProxy` (behind a load balancer `request.ip` is otherwise the proxy) or declares no readiness checks.
 
 ---
 
@@ -488,14 +491,14 @@ export const productResource = defineResource({
     {
       method: 'GET',
       path: '/featured',
-      handler: 'getFeatured',
+      handler: (ctx) => productController.getFeatured(ctx),
       summary: 'Get featured products',
       permissions: allowPublic(),
     },
     {
       method: 'POST',
       path: '/:id/publish',
-      handler: 'publish',
+      handler: (ctx) => productController.publish(ctx),
       summary: 'Publish a product',
       permissions: requireRoles(['admin']),
     },
@@ -515,7 +518,7 @@ class ProductController extends BaseController {
       isFeatured: true,
       isActive: true
     }).limit(10);
-    return { success: true, data: products };
+    return { data: products };
   }
 
   async publish(req: IRequestContext): Promise<IControllerResponse> {
@@ -524,7 +527,7 @@ class ProductController extends BaseController {
       status: 'published',
       publishedAt: new Date(),
     });
-    return { success: true, data: product };
+    return { data: product };
   }
 }
 ```

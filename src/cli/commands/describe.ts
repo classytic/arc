@@ -18,6 +18,8 @@ import { pathToFileURL } from "node:url";
 import { CRUD_OPERATIONS } from "../../constants.js";
 import type { AggregationConfig } from "../../core/aggregation/types.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
+import { evaluateModuleInvariants } from "../../factory/module/invariants.js";
+import type { ArcModule } from "../../factory/module/types.js";
 import type { FieldPermissionMap } from "../../permissions/fields.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import type { PipelineConfig, PipelineStep } from "../../pipeline/types.js";
@@ -49,8 +51,17 @@ interface DescribeOutput {
   $schema: "arc-describe/v1";
   generatedAt: string;
   resources: DescribedResource[];
+  /** Modules exported by the entry file that declare `facts` or `invariants`. */
+  modules?: DescribedModule[];
   eventCatalog?: EventCatalogEntry[];
   stats: DescribeStats;
+}
+
+/** A module's facts and the result of each invariant — evaluated without booting anything. */
+export interface DescribedModule {
+  name: string;
+  facts: Record<string, unknown>;
+  invariants: { code: string; fix: string; ok: boolean; reason?: string }[];
 }
 
 export interface DescribedResource {
@@ -580,6 +591,30 @@ export function describeResource(
   };
 }
 
+/**
+ * Facts and invariant results for the modules given — the same evaluation boot runs, with the
+ * same cross-module `all` map (limited to these modules). Pure: nothing is booted.
+ */
+export function describeModules(
+  modules: readonly Pick<ArcModule, "name" | "facts" | "invariants">[],
+): DescribedModule[] {
+  const results = evaluateModuleInvariants(modules);
+  return modules.map((m) => ({
+    name: m.name,
+    facts: { ...(m.facts ?? {}) },
+    invariants: results
+      .filter((r) => r.module === m.name)
+      .map(({ code, fix, ok, reason }) => ({ code, fix, ok, ...(reason ? { reason } : {}) })),
+  }));
+}
+
+/** A constructed module object (not a thunk) that declares facts or invariants. */
+function isDescribableModule(value: unknown): value is ArcModule {
+  if (!value || typeof value !== "object" || "_registryMeta" in value) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.name === "string" && (v.facts !== undefined || Array.isArray(v.invariants));
+}
+
 // ---------------------------------------------------------------------------
 // CLI Entry
 // ---------------------------------------------------------------------------
@@ -650,16 +685,25 @@ export async function describe(args: string[]): Promise<void> {
       }
     }
 
+    // Modules: only constructed objects. A thunk or `() => import(...)` is not run — describe
+    // never executes host code beyond importing the entry file.
+    const modules: ArcModule[] = [];
+    const tryCollectModule = (value: unknown): void => {
+      if (isDescribableModule(value) && !modules.includes(value)) modules.push(value);
+    };
+
     for (const exported of Object.values(entryModule)) {
       if (Array.isArray(exported)) {
         exported.forEach(tryCollect);
+        exported.forEach(tryCollectModule);
       } else {
         tryCollect(exported);
         tryCollectRegistry(exported);
+        tryCollectModule(exported);
       }
     }
 
-    if (resources.length === 0) {
+    if (resources.length === 0 && modules.length === 0) {
       throw new Error(
         "No resource definitions found in entry file.\nMake sure your file exports defineResource() results:\n  export const productResource = defineResource({ ... });",
       );
@@ -721,6 +765,7 @@ export async function describe(args: string[]): Promise<void> {
       $schema: "arc-describe/v1",
       generatedAt: new Date().toISOString(),
       resources: described,
+      ...(modules.length > 0 ? { modules: describeModules(modules) } : {}),
       ...(eventCatalog?.length ? { eventCatalog } : {}),
       stats: {
         totalResources: described.length,

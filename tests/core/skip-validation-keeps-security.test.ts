@@ -20,7 +20,7 @@ describe("security invariants survive every validation escape hatch", () => {
     expect(() =>
       defineResource({
         name: "internal",
-        disableDefaultRoutes: true,
+        crud: false,
         skipValidation: true,
         routes: [ungated],
       } as never),

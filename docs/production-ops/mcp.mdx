@@ -74,6 +74,24 @@ await app.register(mcpPlugin, {
 });
 ```
 
+### MCP tools without HTTP CRUD
+
+`crud` decides which CRUD routes mount over HTTP. An allow-list (`crud: { list: true, get: true }`) mounts the same ops over HTTP and MCP. `crud: false` mounts no CRUD routes but still offers every permitted CRUD op as a tool, so pick the tools with `operations`:
+
+```typescript
+const report = defineResource({
+  name: 'report',
+  adapter: reportAdapter,
+  crud: false, // no HTTP CRUD routes
+  permissions: { list: requireAuth(), get: requireAuth() },
+});
+
+await app.register(mcpPlugin, {
+  resources: [report],
+  overrides: { report: { operations: ['list', 'get'] } }, // list_reports, get_report only
+});
+```
+
 ## Auth
 
 Three modes — you choose what fits.

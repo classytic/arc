@@ -169,11 +169,11 @@ schemas reference BA collections (e.g. `ref: 'user'`, `ref: 'organization'`),
 Mongoose `populate()` throws `MissingSchemaError` because no Mongoose model
 exists for those collections.
 
-**Fix:** Use the optional helper at the dedicated subpath
-`@classytic/arc/auth/mongoose`. It registers `strict: false` stub Mongoose
+**Fix:** Use `registerBetterAuthStubs` from `@classytic/mongokit/better-auth`.
+It registers `strict: false` stub Mongoose
 models for the BA collections you're using, with full plugin coverage and
-auto-handling of `usePlural` / custom model names. Lives behind a subpath
-export so non-Mongoose users (Prisma/Drizzle/Kysely) never get Mongoose
+auto-handling of `usePlural` / custom model names. It ships in the kit, so
+non-Mongoose users (Prisma/Drizzle/Kysely) never get Mongoose
 pulled into their bundle.
 
 ```typescript
@@ -181,7 +181,7 @@ import mongoose from 'mongoose';
 import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from '@better-auth/mongo-adapter';
 import { organization } from 'better-auth/plugins';
-import { registerBetterAuthMongooseModels } from '@classytic/arc/auth/mongoose';
+import { registerBetterAuthStubs } from '@classytic/mongokit/better-auth';
 
 const auth = betterAuth({
   database: mongodbAdapter(mongoose.connection.getClient().db()),
@@ -192,7 +192,7 @@ const auth = betterAuth({
 // Run AFTER betterAuth() and BEFORE any populate() calls.
 // Default is core only (`user`, `session`, `account`, `verification`) —
 // every plugin set is opt-in.
-registerBetterAuthMongooseModels(mongoose, {
+registerBetterAuthStubs(mongoose, {
   plugins: ['organization', 'organization-teams'],
   // For separate @better-auth/* packages (passkey, sso, api-key):
   extraCollections: ['passkey', 'ssoProvider'],
@@ -231,7 +231,7 @@ const adapter = await createBetterAuthOverlay({ auth, mongoose, collection: 'org
 defineResource({
   name: 'organization',
   adapter,
-  disabledRoutes: ['create', 'update', 'delete'],   // required — see below
+  crud: { list: true, get: true },                  // required — see below
   permissions: { list: requireRoles('admin'), get: requireRoles('admin') },
 });
 ```
@@ -345,9 +345,9 @@ Authenticated user available in controllers via `req.user`:
 ```typescript
 class ProfileController extends BaseController {
   async getProfile(req: IRequestContext): Promise<IControllerResponse> {
-    if (!req.user) return { success: false, error: 'Unauthorized', status: 401 };
+    if (!req.user) throw new UnauthorizedError();   // from '@classytic/arc'
     const profile = await this.repository.findById(req.user._id);
-    return { success: true, data: profile };
+    return { data: profile };
   }
 }
 ```

@@ -173,7 +173,7 @@ describe("route `capability` collisions — refused at boot", () => {
     expect(() =>
       defineResource({
         name: "sku",
-        disableDefaultRoutes: true,
+        crud: false,
         permissions: { list: requireRoles(["admin"]) },
         routes: [route("/recompute", "list")],
       }),
@@ -184,7 +184,7 @@ describe("route `capability` collisions — refused at boot", () => {
     expect(() =>
       defineResource({
         name: "sku",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [route("/recompute", "recompute"), route("/rebuild", "recompute")],
       }),
     ).toThrow(/capability 'recompute'.*already published by a route POST \/recompute/s);
@@ -194,7 +194,7 @@ describe("route `capability` collisions — refused at boot", () => {
     expect(() =>
       defineResource({
         name: "sku",
-        disableDefaultRoutes: true,
+        crud: false,
         permissions: { list: requireRoles(["admin"]) },
         routes: [
           route("/recompute", "recompute"),

@@ -190,33 +190,46 @@ export const invoiceResource = defineResource({
     delete: requireRoles(['admin']),
   },
 
-  // Custom routes for business logic
+  // Custom routes for business logic. A function `handler` runs the arc
+  // pipeline and becomes an MCP tool; `operation` names the tool.
   routes: [
     {
       method: 'GET',
       path: '/overdue',
-      handler: 'getOverdue',
+      operation: 'getOverdue',
+      handler: async (ctx) => ({
+        data: await invoiceRepository.getOverdue({ organizationId: ctx.organizationId }),
+      }),
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Get overdue invoices',
     },
     {
       method: 'GET',
       path: '/stats',
-      handler: 'getStats',
+      operation: 'getStats',
+      handler: async (ctx) => ({
+        data: await invoiceRepository.getTotalRevenue({ organizationId: ctx.organizationId }),
+      }),
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Get invoice statistics',
     },
     {
       method: 'POST',
       path: '/:id/send',
-      handler: 'sendInvoice',
+      operation: 'sendInvoice',
+      handler: async (ctx) => ({
+        data: await invoiceRepository.update(ctx.params.id, { status: 'sent' }),
+      }),
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Send invoice to customer',
     },
     {
       method: 'POST',
       path: '/:id/mark-paid',
-      handler: 'markPaid',
+      operation: 'markPaid',
+      handler: async (ctx) => ({
+        data: await invoiceRepository.update(ctx.params.id, { status: 'paid' }),
+      }),
       permissions: requireRoles(['admin', 'finance']),
       summary: 'Mark invoice as paid',
     },

@@ -2,16 +2,153 @@
  * Arc CLI - Doctor Command
  *
  * Health check utility that validates the development environment.
- * Checks Node.js version, dependencies, configuration, and env variables.
+ * Checks Node.js version, dependencies, configuration, the env variables the
+ * project's own dependencies and `.env.example` imply, and static notes
+ * (proxy trust, readiness checks). Static only: it never boots the app.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
 
 interface CheckResult {
-  status: "pass" | "warn" | "fail";
+  /** `info` is a note: printed, never counted as a warning or failure. */
+  status: "pass" | "warn" | "fail" | "info";
   label: string;
   detail?: string;
+}
+
+/**
+ * Env vars implied by an installed dependency. `names[0]` is the one reported; any of `names`
+ * counts as set.
+ */
+const ENV_BY_DEPENDENCY: ReadonlyArray<{ deps: string[]; names: string[]; detail: string }> = [
+  {
+    deps: ["better-auth"],
+    names: ["BETTER_AUTH_SECRET"],
+    detail: "required for Better Auth session encryption",
+  },
+  {
+    deps: ["@classytic/mongokit", "mongoose", "mongodb"],
+    names: ["MONGO_URI", "MONGODB_URI", "DATABASE_URL"],
+    detail: "required at runtime for MongoDB",
+  },
+  {
+    deps: ["ioredis", "bullmq"],
+    names: ["REDIS_URL"],
+    detail: "required at runtime for Redis",
+  },
+];
+
+const ENV_TEMPLATES = [".env.example", ".env.sample", ".env.template"];
+
+/** `KEY=` names from a dotenv-style file; empty when it is absent. */
+function readEnvKeys(file: string): string[] {
+  if (!existsSync(file)) return [];
+  try {
+    return readFileSync(file, "utf-8")
+      .split(/\r?\n/)
+      .map((line) => /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1])
+      .filter((k): k is string => k !== undefined);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Env checks derived from the project, not a fixed list: a var is checked when an installed
+ * dependency needs it, or when the project's `.env.example` declares it. A var counts as set
+ * when it is in the environment or in `./.env` (doctor never boots or loads the app).
+ */
+function envChecks(allDeps: Record<string, string>, cwd: string): CheckResult[] {
+  const configured = new Set(readEnvKeys(resolve(cwd, ".env")));
+  const isSet = (name: string) => Boolean(process.env[name]) || configured.has(name);
+  const out: CheckResult[] = [];
+  const covered = new Set<string>();
+
+  for (const rule of ENV_BY_DEPENDENCY) {
+    const dep = rule.deps.find((d) => allDeps[d]);
+    if (!dep) continue;
+    for (const n of rule.names) covered.add(n);
+    const found = rule.names.find(isSet);
+    if (found) {
+      out.push({ status: "pass", label: `${found} set` });
+    } else {
+      const also = rule.names.slice(1);
+      out.push({
+        status: "warn",
+        label: `${rule.names[0]} not set`,
+        detail: `${rule.detail} (${dep} installed)${also.length ? `; also accepted: ${also.join(", ")}` : ""}`,
+      });
+    }
+  }
+
+  const template = ENV_TEMPLATES.find((f) => existsSync(resolve(cwd, f)));
+  if (template) {
+    for (const name of readEnvKeys(resolve(cwd, template))) {
+      if (covered.has(name)) continue;
+      covered.add(name);
+      if (!isSet(name)) {
+        out.push({ status: "warn", label: `${name} not set`, detail: `declared in ${template}` });
+      }
+    }
+  }
+  return out;
+}
+
+const SOURCE_EXTENSIONS = /\.(?:[cm]?[jt]s|tsx|jsx)$/;
+const MAX_SCANNED_FILES = 2000;
+
+/** Concatenated source text under `src/` (or the project root), skipping node_modules/dist. */
+function readProjectSource(cwd: string): string {
+  const root = existsSync(resolve(cwd, "src")) ? resolve(cwd, "src") : cwd;
+  const chunks: string[] = [];
+  const stack = [root];
+  while (stack.length > 0 && chunks.length < MAX_SCANNED_FILES) {
+    const dir = stack.pop() as string;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (e.name === "node_modules" || e.name === "dist" || e.name.startsWith(".")) continue;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) stack.push(full);
+      else if (SOURCE_EXTENSIONS.test(e.name)) {
+        try {
+          chunks.push(readFileSync(full, "utf-8"));
+        } catch {
+          // unreadable — skip
+        }
+      }
+    }
+  }
+  return chunks.join("\n");
+}
+
+/** Static notes arc cannot decide at boot: proxy trust and empty readiness. */
+function sourceNotes(cwd: string): CheckResult[] {
+  const source = readProjectSource(cwd);
+  if (!/createApp|createWorker/.test(source)) return [];
+  const notes: CheckResult[] = [];
+  if (!/\btrustProxy\b/.test(source)) {
+    notes.push({
+      status: "info",
+      label: "trustProxy not set in source",
+      detail:
+        "preset 'production' defaults to false; behind a load balancer request.ip is then the proxy's address (rate limits, audit). Set it explicitly",
+    });
+  }
+  if (!/\bhealthChecks\b|\bchecks\s*:/.test(source)) {
+    notes.push({
+      status: "info",
+      label: "no readiness checks found in source",
+      detail:
+        "/_health/ready can never report not_ready; add module healthChecks or arcPlugins.health.checks",
+    });
+  }
+  return notes;
 }
 
 export async function doctor(_args: string[] = []): Promise<void> {
@@ -119,23 +256,11 @@ export async function doctor(_args: string[] = []): Promise<void> {
     results.push({ status: "pass", label: `better-auth ${allDeps["better-auth"]}` });
   }
 
-  // 8. Environment variables
-  const envChecks: Array<{ name: string; severity: "warn" | "fail"; detail: string }> = [
-    { name: "MONGO_URI", severity: "warn", detail: "required at runtime for MongoDB" },
-    {
-      name: "BETTER_AUTH_SECRET",
-      severity: "warn",
-      detail: "required for Better Auth session encryption",
-    },
-  ];
+  // 8. Environment variables — only what this project installs or declares
+  results.push(...envChecks(allDeps, cwd));
 
-  for (const env of envChecks) {
-    if (process.env[env.name]) {
-      results.push({ status: "pass", label: `${env.name} set` });
-    } else {
-      results.push({ status: env.severity, label: `${env.name} not set`, detail: env.detail });
-    }
-  }
+  // 9. Notes from a static scan of the project's source (no boot)
+  results.push(...sourceNotes(cwd));
 
   // Print results
   let passCount = 0;
@@ -143,13 +268,20 @@ export async function doctor(_args: string[] = []): Promise<void> {
   let failCount = 0;
 
   for (const r of results) {
-    const icon = r.status === "pass" ? "[pass]" : r.status === "warn" ? "[warn]" : "[FAIL]";
+    const icon =
+      r.status === "pass"
+        ? "[pass]"
+        : r.status === "warn"
+          ? "[warn]"
+          : r.status === "info"
+            ? "[info]"
+            : "[FAIL]";
     const detail = r.detail ? ` (${r.detail})` : "";
     console.log(`  ${icon} ${r.label}${detail}`);
 
     if (r.status === "pass") passCount++;
     else if (r.status === "warn") warnCount++;
-    else failCount++;
+    else if (r.status === "fail") failCount++;
   }
 
   console.log(`\n${passCount} passed, ${warnCount} warnings, ${failCount} failures\n`);

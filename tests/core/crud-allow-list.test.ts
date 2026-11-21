@@ -1,48 +1,74 @@
 /**
- * Tests for the declarative `crud:` allow-list on `defineResource` (2.16).
+ * Tests for the declarative `crud:` allow-list on `defineResource`.
  *
- * Pre-2.16 the only way to limit CRUD ops was the negative
- * `disabledRoutes: ['create', 'update', 'delete']` form — easy to miss
- * when a new op landed in a future arc release. The OpenAI-team report
- * asked for the positive form: `crud: { list: true, get: true }` —
- * what's enabled is explicit, and a future arc op doesn't silently leak
- * through the allow-list.
+ * `crud` is the one CRUD-disable spelling: what's enabled is explicit, and a
+ * future arc op doesn't silently leak through the allow-list.
  *
  * Contract this file locks in:
  *  - `crud: { list: true, get: true }` mounts ONLY those two ops; the
  *    others get pushed into `disabledRoutes` automatically.
- *  - `crud: false` is equivalent to `disableDefaultRoutes: true`
- *    (no CRUD mounts at all).
- *  - Default (no `crud` field) preserves legacy behaviour — every op
- *    mounts.
+ *  - `crud: false` mounts no CRUD at all.
+ *  - Default (no `crud` field) — every op mounts.
+ *  - The deprecated `disabledRoutes` still works for one minor and warns once.
  *  - Passing both `crud` and `disabledRoutes` throws at boot with a
  *    "pick one" hint (config drift catcher).
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
+import { resetDeprecationWarnings } from "../../src/logger/deprecation.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import { ResourceRegistry } from "../../src/registry/ResourceRegistry.js";
+import type { DataAdapter } from "../../src/types/index.js";
 
-describe("ResourceConfig.crud — positive allow-list (2.16)", () => {
+function noopAdapter(): DataAdapter {
+  return {
+    type: "mock",
+    name: "mock-noop",
+    repository: {
+      async getAll() {
+        return { data: [], total: 0 };
+      },
+      async getById() {
+        return null;
+      },
+      async create(d: unknown) {
+        return d;
+      },
+      async update() {
+        return null;
+      },
+      async delete() {
+        return { acknowledged: true, deletedCount: 0 };
+      },
+    } as unknown as DataAdapter["repository"],
+  };
+}
+
+describe("ResourceConfig.crud — positive allow-list", () => {
+  let consoleWarn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    resetDeprecationWarnings();
+    consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleWarn.mockRestore();
+  });
+
   it("enables ONLY the ops listed in `crud:`; others get disabled", () => {
-    // Audit-log resource: list + get only. New CRUD ops landing in a
-    // future arc release won't accidentally appear because the
-    // allow-list is closed.
     const r = defineResource({
       name: "audit-log",
       prefix: "/audit-logs",
+      adapter: noopAdapter(),
       crud: { list: true, get: true },
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
     });
 
-    // Sanity: disabledRoutes reflects the allow-list complement.
-    // The four ops NOT marked `true` are all disabled — explicit + safe.
     expect([...r.disabledRoutes].sort()).toEqual(["create", "delete", "update"]);
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("`crud: false` disables all CRUD ops (equivalent to disableDefaultRoutes: true)", () => {
+  it("`crud: false` disables all CRUD ops", () => {
     const r = defineResource({
       name: "service-resource",
       prefix: "/svc",
@@ -51,22 +77,49 @@ describe("ResourceConfig.crud — positive allow-list (2.16)", () => {
     });
     expect(r.disableDefaultRoutes).toBe(true);
     expect(r.disabledRoutes).toEqual([]);
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
-  it("legacy `disabledRoutes` still works (back-compat — bare negative form)", () => {
-    const r = defineResource({
-      name: "legacy",
-      prefix: "/legacy",
-      disabledRoutes: ["delete"],
-      permissions: {
-        list: allowPublic(),
-        get: allowPublic(),
-        create: allowPublic(),
-        update: allowPublic(),
-      },
-      disableDefaultRoutes: true, // skip the missing adapter check
-    });
+  it("deprecated `disabledRoutes` still works and warns once per process", () => {
+    const define = (name: string) =>
+      defineResource({
+        name,
+        prefix: `/${name}`,
+        adapter: noopAdapter(),
+        disabledRoutes: ["delete"],
+        permissions: {
+          list: allowPublic(),
+          get: allowPublic(),
+          create: allowPublic(),
+          update: allowPublic(),
+        },
+      });
+    const r = define("legacy");
+    define("legacy-two");
     expect([...r.disabledRoutes]).toEqual(["delete"]);
+    const warnings = consoleWarn.mock.calls.map((c) => c.join(" "));
+    expect(warnings.filter((w) => w.includes("`disabledRoutes` is deprecated"))).toHaveLength(1);
+    expect(warnings.join("\n")).toContain(
+      "crud: { list: true, get: true, create: true, update: true }",
+    );
+  });
+
+  it("deprecated `disableDefaultRoutes` still works and names `crud: false`", () => {
+    const r = defineResource({
+      name: "legacy-off",
+      prefix: "/legacy-off",
+      disableDefaultRoutes: true,
+      permissions: { list: allowPublic() },
+    });
+    expect(r.disableDefaultRoutes).toBe(true);
+    const warnings = consoleWarn.mock.calls.map((c) => c.join(" ")).join("\n");
+    expect(warnings).toContain("`disableDefaultRoutes` is deprecated");
+    expect(warnings).toContain("crud: false");
+  });
+
+  it("customRoutesOnly does not warn — it is a different intent, not a spelling", () => {
+    defineResource({ name: "svc-only", customRoutesOnly: true });
+    expect(consoleWarn).not.toHaveBeenCalled();
   });
 
   it("throws when both `crud` and `disabledRoutes` are passed (pick one)", () => {
@@ -74,23 +127,21 @@ describe("ResourceConfig.crud — positive allow-list (2.16)", () => {
       defineResource({
         name: "conflict",
         prefix: "/conflict",
+        adapter: noopAdapter(),
         crud: { list: true, get: true },
         disabledRoutes: ["delete"],
         permissions: { list: allowPublic(), get: allowPublic() },
-        disableDefaultRoutes: true,
       }),
     ).toThrow(/pass either `crud`.*or `disabledRoutes`.*not both/);
   });
 
   it("registry route enumeration matches the allow-list", () => {
-    // The positive form's payoff: what's surfaced on the wire equals
-    // what's declared — no surprises when a future arc op lands.
     const r = defineResource({
       name: "report",
       prefix: "/reports",
+      adapter: noopAdapter(),
       crud: { list: true, get: true },
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
     });
 
     const reg = new ResourceRegistry();
@@ -99,11 +150,8 @@ describe("ResourceConfig.crud — positive allow-list (2.16)", () => {
     expect(entry).toBeDefined();
     const methods = reg
       .enumerateRoutes(entry as NonNullable<typeof entry>)
-      .map((row) => `${row.method} ${row.path}`);
-    // `disableDefaultRoutes: true` in this test fixture means CRUD
-    // doesn't enumerate — we're just confirming the allow-list flows
-    // into the resolved `disabledRoutes` shape. The actual CRUD
-    // registration is covered in the next test.
-    expect(methods).toEqual([]);
+      .map((row) => `${row.method} ${row.path}`)
+      .sort();
+    expect(methods).toEqual(["GET /reports", "GET /reports/:id"]);
   });
 });

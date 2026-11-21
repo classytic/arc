@@ -119,7 +119,8 @@ export default defineResource({
   },
   cache: { staleTime: 30, gcTime: 300, tags: ['catalog'] },
   routes: [
-    { method: 'GET', path: '/featured', handler: 'getFeatured', permissions: allowPublic() },
+    { method: 'GET', path: '/featured', permissions: allowPublic(),
+      handler: async () => ({ data: await productRepository.getAll({ filters: { featured: true } }) }) },  // arc pipeline + MCP tool
   ],
   actions: {
     approve: { handler: approveOrder, permissions: requireRoles(['admin']) },

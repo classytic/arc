@@ -829,7 +829,8 @@ describe("createApp — modules", () => {
       "dependent",
       "host",
     ]);
-    expect(calls).toEqual(["base", "dependent", "host"]);
+    // The boot health summary runs every check once at ready, then the probe runs them again.
+    expect(calls).toEqual(["base", "dependent", "host", "base", "dependent", "host"]);
     await app.close();
   });
 

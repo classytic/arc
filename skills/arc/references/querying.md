@@ -20,13 +20,12 @@ defineResource({
     allowedFilterFields: ['status', 'category'],
     allowedSortFields: ['createdAt', 'price'],
     allowedOperators: ['eq', 'gte', 'lte', 'in'],
-    strictFilterFields: true,          // unknown filter key = 400 instead of dropped
   }),
   schemaOptions: { query: { allowedPopulate: ['category'], allowedLookups: ['categories'] } },
 });
 ```
 
-- An unknown filter key is DROPPED by default, which WIDENS the result (200 with every row). Set `strictFilterFields: true` or `ARC_STRICT_QUERY_PARAMS=true`.
+- An unknown filter key is a 400 by default. Dropping it instead WIDENS the result (200 with every row): mongokit's `QueryParser` drops with `invalidInput: 'drop'`; arc's built-in `ArcQueryParser` with `strictFilterFields: false` or `ARC_STRICT_QUERY_PARAMS=false`.
 - `?limit` above the cap is clamped, not rejected; the cap is in the OpenAPI parameter description.
 - One cap, one owner: parser, repository and arc all cap page size and the lowest wins. Configure the same number everywhere; arc warns at boot on a mismatch.
 - `limit` is `defaultLimit` / `maxLimit` on the resource.

@@ -15,10 +15,6 @@ const config: KnipConfig = {
   // Optional peer deps — conditionally required at runtime, not statically imported
   ignoreDependencies: [
     "pino-pretty",
-    "@opentelemetry/sdk-node",
-    "@opentelemetry/sdk-trace-base",
-    "@opentelemetry/sdk-trace-node",
-    "@opentelemetry/exporter-trace-otlp-http",
     "@opentelemetry/instrumentation-http",
     "@opentelemetry/instrumentation-mongodb",
     "@opentelemetry/auto-instrumentations-node",

@@ -286,7 +286,7 @@ const ${camel}Resource = defineResource${ts ? `<I${name}>` : ""}({
 
   // 2.16 — declarative CRUD allow-list (positive form). Uncomment to
   // restrict the surface; a future arc CRUD op won't silently leak in
-  // because every op is opt-in. Mutually exclusive with \`disabledRoutes\`.
+  // because every op is opt-in.
   //   crud: { list: true, get: true },
 
   permissions: {
@@ -338,7 +338,7 @@ const ${camel}Resource = defineResource${ts ? `<I${name}>` : ""}({
 
   // 2.16 — declarative CRUD allow-list (positive form). Uncomment to
   // restrict the surface; a future arc CRUD op won't silently leak in
-  // because every op is opt-in. Mutually exclusive with \`disabledRoutes\`.
+  // because every op is opt-in.
   //   crud: { list: true, get: true },
 
   permissions: {

@@ -50,13 +50,13 @@ class ProductController
 
   async getDeleted(req: IRequestContext): Promise<IControllerResponse> {
     const products = await this.repository.findDeleted();
-    return { success: true, data: products };
+    return { data: products };
   }
 
   async restore(req: IRequestContext): Promise<IControllerResponse> {
     const { id } = req.params;
     const product = await this.repository.restore(id);
-    return { success: true, data: product };
+    return { data: product };
   }
 }
 ```
@@ -75,9 +75,11 @@ presets: [{ name: 'slugLookup', slugField: 'urlSlug' }]
 
 **Added Routes:**
 
-| Route | Permission Key | Handler Method |
-|-------|----------------|----------------|
-| GET /slug/:slug | `getBySlug` | `getBySlug` |
+| Route | Permission | Handler Method |
+|-------|------------|----------------|
+| GET /slug/:slug | inherits `get` | `getBySlug` |
+
+No such permission and no preset option: boot fails under `strictPermissions` (`preset-route-public-by-omission`); with strict off the route mounts public with an info log. A public route is stated with `allowPublic()`.
 
 **Controller Implementation:**
 
@@ -93,10 +95,10 @@ class ProductController
     const product = await this.repository.getBySlug(slug);
 
     if (!product) {
-      return { success: false, error: 'Not found', status: 404 };
+      throw new NotFoundError('Product', slug);   // from '@classytic/arc'
     }
 
-    return { success: true, data: product };
+    return { data: product };
   }
 }
 ```
@@ -115,10 +117,12 @@ presets: [{ name: 'tree', parentField: 'parentCategory' }]
 
 **Added Routes:**
 
-| Route | Permission Key | Handler Method |
-|-------|----------------|----------------|
-| GET /tree | `tree` or `getTree` | `getTree` |
-| GET /:parent/children | `children` or `getChildren` | `getChildren` |
+| Route | Permission | Handler Method |
+|-------|------------|----------------|
+| GET /tree | inherits `list` | `getTree` |
+| GET /:parent/children | inherits `list` | `getChildren` |
+
+No such permission and no preset option: boot fails under `strictPermissions` (`preset-route-public-by-omission`); with strict off the route mounts public with an info log. A public route is stated with `allowPublic()`.
 
 **Controller Implementation:**
 
@@ -131,13 +135,13 @@ class CategoryController
 
   async getTree(req: IRequestContext): Promise<IControllerResponse> {
     const tree = await this.repository.getTree();
-    return { success: true, data: tree };
+    return { data: tree };
   }
 
   async getChildren(req: IRequestContext): Promise<IControllerResponse> {
     const { parent } = req.params;
     const children = await this.repository.getChildren(parent);
-    return { success: true, data: children };
+    return { data: children };
   }
 }
 ```
@@ -193,6 +197,7 @@ presets: [{ name: 'multiTenant', tenantField: 'organizationId' }]
 - Automatically filters queries by `organizationId` (from `request.scope`)
 - Injects `organizationId` on create
 - Elevated scope bypasses tenant filter automatically
+- Guards every route of the resource, in any preset order: a preset route gets what the CRUD route it maps to gets (`/slug/:slug` → `get`; `/tree`, `/search` → `list`; `/bulk`, `/:id/restore` → their write), so anonymous is 401 and no organization is 403 there too. A custom `handler` route gets the tenant filter. `tenantScope: true` adds body injection (and covers a `rawHandler` route, otherwise untouched); `tenantScope: false` opts a route out.
 
 **Requires:** `organizationScoped: true` on resource definition
 
@@ -249,27 +254,18 @@ defineResource({
 
 ## Permission Keys
 
-Presets add permission keys that you must define:
+Preset routes reuse the CRUD keys: `slugLookup` and `filesUpload` read inherit `get`; `tree`, `search` and `similar` inherit `list`; `softDelete` uses `list` (`/deleted`) and `update` (`/:id/restore`); `bulk` uses `create`/`update`/`delete`. A read route with nothing to inherit fails boot under `strictPermissions`.
 
 ```typescript
 defineResource({
   name: 'category',
   presets: ['softDelete', 'tree'],
   permissions: {
-    // CRUD
-    list: allowPublic(),
+    list: allowPublic(),   // also GET /tree and /:parent/children
     get: allowPublic(),
     create: requireRoles(['admin']),
-    update: requireRoles(['admin']),
+    update: requireRoles(['admin']), // also POST /:id/restore
     delete: requireRoles(['admin']),
-
-    // softDelete preset
-    deleted: requireRoles(['admin']),
-    restore: requireRoles(['admin']),
-
-    // tree preset
-    tree: allowPublic(),
-    children: allowPublic(),
   },
 });
 ```
@@ -293,11 +289,9 @@ defineResource({
     list: requireAuth(),
     get: requireAuth(),
     create: requireAuth(),
-    update: requireAuth(),  // Only owner can update
+    update: requireAuth(),  // Only owner can update; also POST /:id/restore
     delete: requireAuth(),  // Only owner can delete
-    deleted: requireRoles(['admin']),
-    restore: requireRoles(['admin']),
-    getBySlug: allowPublic(),
+    // GET /slug/:slug inherits `get`; GET /deleted inherits `list`
   },
 });
 ```
@@ -333,7 +327,9 @@ registerPreset('softDelete', myCustomSoftDelete, { override: true });
 ```typescript
 interface PresetResult {
   name: string;
-  routes?: RouteDefinition[] | ((permissions) => RouteDefinition[]);
+  // Function form: (permissions, controller) — `handler: controller.getStats`.
+  // A method read this way is verified at boot.
+  routes?: RouteDefinition[] | ((permissions, controller) => RouteDefinition[]);
   middlewares?: {
     list?: RouteHandler[];
     get?: RouteHandler[];
@@ -420,12 +416,13 @@ import { s3Storage } from './storage/s3-storage.js'; // your ~50-line adapter
 defineResource({
   name: 'file',
   prefix: '/files',
-  disableDefaultRoutes: true, // preset owns every route
+  crud: false, // preset owns every route
   presets: [
     filesUploadPreset({
       storage: s3Storage({ bucket: 'my-app' }),
       allowedMimeTypes: ['image/png', 'image/jpeg', 'application/pdf'],
       maxFileSize: 5 * 1024 * 1024,
+      permissions: { read: allowPublic() }, // read inherits `get`; unset fails boot under strict
     }),
   ],
 });
@@ -435,7 +432,7 @@ defineResource({
 
 | Route | Behavior |
 |-------|----------|
-| `POST /upload` | Multipart → `storage.upload()` → `{ success: true, data: { id, url, pathname, contentType, bytes, metadata? } }` |
+| `POST /upload` | Multipart → `storage.upload()` → 201 `{ id, url, pathname, contentType, bytes, metadata? }` |
 | `GET /:id` | Streams bytes back. Full HTTP Range support (`bytes=start-end`, suffix `bytes=-N`, open-ended `bytes=N-`) with `206 Partial Content` + `Content-Range` |
 | `DELETE /:id` | 204 on success, 404 on already-absent |
 
@@ -491,9 +488,11 @@ searchPreset({
 
 | Section | Path | Method | Permission fallback |
 |---------|------|--------|---------------------|
-| `search` | `/search` | POST | resource `list` → `allowPublic()` |
-| `similar` | `/search-similar` | POST | resource `list` → `allowPublic()` |
+| `search` | `/search` | POST | resource `list` (unset: boot error under strict) |
+| `similar` | `/search-similar` | POST | resource `list` (unset: boot error under strict) |
 | `embed` | `/embed` | POST | `requireAuth()` |
+
+Auto-wired `search` and `similar` read under the same row scope as the resource's `list` (permission filters and, under `multiTenant`, the caller's organization), taken from the resource controller (`listScope`). `similar` passes it as the vector pre-filter, so each field must be a filter field on the index; `search` post-filters the rows the engine returns. A section with its own `handler` scopes its own rows.
 
 Every field (`path`, `method`, `permissions`, `schema` — JSON Schema or Zod v4 — `mcp`, `summary`, `tags`, `operation`) is overridable per section. Zod schemas are auto-converted to JSON Schema (draft-7 for Fastify / AJV, openapi-3.0 for docs) with no `.toJSONSchema()` call required.
 

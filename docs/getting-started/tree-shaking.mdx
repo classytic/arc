@@ -86,7 +86,7 @@ Each of these pulls in a specific external dependency. Only import when you need
 import { RedisEventTransport } from '@classytic/arc/events/redis';
 import { RedisStreamTransport } from '@classytic/arc/events/redis-stream';
 
-// OpenTelemetry tracing (requires: @opentelemetry/*)
+// OpenTelemetry tracing (requires: @opentelemetry/api, sdk-trace 3.x, resources, semantic-conventions)
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 
 // Redis idempotency store
@@ -151,12 +151,12 @@ import { streamlinePlugin } from '@classytic/arc/integrations/streamline';
 import * as arc from '@classytic/arc';
 
 // BAD — pre-2.1 pattern that pulled Redis into the events barrel
-import { RedisEventTransport } from '@classytic/arc/events';
+import { RedisEventTransport } from '@classytic/arc/events'; // check-docs-imports: ignore
 // Use instead:
 import { RedisEventTransport } from '@classytic/arc/events/redis';
 
 // BAD — importing tracing from plugins barrel (pulls @opentelemetry/*)
-import { tracingPlugin } from '@classytic/arc/plugins';
+import { tracingPlugin } from '@classytic/arc/plugins'; // check-docs-imports: ignore
 // Use instead:
 import { tracingPlugin } from '@classytic/arc/plugins/tracing';
 ```

@@ -112,12 +112,12 @@ npx vitest run examples/full-app/tests/
 ```typescript
 import { defineResource } from '@classytic/arc/core';
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';
-import { permissions } from '@classytic/arc/permissions';
+import { fullPublic } from '@classytic/arc/permissions';
 
 const todoResource = defineResource({
   name: 'todo',
   adapter: createMongooseAdapter(Todo, new Repository(Todo)),
-  permissions: permissions.fullPublic(),
+  permissions: fullPublic(),
 });
 
 // Auto-generates: GET/POST /todos, GET/PATCH/DELETE /todos/:id

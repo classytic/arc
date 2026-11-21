@@ -18,10 +18,10 @@ describe("MCP idempotency security context", () => {
       const controller = { create: vi.fn(async () => ({ data: {} })) };
       const resource = defineResource({
         name: "invoice",
-        disableDefaultRoutes: true,
+        crud: { create: true },
+        skipValidation: true, // controller-only fixture: no adapter for the HTTP create route
         controller: controller as never,
         permissions: authenticated(),
-        disabledRoutes: ["list", "get", "update", "delete"],
       });
       const tools = resourceToTools(resource, {
         wiring: {
@@ -132,10 +132,10 @@ describe("MCP idempotency security context", () => {
     const controller = { create: vi.fn(async () => ({ data: {} })) };
     const resource = defineResource({
       name: "invoice",
-      disableDefaultRoutes: true,
+      crud: { create: true },
+      skipValidation: true, // controller-only fixture: no adapter for the HTTP create route
       controller: controller as never,
       permissions: authenticated(),
-      disabledRoutes: ["list", "get", "update", "delete"],
     });
     expect(() => resourceToTools(resource, { wiring: { idempotencyStore: store } })).toThrow(
       /setIfLocked/,
@@ -149,10 +149,10 @@ describe("MCP idempotency security context", () => {
     const controller = { create: vi.fn(async () => ({ data: { paid: true } })) };
     const resource = defineResource({
       name: "invoice",
-      disableDefaultRoutes: true,
+      crud: { create: true },
+      skipValidation: true, // controller-only fixture: no adapter for the HTTP create route
       controller: controller as never,
       permissions: authenticated(),
-      disabledRoutes: ["list", "get", "update", "delete"],
     });
     const tools = resourceToTools(resource, {
       wiring: { idempotencyStore: store, allowUnfencedCompletion: true, log: { warn } },

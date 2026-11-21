@@ -70,6 +70,35 @@ function subpathOf(spec) {
   return spec.startsWith("@classytic/arc/") ? `./${spec.slice("@classytic/arc/".length)}` : null;
 }
 
+/**
+ * Every name in an `import { ... } from '@classytic/arc[/subpath]'` must be exported by that subpath
+ * in api-surface.json. An import whose statement or trailing line matches `ignore` is skipped.
+ * Shared with scripts/check-docs-imports.mjs.
+ */
+export function arcImportProblems(text, surface, ignore = null) {
+  const problems = [];
+  for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"](@classytic\/arc[^'"]*)['"]/g)) {
+    const end = m.index + m[0].length;
+    const lineEnd = text.indexOf("\n", end);
+    if (ignore?.test(text.slice(m.index, lineEnd === -1 ? text.length : lineEnd))) continue;
+    const line = text.slice(0, m.index).split("\n").length;
+    const sub = subpathOf(m[2]);
+    if (!sub) continue;
+    const entry = surface[sub];
+    if (!entry) {
+      problems.push({ line, message: `import from ${m[2]}: subpath has no api-surface entry` });
+      continue;
+    }
+    const names = new Set([...(entry.runtime ?? []), ...(entry.types ?? [])]);
+    const clause = m[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    for (const part of clause.split(",")) {
+      const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
+      if (name && !names.has(name)) problems.push({ line, message: `${name} is not exported by ${m[2]}` });
+    }
+  }
+  return problems;
+}
+
 export function checkSkills(root = resolve(fileURLToPath(new URL("..", import.meta.url)))) {
   const failures = [];
   const fail = (file, msg) => failures.push(`${relative(root, file).split(sep).join("/")}: ${msg}`);
@@ -82,11 +111,6 @@ export function checkSkills(root = resolve(fileURLToPath(new URL("..", import.me
   for (const entry of Object.values(surface)) {
     for (const n of [...(entry.runtime ?? []), ...(entry.types ?? [])]) allExports.add(n);
   }
-  const subpathExports = (sub) => {
-    const e = surface[sub];
-    return e ? new Set([...(e.runtime ?? []), ...(e.types ?? [])]) : null;
-  };
-
   const skillsDir = join(root, "skills");
   const files = existsSync(skillsDir) ? walk(skillsDir).filter((f) => f.endsWith(".md")) : [];
   const llms = join(root, "llms.txt");
@@ -136,19 +160,7 @@ export function checkSkills(root = resolve(fileURLToPath(new URL("..", import.me
       const sub = subpathOf(m[0].replace(/[./-]+$/, ""));
       if (sub && !(sub in (pkg.exports ?? {}))) fail(file, `unknown subpath ${m[0]}`);
     }
-    for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+['"](@classytic\/arc[^'"]*)['"]/g)) {
-      const sub = subpathOf(m[2]);
-      const names = sub ? subpathExports(sub) : null;
-      if (!names) {
-        if (sub) fail(file, `import from ${m[2]}: subpath has no api-surface entry`);
-        continue;
-      }
-      const clause = m[1].replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-      for (const part of clause.split(",")) {
-        const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
-        if (name && !names.has(name)) fail(file, `${name} is not exported by ${m[2]}`);
-      }
-    }
+    for (const p of arcImportProblems(text, surface)) fail(file, p.message);
     // Call-form tokens on a line that also names an arc subpath (the "do not hand-roll" rows) must exist.
     for (const line of lines.filter((l) => l.includes("@classytic/arc"))) {
       for (const m of line.matchAll(/`([A-Za-z_$][\w$]*)\(\)`/g)) {

@@ -258,7 +258,7 @@ export function createOutboxAdminModule(deps: OutboxAdminModuleDeps): ArcModule<
             req.server as never,
             outboxModuleName,
           );
-          const relayDelivered = await relay.relay();
+          const relayDelivered = (await relay.relayBatch()).relayed;
           // `relayDelivered` counts the whole drained batch, not just this
           // event — say so on the wire. An operator authorised to replay ONE id
           // has, by pressing this, also triggered delivery of everything else

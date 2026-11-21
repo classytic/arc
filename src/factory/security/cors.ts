@@ -51,8 +51,12 @@ const ARC_PROTOCOL_HEADERS = ["x-organization-id", "x-arc-scope", "x-request-id"
  * Unlike `allowedHeaders`, an UNSET `exposedHeaders` is NOT safe — CORS
  * exposes nothing beyond the safelist by default — so this is always
  * merged, creating the list when the host declared none.
+ *
+ * `x-request-id` too: arc sets it on every response and every error body
+ * carries the same value as `correlationId`; without exposing it, browser
+ * code cannot quote it in a bug report or match a response to its log line.
  */
-const ARC_EXPOSED_HEADERS = ["set-auth-token"] as const;
+const ARC_EXPOSED_HEADERS = ["set-auth-token", "x-request-id"] as const;
 
 /**
  * Default `Access-Control-Max-Age` (seconds) when the host didn't set one.

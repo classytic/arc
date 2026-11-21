@@ -42,7 +42,7 @@ describe("parser max-limit — over HTTP", () => {
       // The resource ANSWERS "how large may a page be?" — arc must not apply 100 on top.
       queryParser: createQueryParser({ maxLimit: 1000 }),
       permissions: { list: allowPublic(), get: allowPublic() },
-      disabledRoutes: ["create", "update", "delete"],
+      crud: { list: true, get: true },
     });
 
     app = await createApp({

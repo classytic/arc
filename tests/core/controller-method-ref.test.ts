@@ -1,5 +1,9 @@
 /**
- * Tests for `route.controllerMethod` — typed function-ref handlers (2.16).
+ * Tests for `route.controllerMethod` — typed function-ref handlers.
+ *
+ * DEPRECATED form (one-minor window): a function `handler` that calls the
+ * controller method replaces it. These tests keep the legacy dispatch honest
+ * until removal and pin the once-per-process deprecation warning.
  *
  * Pre-2.16 routes referenced controller methods via string:
  *     `handler: 'getStats'`
@@ -21,9 +25,10 @@
  */
 
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BaseController } from "../../src/core/BaseController.js";
 import { defineResource } from "../../src/core/defineResource.js";
+import { resetDeprecationWarnings } from "../../src/logger/deprecation.js";
 import { allowPublic } from "../../src/permissions/index.js";
 import type { IRequestContext } from "../../src/types/index.js";
 import { createMockRepositoryMock } from "../setup.js";
@@ -63,7 +68,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
       prefix: "/stats",
       controller: ctrl,
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -95,7 +100,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
       prefix: "/stats-string",
       controller: ctrl,
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -111,7 +116,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
       prefix: "/stats-ref",
       controller: ctrl2,
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -141,7 +146,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
       prefix: "/stats-both",
       controller: ctrl,
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -170,7 +175,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
         prefix: "/stats-none",
         controller: ctrl,
         permissions: { list: allowPublic(), get: allowPublic() },
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [
           {
             method: "GET",
@@ -180,7 +185,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
           } as any,
         ],
       }),
-    ).toThrow(/must declare one of `handler`.*`rawHandler`.*or `controllerMethod`/s);
+    ).toThrow(/must declare a function `handler`.*or a function `rawHandler`/s);
   });
 
   it("throws when controllerMethod returns a non-function", async () => {
@@ -190,7 +195,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
       prefix: "/stats-bad",
       controller: ctrl,
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -216,7 +221,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
         name: "stats-noctrl",
         prefix: "/stats-noctrl",
         permissions: { list: allowPublic() },
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [
           {
             method: "GET",
@@ -233,7 +238,7 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
       name: "stats-noctrl",
       prefix: "/stats-noctrl",
       permissions: { list: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -247,5 +252,61 @@ describe("RouteDefinition.controllerMethod — typed function refs", () => {
     await expect(app.register(resource.toPlugin())).rejects.toThrow(
       /`controllerMethod` requires a controller/,
     );
+  });
+
+  it("is deprecated: warns once naming the function-handler replacement", () => {
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const name of ["stats-dep-a", "stats-dep-b"]) {
+        defineResource({
+          name,
+          prefix: `/${name}`,
+          controller: buildController(),
+          crud: false,
+          routes: [
+            {
+              method: "GET",
+              path: "/summary",
+              controllerMethod: (c: StatsController) => c.getStats,
+              permissions: allowPublic(),
+            },
+          ],
+        });
+      }
+      const lines = warn.mock.calls.map((c) => c.join(" "));
+      const deprecations = lines.filter((l) =>
+        l.includes("Route `controllerMethod` is deprecated"),
+      );
+      expect(deprecations).toHaveLength(1);
+      expect(deprecations[0]).toContain("handler: (ctx) => controller.method(ctx)");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("the replacement — a function handler calling the controller — dispatches identically", async () => {
+    const ctrl = buildController();
+    const resource = defineResource({
+      name: "stats-fn",
+      prefix: "/stats-fn",
+      controller: ctrl,
+      crud: false,
+      routes: [
+        {
+          method: "GET",
+          path: "/summary",
+          operation: "getStats",
+          handler: (ctx) => ctrl.getStats(ctx),
+          permissions: allowPublic(),
+        },
+      ],
+    });
+    app = Fastify({ logger: false });
+    await app.register(resource.toPlugin());
+    await app.ready();
+    const res = await app.inject({ method: "GET", url: "/stats-fn/summary" });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ totalUsers: 42, totalPosts: 100 });
   });
 });

@@ -137,7 +137,7 @@ describe("optimistic concurrency — refused where it cannot be enforced", () =>
       adapter: { repository, type: "custom", name: "no-cas" } as never,
       concurrency: {},
       permissions: { list: allowPublic(), get: allowPublic() },
-      disabledRoutes: ["create", "update", "delete"],
+      crud: { list: true, get: true },
     });
     await expect(
       createApp({ auth: false, logger: false, resources: [resource] }).then((a) => a.ready()),

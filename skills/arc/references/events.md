@@ -38,7 +38,6 @@ Without `createApp`: `await fastify.register(eventPlugin, { transport })` from `
 | `registry`, `validateMode` | Payload validation on publish: `'warn'` (default with registry) \| `'reject'` \| `'off'` |
 | `onPublish`, `onPublishError` | Telemetry callbacks (isolated, never affect delivery) |
 | `warnOnDuplicate` | Dual-publish detector, on outside production |
-| `wal` | Low-level hook; not at-least-once. Use the outbox |
 
 CRUD events auto-emit on `arcPlugins.emitEvents` (default true) as `<resource>.created|updated|deleted` with payload `{ resource, operation, data, userId?, organizationId?, timestamp }`. Build names with `crudEventType('product', 'created')`. Lifecycle names: `ARC_LIFECYCLE_EVENTS`.
 

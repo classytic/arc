@@ -43,7 +43,13 @@ async function memberScope(request: {
   const userId = request.headers["x-user"];
   if (typeof orgId !== "string" || typeof userId !== "string") return;
   request.user = { id: userId, roles: ["member"] };
-  request.scope = { kind: "member", userId, userRoles: ["member"], organizationId: orgId, orgRoles: ["member"] };
+  request.scope = {
+    kind: "member",
+    userId,
+    userRoles: ["member"],
+    organizationId: orgId,
+    orgRoles: ["member"],
+  };
 }
 
 const handled: string[] = [];
@@ -62,9 +68,7 @@ async function buildApp(opts: {
     type: "mongoose",
     name: "fenced",
   };
-  const gate = opts.ownRowsOnly
-    ? () => allow({ policy: { ownerId: "u1" } })
-    : requireAuth();
+  const gate = opts.ownRowsOnly ? () => allow({ policy: { ownerId: "u1" } }) : requireAuth();
   const resource = defineResource<Doc>({
     name: "fenced",
     adapter,
@@ -72,7 +76,13 @@ async function buildApp(opts: {
     ...(opts.idField ? { idField: opts.idField } : {}),
     ...(opts.lookupFields ? { lookupFields: opts.lookupFields } : {}),
     audit: true,
-    permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+    permissions: {
+      list: allowPublic(),
+      get: allowPublic(),
+      create: allowPublic(),
+      update: allowPublic(),
+      delete: allowPublic(),
+    },
     actions: {
       approve: {
         permissions: gate,
@@ -113,14 +123,22 @@ async function buildApp(opts: {
 }
 
 const act = (app: FastifyInstance, id: string, action: string, org: string, user = "u1") =>
-  app.inject({ method: "POST", url: `/fenceds/${id}/action`, headers: { "x-org": org, "x-user": user }, payload: { action } });
+  app.inject({
+    method: "POST",
+    url: `/fenceds/${id}/action`,
+    headers: { "x-org": org, "x-user": user },
+    payload: { action },
+  });
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
   Model = mongoose.model<Doc>(
     "ActionFenceDoc",
-    new Schema<Doc>({ code: String, organizationId: String, ownerId: String, status: String }, { timestamps: true }),
+    new Schema<Doc>(
+      { code: String, organizationId: String, ownerId: String, status: String },
+      { timestamps: true },
+    ),
   );
 }, 60_000);
 
@@ -237,7 +255,7 @@ describe("boot", () => {
     const resource = defineResource({
       name: "unfenceable",
       tenantField: "organizationId",
-      disableDefaultRoutes: true,
+      crud: false,
       actions: { approve: { permissions: requireAuth(), handler: async (id) => ({ id }) } },
     });
     const app = Fastify({ logger: { level: process.env.FENCE_LOG ?? "silent" } });
@@ -261,7 +279,13 @@ describe("boot", () => {
       name: "implicit",
       adapter,
       controller: { list: noop, get: noop, create: noop, update: noop, delete: noop } as never,
-      permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic(), update: allowPublic(), delete: allowPublic() },
+      permissions: {
+        list: allowPublic(),
+        get: allowPublic(),
+        create: allowPublic(),
+        update: allowPublic(),
+        delete: allowPublic(),
+      },
       actions: { approve: { permissions: requireAuth(), handler: async (id) => ({ id }) } },
     });
     const app = Fastify({ logger: { level: process.env.FENCE_LOG ?? "silent" } });
@@ -278,7 +302,7 @@ describe("boot", () => {
     const resource = defineResource({
       name: "unexplained",
       tenantField: false,
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         approve: {
           permissions: requireAuth(),
@@ -312,7 +336,11 @@ describe("action target fence — business keys resolve exactly as GET /:id does
     const app = await buildApp({ tenantField: "organizationId", lookupFields: ["code"] });
     const doc = await Model.create({ code: "RMA-0002", organizationId: ORG_A, status: "draft" });
     const get = (id: string, org: string) =>
-      app.inject({ method: "GET", url: `/fenceds/${id}`, headers: { "x-org": org, "x-user": "u1" } });
+      app.inject({
+        method: "GET",
+        url: `/fenceds/${id}`,
+        headers: { "x-org": org, "x-user": "u1" },
+      });
     const first = await act(app, "RMA-0002", "approve", ORG_A);
     expect(first.statusCode, first.body).toBe(200);
     expect((await act(app, String(doc._id), "approve", ORG_A)).statusCode).toBe(200);

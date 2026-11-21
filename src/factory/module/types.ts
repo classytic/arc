@@ -76,13 +76,60 @@ export interface EventHandlerDefinition {
   durability?: "retry" | "boundary";
 }
 
+/**
+ * The decisions a module's factory made from its own config, as plain data
+ * (strings, numbers, booleans, null, arrays, plain objects). Printed by
+ * `arc describe` and the boot error, so NEVER put a secret in it.
+ */
+export type ModuleFacts = { readonly [key: string]: unknown };
+
+/** Every composed module's facts by name (`{}` for a module that declares none). */
+export type ComposedModuleFacts = { readonly [moduleName: string]: ModuleFacts | undefined };
+
+/**
+ * A rule over facts, evaluated once at boot before any module setup. Fatal under every
+ * preset: every failure is collected, then boot throws one `ArcBootError`.
+ */
+export interface ModuleInvariant<TFacts extends ModuleFacts = ModuleFacts> {
+  /** Stable code, conventionally `<module>.<rule>`, e.g. `media.upload-receiver`. */
+  readonly code: string;
+  /** One line telling the operator what to change. */
+  readonly fix: string;
+  /**
+   * Pure and synchronous: `true` passes; `false` or a short reason string fails.
+   * `all` holds every composed module's facts by name, for cross-module rules.
+   */
+  check(facts: Readonly<TFacts>, all: ComposedModuleFacts): boolean | string;
+}
+
 export interface ArcModule<
   TExports = unknown,
   TPorts extends PortName = PortName,
   TOptionalPorts extends PortName = PortName,
+  TFacts extends ModuleFacts = ModuleFacts,
 > {
   /** Stable identifier — appears in boot logs and duplicate-module detection. */
   readonly name: string;
+
+  /**
+   * The config decisions this module's factory made, as plain serialisable data — no
+   * secrets. Read by `invariants` (this module's and others') and printed by `arc describe`.
+   */
+  readonly facts?: TFacts;
+
+  /**
+   * Rules over `facts` checked before any module's `plugins`/`bootstrap` runs, so a
+   * module that contradicts itself (or a sibling) never boots:
+   *
+   * ```ts
+   * defineModule({ name: "media",
+   *   facts: { driver: cfg.driver, uploadReceiver: cfg.receiver },
+   *   invariants: [{ code: "media.upload-receiver", fix: "enable the receiver or use a cloud driver",
+   *     check: (f) => f.driver !== "local" || f.uploadReceiver || "local driver with the receiver off" }],
+   * })
+   * ```
+   */
+  readonly invariants?: readonly ModuleInvariant<TFacts>[];
 
   /**
    * Names of modules this one must be composed AFTER. A dependency's

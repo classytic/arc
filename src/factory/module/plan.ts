@@ -5,7 +5,9 @@
  * `orderModules`), so a plan cannot disagree with a boot.
  */
 
+import { ArcBootError } from "../../utils/bootError.js";
 import type { SkippedBridge } from "./graph.js";
+import { assertModuleInvariants } from "./invariants.js";
 import { orderModules } from "./order.js";
 import { declareModules, loadActiveBridges } from "./resolve.js";
 import type { ArcModule, ArcModuleInput, ArcPorts, ModuleName } from "./types.js";
@@ -22,6 +24,8 @@ export interface CompositionProblem {
   /** The missing module or port, or the duplicated name. */
   readonly target: string;
   readonly message: string;
+  /** One line: what to change. */
+  readonly fix: string;
 }
 
 /** A port counts as supplied when it is an own key whose value is neither `undefined` nor `null`. */
@@ -41,15 +45,22 @@ export function compositionProblems(
   const supplied: Readonly<Record<string, unknown>> = ports;
   const composed = new Set<string>();
   const problems: CompositionProblem[] = [];
-  const add = (code: CompositionProblem["code"], module: string, target: string, message: string) =>
-    problems.push({ code, module, target, message });
+  /** `message` is `<what> — <fix>`; both halves are kept for the boot report. */
+  const add = (
+    code: CompositionProblem["code"],
+    module: string,
+    target: string,
+    what: string,
+    fix: string,
+  ) => problems.push({ code, module, target, message: `${what} — ${fix}`, fix });
   for (const m of modules) {
     if (composed.has(m.name)) {
       add(
         "duplicate-module",
         m.name,
         m.name,
-        `Duplicate module name "${m.name}" — it is composed twice; remove the duplicate from createApp({ modules })`,
+        `Duplicate module name "${m.name}"`,
+        "it is composed twice; remove the duplicate from createApp({ modules })",
       );
     }
     composed.add(m.name);
@@ -61,14 +72,16 @@ export function compositionProblems(
           "self-dependency",
           m.name,
           dep,
-          `module "${m.name}" dependsOn itself — remove the self-reference`,
+          `module "${m.name}" dependsOn itself`,
+          "remove the self-reference",
         );
       } else if (!composed.has(dep)) {
         add(
           "missing-dependency",
           m.name,
           dep,
-          `module "${m.name}" dependsOn "${dep}", which is not composed — add the "${dep}" module to createApp({ modules }), or drop the dependency`,
+          `module "${m.name}" dependsOn "${dep}", which is not composed`,
+          `add the "${dep}" module to createApp({ modules }), or drop the dependency`,
         );
       }
     }
@@ -78,7 +91,8 @@ export function compositionProblems(
           "missing-module",
           m.name,
           dep,
-          `module "${m.name}" requires "${dep}" to be composed — add the "${dep}" module to createApp({ modules })`,
+          `module "${m.name}" requires "${dep}" to be composed`,
+          `add the "${dep}" module to createApp({ modules })`,
         );
       }
     }
@@ -88,7 +102,8 @@ export function compositionProblems(
           "missing-port",
           m.name,
           port,
-          `module "${m.name}" requires port "${port}" — supply createApp({ ports: { ${port} } })`,
+          `module "${m.name}" requires port "${port}"`,
+          `supply createApp({ ports: { ${port} } })`,
         );
       }
     }
@@ -96,16 +111,17 @@ export function compositionProblems(
   return problems;
 }
 
-/** Throw ONE error listing every composition problem, or return. */
+/** Throw ONE `ArcBootError` listing every composition problem, or return. */
 export function assertComposable(
   modules: readonly Pick<ArcModule, "name" | "dependsOn" | "requires">[],
   ports?: ArcPorts,
 ): void {
   const problems = compositionProblems(modules, ports);
   if (problems.length === 0) return;
-  throw new Error(
+  throw new ArcBootError(
     `[arc] cannot compose the module graph — nothing was booted (${problems.length} problem${problems.length === 1 ? "" : "s"}):\n` +
       problems.map((p) => `  - ${p.message}`).join("\n"),
+    problems.map((p) => ({ code: p.code, module: p.module, message: p.message, fix: p.fix })),
   );
 }
 
@@ -141,8 +157,9 @@ export interface PlanModulesOptions {
 }
 
 /**
- * Dry-run a composition: resolve inputs, activate bridges, order, check requirements — the same
- * functions `createApp` calls, so the plan fails where boot would and orders as boot would.
+ * Dry-run a composition: resolve inputs, activate bridges, order, check requirements and module
+ * invariants — the same functions `createApp` calls, so the plan fails where boot would and
+ * orders as boot would.
  *
  * Thunks ARE invoked (their result is the module); a `LazyBridge` is decided on its declaration
  * and never loaded.
@@ -154,6 +171,8 @@ export async function planModules(
   const { active, skipped } = await declareModules(inputs);
   assertComposable(active, options.ports);
   const ordered = orderModules(active);
+  // An unloaded lazy bridge contributes no facts or invariants here; boot sees its real ones.
+  assertModuleInvariants(ordered);
   return Object.freeze({
     order: Object.freeze(ordered.map((m) => m.name)),
     activeBridges: Object.freeze(ordered.filter((m) => m.kind === "bridge").map((m) => m.name)),
@@ -170,6 +189,8 @@ export async function composeModules(
   assertComposable(active, ports);
   const loaded = await loadActiveBridges(active, lazyByName);
   const modules = orderModules(loaded);
+  // Before any module setup: a module whose facts contradict its invariants never boots.
+  assertModuleInvariants(modules);
   return { modules, skipped };
 }
 

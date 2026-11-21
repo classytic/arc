@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createApp, createWorker, defineModule } from "../../src/factory/index.js";
+import { waitFor } from "../../src/testing/mocks.js";
 
 const ok = () => true;
 
@@ -87,5 +88,39 @@ describe("defineModule — healthChecks", () => {
     // Module checks reached the worker's arc (what the probe registration reads).
     expect(worker.app.arc.healthChecks?.map((c) => c.name)).toEqual(["queue"]);
     await worker.close();
+  });
+});
+
+describe("boot health summary", () => {
+  it("runs module + host checks once at ready and logs one line; a failure never fails boot", async () => {
+    const lines: string[] = [];
+    const app = await createApp({
+      auth: false,
+      logger: { level: "info", stream: { write: (line: string) => lines.push(line) } },
+      modules: [defineModule({ name: "a", healthChecks: [{ name: "a-check", check: ok }] })],
+      arcPlugins: {
+        health: {
+          checks: [
+            {
+              name: "host-check",
+              check: () => {
+                throw new Error("down at boot");
+              },
+            },
+          ],
+        },
+      },
+    });
+    await app.ready();
+    await waitFor(() => lines.some((l) => l.includes("[arc] boot health")), {
+      label: "boot health summary line",
+    });
+    const summary = lines.filter((l) => l.includes("[arc] boot health"));
+    expect(summary).toHaveLength(1);
+    expect(summary[0]).toContain("1/2 passing");
+    expect(summary[0]).toContain("a-check ok");
+    expect(summary[0]).toContain("host-check FAILED");
+    expect(summary[0]).toContain("down at boot");
+    await app.close();
   });
 });

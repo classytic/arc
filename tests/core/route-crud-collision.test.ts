@@ -4,7 +4,7 @@
  * Before 2.17, declaring `routes: [{ method: 'POST', path: '/', ... }]` on a
  * resource that hadn't disabled `create` produced a cryptic
  * `FST_ERR_DUPLICATED_ROUTE` at `app.register()` time — Fastify's error
- * doesn't mention arc's `disabledRoutes` option, doesn't distinguish
+ * doesn't mention arc's `crud` option, doesn't distinguish
  * "collided with auto-CRUD" from "collided with another custom route",
  * and forces the consumer to grep arc's source to discover the fix.
  *
@@ -46,7 +46,7 @@ describe("defineResource — route ↔ auto-CRUD collision detection", () => {
     ).toThrow(/collides with auto-CRUD "create"/);
   });
 
-  it("error message names the exact `disabledRoutes` line to add", () => {
+  it("error message names the exact `crud` line to add", () => {
     try {
       defineResource({
         name: "stat",
@@ -66,7 +66,9 @@ describe("defineResource — route ↔ auto-CRUD collision detection", () => {
     } catch (err) {
       // The actionable fix must be in the message so the dev doesn't grep
       // arc's source.
-      expect((err as Error).message).toContain("disabledRoutes: ['create']");
+      expect((err as Error).message).toContain(
+        "crud: { list: true, get: true, update: true, delete: true }",
+      );
     }
   });
 
@@ -169,7 +171,7 @@ describe("defineResource — route ↔ auto-CRUD collision detection", () => {
     }
   });
 
-  it("does NOT throw when the colliding CRUD op is in `disabledRoutes`", () => {
+  it("does NOT throw when the colliding CRUD op is left out of `crud`", () => {
     // The documented fix — opt out of the auto-CRUD `create` so the custom POST owns `/`.
     expect(() =>
       defineResource({
@@ -177,7 +179,7 @@ describe("defineResource — route ↔ auto-CRUD collision detection", () => {
         prefix: "/stats",
         adapter: mockAdapter(),
         permissions: { list: allowPublic(), get: allowPublic(), create: allowPublic() },
-        disabledRoutes: ["create"],
+        crud: { list: true, get: true, update: true, delete: true },
         routes: [
           {
             method: "POST",
@@ -196,7 +198,7 @@ describe("defineResource — route ↔ auto-CRUD collision detection", () => {
         name: "stat",
         prefix: "/stats",
         permissions: { list: allowPublic() },
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [
           {
             method: "POST",

@@ -23,7 +23,7 @@ async function boot(): Promise<FastifyInstance> {
   const resource = defineResource({
     name: "probe",
     prefix: "/probe",
-    disableDefaultRoutes: true,
+    crud: false,
     routes: [
       {
         method: "POST",

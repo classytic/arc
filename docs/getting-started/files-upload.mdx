@@ -12,7 +12,7 @@ import { s3Storage } from './storage/s3-storage.js';
 export const fileResource = defineResource({
   name: 'file',
   prefix: '/files',
-  disableDefaultRoutes: true, // preset owns every route
+  crud: false, // preset owns every route
   permissions: {
     list: allowPublic(),
     get: allowPublic(),
@@ -34,7 +34,7 @@ That's it. Three routes register on the resource:
 
 | Method | Path | Behavior |
 |--------|------|----------|
-| `POST` | `/files/upload` | Multipart → `storage.upload()` → `{ success: true, data: { id, url, pathname, contentType, bytes, metadata? } }` |
+| `POST` | `/files/upload` | Multipart → `storage.upload()` → 201 `{ id, url, pathname, contentType, bytes, metadata? }` |
 | `GET` | `/files/:id` | Streams bytes back with full HTTP Range support |
 | `DELETE` | `/files/:id` | 204 on success, 404 on already-absent |
 
@@ -106,7 +106,8 @@ filesUploadPreset({
   maxFileSize?: number,                     // default: 10 MB
   allowedMimeTypes?: string[],              // default: no filter
 
-  // Per-route permissions (defaults: upload → requireAuth, read → allowPublic, delete → requireAuth)
+  // Per-route permissions. upload → resource `create`, else requireAuth; delete → `delete`, else requireAuth;
+  // read → resource `get`, else none: boot fails under strictPermissions (allowPublic() = public on purpose)
   permissions?: {
     upload?: PermissionCheck;
     read?: PermissionCheck;
@@ -496,7 +497,7 @@ import { multipartBody } from '@classytic/arc/middleware';
 defineResource({
   name: 'ocr',
   prefix: '/ocr',
-  disableDefaultRoutes: true,
+  crud: false,
   permissions: { /* ... */ },
   routes: [
     {

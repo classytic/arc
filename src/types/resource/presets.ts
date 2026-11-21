@@ -4,6 +4,7 @@
  */
 
 import type { AnyRecord } from "../base.js";
+import type { ControllerHandler } from "../handlers.js";
 import type { ResourceConfig, ResourcePermissions } from "./config.js";
 import type { RouteDefinition } from "./routes.js";
 import type { MiddlewareConfig, RouteSchemaOptions } from "./schemas.js";
@@ -15,10 +16,30 @@ export interface PresetHook {
   priority?: number;
 }
 
+/**
+ * The resource's controller as a preset route builder sees it. `handler:
+ * controller.getStats` runs the method on the real controller (`this`-bound) per
+ * request, so the auto-built `BaseController` works too; a method read this way
+ * is verified at boot. Name the methods you read: `PresetController<"getStats">`.
+ */
+export type PresetController<TMethod extends string = string> = {
+  readonly [K in TMethod]: ControllerHandler;
+};
+
 export interface PresetResult {
   name: string;
-  /** Preset routes — merged into the resource's `routes` array. */
-  routes?: RouteDefinition[] | ((permissions: ResourcePermissions) => RouteDefinition[]);
+  /**
+   * Preset routes, merged into the resource's `routes`. The function form gets the
+   * resource's permissions and its controller: `handler: controller.getStats`
+   * (a method read this way is verified at boot).
+   *
+   * A string `handler`, string `rawHandler` or `controllerMethod` on a preset route
+   * is deprecated like on a resource route: it warns once and is removed in the
+   * next minor.
+   */
+  routes?:
+    | RouteDefinition[]
+    | ((permissions: ResourcePermissions, controller: PresetController) => RouteDefinition[]);
   middlewares?: MiddlewareConfig;
   /**
    * Permission gates the preset contributes as SECURE DEFAULTS. Merged per-op

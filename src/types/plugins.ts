@@ -35,11 +35,12 @@ export interface HealthOptions {
   check?: () => Promise<unknown>;
 }
 
-export interface HealthCheck {
-  healthy: boolean;
-  timestamp: string;
-  [key: string]: unknown;
-}
+/**
+ * @deprecated Use `HealthCheck` from `@classytic/arc/plugins` — this name now aliases it (the
+ * readiness check shape `arcPlugins.health.checks` and module `healthChecks` accept). The old
+ * `{ healthy, timestamp }` result shape matched nothing arc accepts. Removed in a later minor.
+ */
+export type HealthCheck = import("../plugins/health.js").HealthCheck;
 
 export interface IntrospectionPluginOptions {
   path?: string;

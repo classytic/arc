@@ -4,6 +4,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { bootError } from "../../utils/bootError.js";
 import { activateBridges, type SkippedBridge } from "./graph.js";
 import type { ArcModule, ArcModuleInput, LazyBridge, ModuleContribution } from "./types.js";
 
@@ -77,12 +78,16 @@ async function loadLazyBridge(lazy: LazyBridge): Promise<ArcModule> {
     deps !== [...lazy.dependsOn].sort().join(",") ||
     portsKey(m.requires) !== portsKey(lazy.requires)
   ) {
-    throw new Error(
-      `[arc] lazy bridge "${lazy.name}" loaded a module that does not match its declaration ` +
+    throw bootError({
+      code: "lazy-bridge-mismatch",
+      module: lazy.name,
+      message:
+        `[arc] lazy bridge "${lazy.name}" loaded a module that does not match its declaration ` +
         `(got name "${m.name}", kind "${m.kind ?? "domain"}", dependsOn [${deps}], requires ` +
         `${portsKey(m.requires)}). Activation and the requirement check were decided on the declared ` +
         "name + dependsOn + requires, so they must be identical.",
-    );
+      fix: "make the lazy bridge's name, dependsOn and requires equal the loaded module's",
+    });
   }
   return m;
 }
@@ -102,11 +107,14 @@ export async function resolveModule(input: ArcModuleInput): Promise<ArcModule> {
   if (isLazyBridge(input)) return loadLazyBridge(input);
   const resolved = typeof input === "function" ? await input() : await input;
   if (!resolved || typeof resolved !== "object" || typeof resolved.name !== "string") {
-    throw new Error(
-      "[arc] a `modules` entry resolved to something that is not an ArcModule " +
+    throw bootError({
+      code: "module-not-arc-module",
+      message:
+        "[arc] a `modules` entry resolved to something that is not an ArcModule " +
         "(expected an object with a string `name`). Check dynamic-import thunks " +
         "return `createXModule(deps)` (or the module object), not the namespace.",
-    );
+      fix: "return the module object (createXModule(deps)) from the thunk, not the import namespace",
+    });
   }
   // The name is the graph key, the `arc.modules` export key, the `dependsOn`
   // target, and the label in every boot/teardown diagnostic. An empty or
@@ -119,11 +127,14 @@ export async function resolveModule(input: ArcModuleInput): Promise<ArcModule> {
   // contain `@`, `/`, `.` and `-`, so anything stricter would reject valid
   // ecosystem identities for no safety gain.
   if (resolved.name.trim().length === 0) {
-    throw new Error(
-      "[arc] a `modules` entry has an empty (or whitespace-only) `name`. A module's name is its " +
+    throw bootError({
+      code: "module-empty-name",
+      message:
+        "[arc] a `modules` entry has an empty (or whitespace-only) `name`. A module's name is its " +
         "graph key, its `arc.modules` export key, its `dependsOn` target, and its label in every " +
         "boot diagnostic — give it a stable, non-empty identifier.",
-    );
+      fix: "give the module a stable, non-empty name",
+    });
   }
   return resolved;
 }

@@ -72,19 +72,24 @@ describe("Bulk Preset", () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
       const createPerm = Object.assign(() => true, { _isPublic: false });
 
-      const routes = (bulkPreset().routes as Function)({ create: createPerm });
+      const created = { data: [], status: 201 };
+      const bulkCreate = vi.fn(async () => created);
+      const routes = (bulkPreset().routes as Function)({ create: createPerm }, { bulkCreate });
       const postRoute = routes.find((r: { method: string }) => r.method === "POST");
 
       expect(postRoute.permissions).toBe(createPerm);
       expect(postRoute.path).toBe("/bulk");
-      expect(postRoute.handler).toBe("bulkCreate");
+      // Function handler that calls the controller's bulkCreate.
+      const ctx = { body: { items: [] } };
+      await expect(postRoute.handler(ctx)).resolves.toBe(created);
+      expect(bulkCreate).toHaveBeenCalledWith(ctx);
     });
 
     it("PATCH /bulk inherits update permission", async () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
       const updatePerm = Object.assign(() => true, { _isPublic: false });
 
-      const routes = (bulkPreset().routes as Function)({ update: updatePerm });
+      const routes = (bulkPreset().routes as Function)({ update: updatePerm }, {});
       const patchRoute = routes.find((r: { method: string }) => r.method === "PATCH");
 
       expect(patchRoute.permissions).toBe(updatePerm);
@@ -94,7 +99,7 @@ describe("Bulk Preset", () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
       const deletePerm = Object.assign(() => true, { _isPublic: false });
 
-      const routes = (bulkPreset().routes as Function)({ delete: deletePerm });
+      const routes = (bulkPreset().routes as Function)({ delete: deletePerm }, {});
       const deleteRoute = routes.find((r: { method: string }) => r.method === "DELETE");
 
       expect(deleteRoute.permissions).toBe(deletePerm);
@@ -103,7 +108,7 @@ describe("Bulk Preset", () => {
     it("falls back to requireAuth when resource has no permission for operation", async () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
 
-      const routes = (bulkPreset().routes as Function)({});
+      const routes = (bulkPreset().routes as Function)({}, {});
       // Every route should have a permissions function (not undefined)
       for (const route of routes) {
         expect(typeof route.permissions).toBe("function");
@@ -113,11 +118,11 @@ describe("Bulk Preset", () => {
     it("allows selecting specific operations only", async () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
 
-      const onlyCreate = (bulkPreset({ operations: ["createMany"] }).routes as Function)({});
+      const onlyCreate = (bulkPreset({ operations: ["createMany"] }).routes as Function)({}, {});
       expect(onlyCreate).toHaveLength(1);
       expect(onlyCreate[0].method).toBe("POST");
 
-      const onlyDelete = (bulkPreset({ operations: ["deleteMany"] }).routes as Function)({});
+      const onlyDelete = (bulkPreset({ operations: ["deleteMany"] }).routes as Function)({}, {});
       expect(onlyDelete).toHaveLength(1);
       expect(onlyDelete[0].method).toBe("DELETE");
     });
@@ -125,7 +130,7 @@ describe("Bulk Preset", () => {
     it("includes OpenAPI schema on each route", async () => {
       const { bulkPreset } = await import("../../src/presets/bulk.js");
 
-      const routes = (bulkPreset().routes as Function)({});
+      const routes = (bulkPreset().routes as Function)({}, {});
       for (const route of routes) {
         expect(route.schema).toBeDefined();
         expect(route.schema.body).toBeDefined();

@@ -12,7 +12,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { allowPublic, requireAuth, requireRoles } from "../../src/permissions/index.js";
 import { filesUploadPreset } from "../../src/presets/filesUpload.js";
-import type { ResourcePermissions, RouteDefinition } from "../../src/types/index.js";
+import { unresolvedPresetPermission } from "../../src/presets/presetPermission.js";
+import type {
+  PresetController,
+  ResourcePermissions,
+  RouteDefinition,
+} from "../../src/types/index.js";
 import type { Storage } from "../../src/types/storage.js";
 
 function resolveRoutes(
@@ -20,7 +25,10 @@ function resolveRoutes(
   permissions: ResourcePermissions = {},
 ): RouteDefinition[] {
   if (!preset.routes) return [];
-  return typeof preset.routes === "function" ? preset.routes(permissions) : preset.routes;
+  // filesUpload's handlers never touch the controller.
+  return typeof preset.routes === "function"
+    ? preset.routes(permissions, {} as PresetController)
+    : preset.routes;
 }
 
 function fakeStorage(overrides: Partial<Storage> = {}): Storage {
@@ -82,14 +90,18 @@ describe("filesUploadPreset — configuration", () => {
     expect(del?.preHandler).toBeUndefined();
   });
 
-  it("defaults upload permission to requireAuth and read to allowPublic", () => {
+  it("defaults upload/delete to requireAuth; read has no default (unresolved, never public)", () => {
     const routes = resolveRoutes(filesUploadPreset({ storage: fakeStorage() }));
     const upload = routes.find((r) => r.path === "/upload");
     const read = routes.find((r) => r.path === "/:id" && r.method === "GET");
     const del = routes.find((r) => r.path === "/:id" && r.method === "DELETE");
-    expect(upload?.permissions).toBeDefined();
-    expect(read?.permissions).toBeDefined();
-    expect(del?.permissions).toBeDefined();
+    expect(unresolvedPresetPermission(upload?.permissions)).toBeUndefined();
+    expect(unresolvedPresetPermission(del?.permissions)).toBeUndefined();
+    expect(unresolvedPresetPermission(read?.permissions)).toEqual({
+      preset: "filesUpload",
+      inherits: "get",
+      option: "filesUploadPreset({ permissions: { read } })",
+    });
   });
 
   it("honors explicit per-route permissions over resource-level defaults", () => {

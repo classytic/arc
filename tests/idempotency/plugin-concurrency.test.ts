@@ -72,6 +72,10 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
       });
       app = Fastify();
       const warn = vi.spyOn(app.log, "warn");
+      // `allowUnfencedCompletion` is deprecated (one-minor window): it warns once.
+      const { resetDeprecationWarnings } = await import("../../src/logger/deprecation.js");
+      resetDeprecationWarnings();
+      const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const boot = app.register(idempotencyPlugin, {
         enabled: true,
         store: legacy,
@@ -81,6 +85,12 @@ describe("idempotencyPlugin — concurrent requests with same key", () => {
         await boot;
         expect(warn).toHaveBeenCalledWith(expect.stringContaining("unfenced"));
       } else await expect(boot).rejects.toThrow(/atomic setIfLocked/);
+      const deprecations = consoleWarn.mock.calls
+        .map((c) => c.join(" "))
+        .filter((l) => l.includes("`allowUnfencedCompletion` option is deprecated"));
+      consoleWarn.mockRestore();
+      expect(deprecations).toHaveLength(1);
+      expect(deprecations[0]).toContain("setIfLocked");
       await inner.close();
     },
   );

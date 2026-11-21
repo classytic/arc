@@ -217,7 +217,7 @@ describe("v2.8: routes + actions", () => {
     expect(() =>
       defineResource({
         name: "bad2",
-        disableDefaultRoutes: true,
+        crud: false,
         actions: {
           create: async () => ({}),
         },
@@ -229,7 +229,7 @@ describe("v2.8: routes + actions", () => {
     expect(() =>
       defineResource({
         name: "bad3",
-        disableDefaultRoutes: true,
+        crud: false,
         actions: {
           approve: { handler: "not a function" as unknown as () => Promise<unknown> },
         },
@@ -256,8 +256,8 @@ describe("v2.8: routes — extended", () => {
 
     const controller = new BaseController(repo, { resourceName: "routeExt", tenantField: false });
 
-    // Add a custom method on the controller for string handler test
-    (controller as Record<string, unknown>).getStats = async () => ({
+    // A custom controller method, reached from a function handler.
+    const getStats = async () => ({
       success: true,
       data: { total: 42 },
     });
@@ -281,7 +281,8 @@ describe("v2.8: routes — extended", () => {
           path: "/stats",
           summary: "Get stats",
           permissions: allowPublic(),
-          handler: "getStats",
+          operation: "getStats",
+          handler: () => getStats(),
         },
         {
           method: "GET",
@@ -410,7 +411,7 @@ describe("v2.8: routes — extended", () => {
   it("route mcp: false is stored correctly on resource definition", () => {
     const resource = defineResource({
       name: "mcpTest",
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -653,7 +654,7 @@ describe("v2.8: edge cases", () => {
       name: "workflow",
       displayName: "Workflows",
       prefix: "/workflows",
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         start: async (id) => ({ id, started: true }),
         stop: async (id) => ({ id, stopped: true }),
@@ -694,7 +695,7 @@ describe("v2.8: edge cases", () => {
       name: "health",
       displayName: "Health",
       prefix: "/health",
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -741,7 +742,7 @@ describe("v2.8: edge cases", () => {
       name: "emptyAct",
       displayName: "Empty Actions",
       prefix: "/empty-act",
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {},
     });
 
@@ -1034,7 +1035,7 @@ describe("2.31: removed `raw` flag is fatal, not ignored", () => {
     expect(() =>
       defineResource({
         name: "stale-flag",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [staleRoute] as unknown as Parameters<typeof defineResource>[0]["routes"],
       }),
     ).toThrow(/`raw` was removed in arc 2\.31/);
@@ -1045,7 +1046,7 @@ describe("2.31: removed `raw` flag is fatal, not ignored", () => {
     try {
       defineResource({
         name: "stale-flag-2",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [staleRoute] as unknown as Parameters<typeof defineResource>[0]["routes"],
       });
     } catch (err) {

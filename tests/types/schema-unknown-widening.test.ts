@@ -91,7 +91,7 @@ describe("RouteDefinition.schema slots remain Zod-friendly (sister convention)",
     const def: RouteDefinition = {
       method: "POST",
       path: "/products",
-      handler: "create",
+      handler: async () => ({ data: null }),
       // Route permissions are REQUIRED (crud-public-by-omission closed in 2.20)
       permissions: (() => true) as unknown as RouteDefinition["permissions"],
       schema: { body: bodySchema },

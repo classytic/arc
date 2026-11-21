@@ -22,12 +22,13 @@
  * export const fileResource = defineResource({
  *   name: 'file',
  *   prefix: '/files',
- *   disableDefaultRoutes: true, // preset owns every route
+ *   crud: false, // preset owns every route
  *   presets: [
  *     filesUploadPreset({
  *       storage: s3Storage({ bucket: 'my-app', ... }),
  *       allowedMimeTypes: ['image/png', 'image/jpeg', 'application/pdf'],
  *       maxFileSize: 5 * 1024 * 1024,
+ *       permissions: { read: allowPublic() }, // or a role; unset fails boot under strict
  *     }),
  *   ],
  * });
@@ -36,7 +37,7 @@
 
 import type { FastifyReply, FastifyRequest, RouteHandlerMethod } from "fastify";
 import { multipartBody } from "../middleware/multipartBody.js";
-import { allowPublic, requireAuth } from "../permissions/index.js";
+import { requireAuth } from "../permissions/index.js";
 import type { RequestScope } from "../scope/types.js";
 import { getOrgId, getUserId } from "../scope/types.js";
 import type {
@@ -53,6 +54,7 @@ import type {
   StorageReadResult,
 } from "../types/storage.js";
 import { NotFoundError, ValidationError } from "../utils/errors.js";
+import { presetPermission } from "./presetPermission.js";
 
 // ============================================================================
 // Options
@@ -109,7 +111,9 @@ export interface FilesUploadPresetOptions {
 
   /**
    * Per-route permissions.
-   * Defaults: upload → `requireAuth()`, read → `allowPublic()`, delete → `requireAuth()`.
+   * Defaults: upload → `permissions.create`, else `requireAuth()`; delete → `permissions.delete`,
+   * else `requireAuth()`; read → `permissions.get`, else NONE: boot fails under strict
+   * permissions (`allowPublic()` here makes downloads public on purpose).
    */
   permissions?: FilesUploadPresetPermissions;
 
@@ -478,7 +482,11 @@ export function filesUploadPreset(options: FilesUploadPresetOptions): PresetResu
           operation: "filesUpload.read",
           summary: "Download a file",
           description: "Streams the stored bytes. Supports single-range `Range: bytes=start-end`.",
-          permissions: options.permissions?.read ?? permissions.get ?? allowPublic(),
+          permissions: presetPermission(options.permissions?.read ?? permissions.get, {
+            preset: "filesUpload",
+            inherits: "get",
+            option: "filesUploadPreset({ permissions: { read } })",
+          }),
           rawHandler: makeReadHandler(deps),
           // MCP tool generation skipped — binary routes aren't useful as MCP tools.
           mcp: false,

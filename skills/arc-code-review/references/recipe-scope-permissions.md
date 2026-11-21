@@ -41,7 +41,7 @@ defineResource({
 | target org inside caller's hierarchy | `requireOrgInScope(targetId)` |
 | same gate on all CRUD keys | `permissionMatrix({ read, write, delete? })` |
 | role by resource by action table | `createDynamicPermissionMatrix` |
-| common shapes | `permissions.publicReadAdminWrite()`, `publicRead`, `adminOnly`, `readOnly` |
+| common shapes | `publicReadAdminWrite()`, `publicRead()`, `adminOnly()`, `readOnly()` |
 
 ## Scope accessors instead of `req.user`
 

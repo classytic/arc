@@ -33,7 +33,7 @@ This generates ~16 tests:
 
 - **CRUD** — `POST` create, `GET` list, `GET /:id`, `PATCH` or `PUT` (or both) `/:id`, `DELETE /:id`, 404 probes
 - **Permissions** — unauthenticated 401 **only for protected ops**, admin succeeds on every op
-- **Validation** — invalid payload is rejected with 4xx + `success: false`
+- **Validation** — invalid payload is rejected with 4xx
 
 The harness reads `resource.permissions` to decide which ops get a "without auth should 401" assertion. Ops declared with `allowPublic()` (or with no permission at all) are skipped — arc correctly serves them to anonymous requests, so asserting 401 would produce a false failure.
 
@@ -68,8 +68,8 @@ harness.runValidation();
 
 The harness reads the resource definition:
 
-- `disabledRoutes: ['delete']` → delete tests are skipped
-- `disableDefaultRoutes: true` → no CRUD tests (useful for action-only or custom-routes-only resources)
+- `crud: { list: true, get: true, create: true, update: true }` → delete tests are skipped
+- `crud: false` → no CRUD tests (useful for action-only or custom-routes-only resources)
 - `updateMethod: 'PUT' | 'PATCH' | 'both'` → exercises every verb the resource exposes (`'both'` runs PATCH AND PUT)
 - `permissions[op]` → determines whether a "401 without auth" assertion is emitted (public ops skip it)
 

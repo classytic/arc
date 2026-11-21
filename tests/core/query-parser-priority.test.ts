@@ -46,7 +46,7 @@ describe("QueryParser schema priority", () => {
 
     const resource = defineResource({
       name: "product",
-      disableDefaultRoutes: true, // skip adapter requirement for unit test
+      crud: false, // skip adapter requirement for unit test
       // biome-ignore lint: mock adapter for unit test
       adapter: mockAdapter as any,
       // biome-ignore lint: mock parser for unit test
@@ -99,7 +99,7 @@ describe("QueryParser schema priority", () => {
 
     const resource = defineResource({
       name: "product",
-      disableDefaultRoutes: true,
+      crud: false,
       // biome-ignore lint: mock parser for unit test
       queryParser: mockParser as any,
       openApiSchemas: { listQuery: customListQuery },

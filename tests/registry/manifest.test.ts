@@ -32,7 +32,7 @@ function makeResource(name = "invoice") {
     name,
     prefix: `/${name}s`,
     permissions: { list: allowPublic(), get: allowPublic() },
-    disableDefaultRoutes: true,
+    crud: false,
     actions: {
       // Id-bound: legacy default.
       recordPayment: {
@@ -77,8 +77,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
       },
       // Use a service-controller pattern so we don't need an adapter
       // — same shape the manifest cares about.
-      disableDefaultRoutes: true,
-      disabledRoutes: [],
+      crud: false,
     });
     // For this test we re-derive via the manifest by toggling the flag
     // through a separate resource — the contract under test is that
@@ -95,7 +94,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
       },
       // `disableDefaultRoutes: true` skips ALL CRUD ops — the explicit
       // CRUD-off path we exercise in this unit suite.
-      disableDefaultRoutes: true,
+      crud: false,
     });
     expect(buildResourceManifest(r).crudOps).toEqual([]);
     expect(buildResourceManifest(r2).crudOps).toEqual([]);
@@ -127,7 +126,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
       name: "ticket",
       prefix: "/tickets",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       actions: {
         approve: async (id) => ({ id, approved: true }),
         reject: async (id) => ({ id, rejected: true }),
@@ -147,7 +146,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
       name: "order",
       prefix: "/orders",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       aggregations: {
         revenueByDay: {
           summary: "Revenue per day",
@@ -174,7 +173,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
       prefix: "/docs",
       tenantField: "workspaceId",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     expect(buildResourceManifest(r).tenantField).toBe("workspaceId");
   });
@@ -182,7 +181,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
   it("publishes the concurrency versionField (defaulted) — clients send If-Match from it", () => {
     const base = {
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     } as const;
     const defaulted = defineResource({ name: "o", prefix: "/os", concurrency: {}, ...base });
     const custom = defineResource({
@@ -204,7 +203,7 @@ describe("buildResourceManifest — from a live ResourceDefinition", () => {
       name: "tag",
       prefix: "/tags",
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     const m = buildResourceManifest(r);
     expect(Array.isArray(m.actions)).toBe(true);
@@ -250,7 +249,7 @@ describe("buildResourceManifestFromRegistry — from a registered entry", () => 
       idField: "code",
       concurrency: { versionField: "rev" },
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
     const registry = new ResourceRegistry();
     registry.register(r);

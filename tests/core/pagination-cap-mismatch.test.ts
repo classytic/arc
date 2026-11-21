@@ -39,7 +39,7 @@ const build = (parserCap?: number, repoCap?: number) =>
     adapter: adapterWithRepoCap(repoCap),
     queryParser: parser(parserCap),
     permissions: { list: allowPublic(), get: allowPublic() },
-    disabledRoutes: ["create", "update", "delete"],
+    crud: { list: true, get: true },
   });
 
 describe("pagination cap mismatch", () => {

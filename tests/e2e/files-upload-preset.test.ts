@@ -107,7 +107,7 @@ describe("filesUploadPreset — e2e", () => {
     const fileResource = defineResource({
       name: "file",
       prefix: "/files",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -309,7 +309,7 @@ describe("filesUploadPreset — user route coexistence", () => {
     const fileResource = defineResource({
       name: "file",
       prefix: "/files",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),

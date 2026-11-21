@@ -41,17 +41,21 @@ await fastify.register(healthPlugin, {
 
 // /_health/ready (all checks pass)
 {
-  "status": "ok",
-  "checks": {
-    "database": { "status": "ok", "latency": 5 },
-    "redis": { "status": "ok", "latency": 12 }
-  }
+  "status": "ready",
+  "timestamp": "...",
+  "checks": [
+    { "name": "database", "healthy": true, "duration": 5 },
+    { "name": "redis", "healthy": true, "duration": 12 }
+  ]
 }
 
-// /_health/ready (check fails)
-{ "status": "error", "checks": { "database": { "status": "error" } } }
-// Returns 503 status code
+// /_health/ready (a critical check fails): 503
+{ "status": "not_ready", "timestamp": "...", "checks": [{ "name": "database", "healthy": false, "duration": 5001 }] }
 ```
+
+The readiness response carries check names and pass/fail only. Health registers before auth, so a failing check's error text (hostnames, driver messages) goes to the log as `[arc] readiness check failed`, never to the response.
+
+**Boot summary.** When the app is ready, `createApp` (and `createWorker` with a probe) runs every registered check once, respecting each check's timeout, and logs one line such as `[arc] boot health: 1/2 passing — mongo ok (4ms), redis FAILED (3001ms)`. It is log output only: it never delays or fails boot. Under `preset: 'production'` with no critical check registered, the line says so, because `/_health/ready` can then never report `not_ready`.
 
 ---
 

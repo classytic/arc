@@ -1,98 +1,77 @@
 /**
- * Tracing Plugin Tests
+ * Tracing Plugin Tests — registration and the no-tracer paths, with the real SDK installed.
  *
- * Tests the OpenTelemetry tracing plugin behavior:
- * - No-op when OTel packages not installed (graceful degradation)
- * - createSpan utility (no-op without tracing, executes fn)
- * - traced decorator (no-op without tracing context)
- * - isTracingAvailable() reports correct state
+ * - isTracingAvailable() reports the core packages (installed as devDependencies)
+ * - the plugin registers its own provider when the host has none, and flushes it on close
+ * - createSpan / traced run the wrapped function unchanged when a request has no tracer
+ *   (sampled out, or tracing never registered)
  *
- * Note: We do NOT install @opentelemetry/* in test deps (they're optional peer deps).
- * Tests verify the graceful degradation path — the "OTel not available" codepath
- * that ALL users hit unless they explicitly install OTel packages.
+ * The "package missing" paths are covered by tracing-semconv.test.ts (mocked loader);
+ * span content by tracing-otel.test.ts.
  */
 
+import { context, propagation, trace } from "@opentelemetry/api";
 import Fastify, { type FastifyInstance } from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import tracingPlugin, {
   createSpan,
   isTracingAvailable,
   traced,
 } from "../../src/plugins/tracing.js";
 
-// ============================================================================
-// isTracingAvailable — reports OTel availability
-// ============================================================================
+function descriptorOf(target: object, key: string): PropertyDescriptor {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  if (!descriptor) throw new Error(`no descriptor for ${key}`);
+  return descriptor;
+}
+
+afterAll(() => {
+  trace.disable();
+  context.disable();
+  propagation.disable();
+});
 
 describe("isTracingAvailable", () => {
-  it("should return false when @opentelemetry packages are not installed", () => {
-    // In test environment, OTel is not installed (optional peer dep)
-    expect(isTracingAvailable()).toBe(false);
+  it("is true when api, sdk-trace, resources and semantic-conventions load", () => {
+    expect(isTracingAvailable()).toBe(true);
   });
 });
 
-// ============================================================================
-// tracingPlugin — graceful no-op when OTel not installed
-// ============================================================================
-
-describe("tracingPlugin — no-op mode", () => {
-  let app: FastifyInstance;
+describe("tracingPlugin — registration", () => {
+  let app: FastifyInstance | undefined;
 
   afterEach(async () => {
-    if (app) await app.close().catch(() => {});
+    if (app) await app.close();
+    app = undefined;
   });
 
-  it("should register successfully without OTel packages", async () => {
+  it("registers with all options and closes cleanly", async () => {
     app = Fastify({ logger: false });
     await app.register(tracingPlugin, {
-      serviceName: "test-service",
-      exporterUrl: "http://localhost:4318/v1/traces",
+      serviceName: "full-options-test",
+      serviceVersion: "1.2.3",
+      exporterUrl: "http://127.0.0.1:4318/v1/traces",
+      autoInstrumentation: false,
+      sampleRate: 0.5,
     });
     await app.ready();
-
-    // Plugin registered without error
-    expect(app).toBeDefined();
+    expect(app.hasRequestDecorator("tracer")).toBe(true);
   });
 
-  it("should not decorate request.tracer when OTel not available", async () => {
+  it("sampleRate 0 leaves request.tracer unset", async () => {
     app = Fastify({ logger: false });
-    await app.register(tracingPlugin);
+    await app.register(tracingPlugin, { sampleRate: 0, autoInstrumentation: false });
 
     let tracerValue: unknown = "NOT_CHECKED";
     app.get("/test", async (request) => {
-      tracerValue = (request as any).tracer;
+      tracerValue = request.tracer;
       return { ok: true };
     });
-
     await app.ready();
 
     const res = await app.inject({ method: "GET", url: "/test" });
     expect(res.statusCode).toBe(200);
-    // tracer should not be set (plugin is no-op)
     expect(tracerValue).toBeUndefined();
-  });
-
-  it("should handle all tracing options without error", async () => {
-    app = Fastify({ logger: false });
-    await app.register(tracingPlugin, {
-      serviceName: "full-options-test",
-      exporterUrl: "http://otel-collector:4318/v1/traces",
-      autoInstrumentation: true,
-      sampleRate: 0.5,
-    });
-    await app.ready();
-
-    expect(app).toBeDefined();
-  });
-
-  it("should handle zero sample rate", async () => {
-    app = Fastify({ logger: false });
-    await app.register(tracingPlugin, {
-      sampleRate: 0.0,
-    });
-    await app.ready();
-
-    expect(app).toBeDefined();
   });
 });
 
@@ -163,7 +142,7 @@ describe("traced decorator — no-op mode (applied manually)", () => {
     }
 
     // Apply decorator manually
-    const descriptor = Object.getOwnPropertyDescriptor(TestRepo.prototype, "findActive")!;
+    const descriptor = descriptorOf(TestRepo.prototype, "findActive");
     traced()(TestRepo.prototype, "findActive", descriptor);
     Object.defineProperty(TestRepo.prototype, "findActive", descriptor);
 
@@ -179,7 +158,7 @@ describe("traced decorator — no-op mode (applied manually)", () => {
       }
     }
 
-    const descriptor = Object.getOwnPropertyDescriptor(TestRepo.prototype, "findById")!;
+    const descriptor = descriptorOf(TestRepo.prototype, "findById");
     traced("custom.findById")(TestRepo.prototype, "findById", descriptor);
     Object.defineProperty(TestRepo.prototype, "findById", descriptor);
 
@@ -195,7 +174,7 @@ describe("traced decorator — no-op mode (applied manually)", () => {
       }
     }
 
-    const descriptor = Object.getOwnPropertyDescriptor(TestRepo.prototype, "failingMethod")!;
+    const descriptor = descriptorOf(TestRepo.prototype, "failingMethod");
     traced()(TestRepo.prototype, "failingMethod", descriptor);
     Object.defineProperty(TestRepo.prototype, "failingMethod", descriptor);
 
@@ -210,7 +189,7 @@ describe("traced decorator — no-op mode (applied manually)", () => {
       }
     }
 
-    const descriptor = Object.getOwnPropertyDescriptor(TestRepo.prototype, "search")!;
+    const descriptor = descriptorOf(TestRepo.prototype, "search");
     traced()(TestRepo.prototype, "search", descriptor);
     Object.defineProperty(TestRepo.prototype, "search", descriptor);
 

@@ -142,6 +142,7 @@ export { getUserRoles, normalizeRoles } from "./types.js";
 // ──────────────────────────────────────────────────────────────────────
 // Convenience presets — common patterns in one call
 // ──────────────────────────────────────────────────────────────────────
+import { deprecatedNamespace } from "../logger/deprecation.js";
 import * as presets from "./presets.js";
 
 export {
@@ -177,13 +178,14 @@ export {
   resolveResourceRateLimiter,
 } from "./resourceRateLimit.js";
 /**
- * Namespace alias for all preset bundles. Use either form:
+ * Namespace alias for the preset bundles.
  *
- * ```typescript
- * import { permissions, publicRead } from '@classytic/arc/permissions';
- *
- * defineResource({ permissions: permissions.publicRead() });
- * defineResource({ permissions: publicRead() });
- * ```
+ * @deprecated Import the preset itself: `import { publicRead } from
+ * '@classytic/arc/permissions'` then `permissions: publicRead()`. Warns once per
+ * process; removed in the next minor.
  */
-export { presets as permissions };
+export const permissions: typeof presets = /* @__PURE__ */ deprecatedNamespace(
+  presets,
+  "The `permissions` namespace export",
+  "Import the preset directly: `import { publicRead } from '@classytic/arc/permissions'`.",
+);

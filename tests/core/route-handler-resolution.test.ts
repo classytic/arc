@@ -57,7 +57,7 @@ describe("Fix #1 — resourceToTools resolves controllerMethod (no tsc regressio
       prefix: "/stats",
       controller: ctrl,
       permissions: { list: allowPublic(), get: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "POST",
@@ -85,7 +85,7 @@ describe("Fix #1 — resourceToTools resolves controllerMethod (no tsc regressio
       name: "noctrl",
       prefix: "/noctrl",
       permissions: { list: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
       // Function handler so the validator accepts the resource at boot.
       routes: [
         {
@@ -148,7 +148,7 @@ describe("Fix #3 — ResourceRegistry.reset() clears _adapters", () => {
       // biome-ignore lint/suspicious/noExplicitAny: adapter stub shape
       adapter: { type: "mock", name: "leak-probe", repository: repo } as any,
       permissions: { list: allowPublic() },
-      disableDefaultRoutes: true,
+      crud: false,
     });
 
     registry.register(resource);

@@ -42,7 +42,7 @@ describe("undeclared events — observed at the transport", () => {
     });
     await outbox.store(createEvent("order:placed", {}));
     await outbox.store(createEvent("boom", {}));
-    await outbox.relay();
+    await outbox.relayBatch();
     expect(seen).toEqual(["order:placed"]);
   });
 });

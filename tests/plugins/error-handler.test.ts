@@ -804,6 +804,31 @@ describe("Error Handler Plugin", () => {
       expect(body.code).toBe("arc.internal_error");
       // ErrorContract no longer carries body.timestamp — only code/message/status/details/meta/correlationId.
     });
+
+    it("logs the 500 with its code, route template and method", async () => {
+      const logs: Array<Record<string, unknown>> = [];
+      app = Fastify({
+        logger: {
+          level: "error",
+          stream: { write: (line: string) => void logs.push(JSON.parse(line)) },
+        },
+      });
+      await app.register(errorHandlerPlugin, { includeStack: false });
+      app.post("/orders/:id", async () => {
+        throw new Error("driver exploded");
+      });
+      await app.ready();
+
+      await app.inject({ method: "POST", url: "/orders/42" });
+
+      const record = logs.find((l) => l.msg === "Server error");
+      expect(record).toMatchObject({
+        status: 500,
+        code: "arc.internal_error",
+        route: "/orders/:id",
+        method: "POST",
+      });
+    });
   });
 
   // ========================================================================

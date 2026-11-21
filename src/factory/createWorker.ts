@@ -36,7 +36,7 @@
 
 import type { FastifyInstance } from "fastify";
 import type { HealthCheck, HealthOptions } from "../plugins/health.js";
-import { healthPlugin, mergeHealthChecks } from "../plugins/health.js";
+import { healthPlugin, logBootHealthSummary, mergeHealthChecks } from "../plugins/health.js";
 import { createApp } from "./createApp.js";
 import { getModuleExports } from "./module/index.js";
 import { workerPreset } from "./presets.js";
@@ -129,6 +129,11 @@ export async function createWorker(
       await app.register(healthPlugin, {
         ...sharedHealth,
         checks: mergedChecks,
+      });
+      // Same one-line boot summary the API role logs; never awaited, never fatal.
+      app.addHook("onReady", (done) => {
+        void logBootHealthSummary(app.log, mergedChecks);
+        done();
       });
       await app.listen({ port, host });
     } else {

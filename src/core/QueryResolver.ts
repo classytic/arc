@@ -190,6 +190,24 @@ export class QueryResolver {
   }
 
   /**
+   * The row scope a list read applies, in the record dialect: `base` AND the permission
+   * layer's `_policyFilters` AND the tenant filter `resolveTenancy` decides. `resolve`
+   * builds every list filter from it; reads that cannot take the parsed query (search) use
+   * it alone.
+   */
+  scopeFilter(arcContext: ArcInternalMetadata | undefined, base?: AnyRecord): AnyRecord {
+    const policyFilters = arcContext?._policyFilters;
+    let filters: AnyRecord = conjoinPolicyFilters(base, policyFilters);
+    const tenancy = resolveTenancy(arcContext, this.tenantField);
+    if (tenancy.mode === "scoped" && !policyFilters?.[tenancy.field]) {
+      // Only set if not already set by multiTenant preset — conjoined, so it
+      // can't clobber (or be clobbered by) an existing constraint on the key.
+      filters = conjoinPolicyFilters(filters, { [tenancy.field]: tenancy.orgId });
+    }
+    return filters;
+  }
+
+  /**
    * Resolve a request into parsed query options -- ONE parse per request.
    * Combines what was previously _buildContext + _parseQueryOptions + _applyFilters.
    */
@@ -270,21 +288,7 @@ export class QueryResolver {
     // `conjoinPolicyFilters` (logical AND) rather than `Object.assign`: a
     // security restriction can never be silently overwritten by a same-key
     // user-supplied filter, and vice-versa. Records only in, IR out.
-    const policyFilters = arcContext?._policyFilters;
-    let filters: AnyRecord = conjoinPolicyFilters(
-      parsed.filters as AnyRecord | undefined,
-      policyFilters,
-    );
-
-    // Org/tenant scope — the decision is `resolveTenancy`'s, shared with every
-    // other layer that scopes a read (see `core/tenancy.ts` for why it is not
-    // re-derived here).
-    const tenancy = resolveTenancy(arcContext, this.tenantField);
-    if (tenancy.mode === "scoped" && !policyFilters?.[tenancy.field]) {
-      // Only set if not already set by multiTenant preset — conjoined, so it
-      // can't clobber (or be clobbered by) an existing constraint on the key.
-      filters = conjoinPolicyFilters(filters, { [tenancy.field]: tenancy.orgId });
-    }
+    const filters = this.scopeFilter(arcContext, parsed.filters as AnyRecord | undefined);
 
     // Normalize `$`-operator policy/query filters (`$or` from requireGrant,
     // `$and` from conjoinPolicyFilters, `$gte` from the Mongo-dialect parser)

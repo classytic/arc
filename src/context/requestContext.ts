@@ -29,6 +29,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { warnDeprecated } from "../logger/deprecation.js";
 
 /** What started this unit of work. See `workScope.ts`. */
 export type WorkKind = "request" | "event" | "job";
@@ -76,7 +77,7 @@ const storage = new AsyncLocalStorage<RequestStore>();
  *
  * - `get()` — returns current store or undefined if outside request scope
  * - `run(store, fn)` — run a function with a specific store (used by Arc internals)
- * - `getStore()` — alias for get() (matches Node.js API naming)
+ * - `getStore()` — deprecated alias for get()
  */
 export const requestContext = {
   /**
@@ -88,9 +89,13 @@ export const requestContext = {
   },
 
   /**
-   * Alias for get() — matches Node.js AsyncLocalStorage API naming.
+   * Alias for get().
+   *
+   * @deprecated Use `requestContext.get()`. Warns once per process; removed
+   * in the next minor.
    */
   getStore(): RequestStore | undefined {
+    warnDeprecated("`requestContext.getStore()`", "Use `requestContext.get()`.");
     return storage.getStore();
   },
 

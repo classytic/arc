@@ -62,7 +62,7 @@ export function resolveOrAutoCreateController<TDoc extends object>(
           "over a READ-ONLY repository — its rows are owned by another component that enforces " +
           "invariants generic CRUD would bypass (Better Auth hashes passwords, revokes sessions, " +
           "and cascades org membership on every write it performs). Disable the write routes " +
-          "(`disabledRoutes: ['create', 'update', 'delete']`), or if raw writes are genuinely " +
+          "(`crud: { list: true, get: true }`), or if raw writes are genuinely " +
           "required, build the repository with the kit's explicit `unsafeWritable: true` opt-in.",
       );
     }

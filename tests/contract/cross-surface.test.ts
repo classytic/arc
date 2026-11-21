@@ -93,7 +93,8 @@ function buildOrderResource(): ResourceDefinition<OrderDoc> {
       {
         method: "POST",
         path: "/checkout",
-        handler: "checkout",
+        operation: "checkout",
+        handler: async () => ({ data: { ok: true } }),
         permissions: requireRoles(["customer"]),
         summary: "Run the checkout flow",
       },
@@ -189,7 +190,7 @@ describe("Cross-surface contract — registry / OpenAPI / CLI describe / CLI int
       name: "metrics",
       prefix: "/metrics",
       skipValidation: true,
-      disableDefaultRoutes: true,
+      crud: false,
       controller: stubController() as never,
       permissions: {
         list: allowPublic(),
@@ -366,8 +367,7 @@ describe("Cross-surface contract — registry / OpenAPI / CLI describe / CLI int
     expect(described.routes.some((r) => r.path === customPath && r.method === "POST")).toBe(true);
 
     // MCP — POST custom routes become tools (named by `operation` or
-    // slugified path). The `checkout` handler is a string handler, so
-    // MCP requires a controller (we provided one in the fixture).
+    // slugified path).
     const tools = resourceToTools(fixture as never);
     expect(tools.find((t) => t.name.includes("checkout"))).toBeDefined();
   });

@@ -5,7 +5,8 @@
  * All functions read `request.scope` (set by auth adapters).
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { resetDeprecationWarnings } from "../../src/logger/deprecation.js";
 import {
   anyOf,
   createOrgPermissions,
@@ -290,10 +291,24 @@ describe("createOrgPermissions", () => {
 });
 
 // ============================================================================
-// roles() — unified helper (platform + org)
+// roles() — DEPRECATED alias of requireRoles() (one-minor window)
 // ============================================================================
 
 describe("roles() — unified platform + org check", () => {
+  it("is deprecated: warns once naming requireRoles()", () => {
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    roles("admin");
+    roles("editor");
+    const lines = warn.mock.calls.map((c) => c.join(" "));
+    const deprecations = lines.filter((l) =>
+      l.includes("`roles()` from @classytic/arc/permissions is deprecated"),
+    );
+    expect(deprecations).toHaveLength(1);
+    expect(deprecations[0]).toContain("requireRoles(...)");
+    warn.mockRestore();
+  });
+
   it("grants when platform role matches", () => {
     const check = roles("admin");
     const result = check(makeCtx({ user: { id: "u1", role: "admin" } }));

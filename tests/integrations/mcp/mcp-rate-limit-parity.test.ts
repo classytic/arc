@@ -144,7 +144,7 @@ describe("resource rate-limit transport parity", () => {
           }),
         },
       },
-      disabledRoutes: ["get", "create", "update", "delete"],
+      crud: { list: true },
       permissions: { list: requireRoles(["admin"]) },
       actions: {
         approve: { permissions: requireRoles(["admin"]), handler: async () => ({ ok: true }) },
@@ -237,7 +237,7 @@ describe("resource rate-limit transport parity", () => {
         },
       },
       permissions: { list: allowPublic(), get: allowPublic() },
-      disabledRoutes: ["create", "update", "delete"],
+      crud: { list: true, get: true },
       rateLimit: { max: 2, timeWindow: "1 minute" },
     });
     await app.register(resource.toPlugin());

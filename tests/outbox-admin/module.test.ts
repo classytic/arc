@@ -47,7 +47,7 @@ const reply = () => {
 };
 
 /** A server stand-in exposing one relay through the module registry. */
-const serverWithRelay = (relay: { relay: () => Promise<number> }) =>
+const serverWithRelay = (relay: { relayBatch: () => Promise<{ relayed: number }> }) =>
   ({ arc: { modules: { outbox: { relay } } } }) as never;
 
 const build = (store: MemoryOutboxStore, over: Record<string, unknown> = {}) =>
@@ -235,7 +235,7 @@ describe("createOutboxAdminModule", () => {
        */
       const store = new MemoryOutboxStore();
       vi.spyOn(store, "requeue").mockResolvedValue(false);
-      const relay = { relay: vi.fn(async () => 0) };
+      const relay = { relayBatch: vi.fn(async () => ({ relayed: 0 })) };
 
       await expect(
         route(build(store), "POST", "/dead-letter/:id/replay").rawHandler(
@@ -245,13 +245,13 @@ describe("createOutboxAdminModule", () => {
       ).rejects.toThrow(/not found, or not currently dead-lettered/);
 
       // And it must not drain: a relay tick would make the failure look like work.
-      expect(relay.relay).not.toHaveBeenCalled();
+      expect(relay.relayBatch).not.toHaveBeenCalled();
     });
 
     it("requeues, drains, and says the count is the whole batch", async () => {
       const store = new MemoryOutboxStore();
       vi.spyOn(store, "requeue").mockResolvedValue(true);
-      const relay = { relay: vi.fn(async () => 3) };
+      const relay = { relayBatch: vi.fn(async () => ({ relayed: 3 })) };
       const r = reply();
 
       await route(build(store), "POST", "/dead-letter/:id/replay").rawHandler(
@@ -260,7 +260,7 @@ describe("createOutboxAdminModule", () => {
       );
 
       expect(store.requeue).toHaveBeenCalledWith("evt-1");
-      expect(relay.relay).toHaveBeenCalledTimes(1);
+      expect(relay.relayBatch).toHaveBeenCalledTimes(1);
       // The note matters: replaying one id delivers everything else pending too,
       // so a bare `relayDelivered: 3` reads as "my event went out three times".
       expect(r.sent.body).toMatchObject({ eventId: "evt-1", requeued: true, relayDelivered: 3 });

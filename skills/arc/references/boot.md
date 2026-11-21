@@ -34,6 +34,21 @@ Boot order is fixed: `beforeBoot` -> module graph -> arc core -> `plugins` -> `b
 | `stores` | event transport, query cache, idempotency, etc.; arc closes only stores it built |
 | `rateLimit.plan` | per-plan ceilings: `{ resolve, limits: { free: { max: 60 }, enterprise: false }, default }` |
 
+### Module facts and invariants
+
+A module whose config decisions contradict each other should fail boot, not its first request:
+
+```typescript
+defineModule({
+  name: 'media',
+  facts: { driver: cfg.driver, uploadReceiver: cfg.receiver },   // plain data, never secrets
+  invariants: [{ code: 'media.upload-receiver', fix: 'enable the receiver or use a cloud driver',
+    check: (f, all) => f.driver !== 'local' || f.uploadReceiver || 'local driver, receiver off' }],
+});
+```
+
+`check` is pure and sync: `true` passes, `false` or a reason string fails; `all` maps every composed module's facts by name. Runs after planning, before any module `plugins`/`bootstrap`, under every preset; all failures throw one `ArcBootError` (`problems: [{ code, module, message, fix }]`). Every createApp config failure is an `ArcBootError` with a code: match `err.code` / `err.problems`, not message text.
+
 `createWorker(sameOptions)` (`@classytic/arc/factory`) boots the headless process: no HTTP, runs events, schedules and relays. Error disclosure (`includeStack`, `exposeInternalMessages`) derives from `preset`, else the environment; host keys merge over the derived pair.
 
 Unknown routes answer `404 { code: 'arc.not_found', message, status, correlationId }` by default. A host that calls `setNotFoundHandler` itself passes `errorHandler: { notFound: false }` (Fastify allows one per scope); `notFound: (request, reply) => ...` replaces arc's.
@@ -65,7 +80,7 @@ import { defineGuard } from '@classytic/arc/utils';
 
 middlewares: { create: [multipartBody({ allowedMimeTypes: ['image/png'], maxFileSize: 5_000_000 })] }  // no-op for JSON
 routeGuards: [tenantGuard.preHandler]                 // every route; order: auth, permissions, cache/idempotency, routeGuards, route preHandler
-routes: [{ method: 'POST', path: '/export', handler: 'export', permissions: requireAuth(),
+routes: [{ method: 'POST', path: '/export', handler: (ctx) => ctrl.export(ctx), permissions: requireAuth(),
            rateLimit: { max: 5, timeWindow: '1 minute' } }]    // false = never throttle
 routes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.token}`; }] }]  // EventSource token
 ```
@@ -77,4 +92,4 @@ routes: [{ preAuth: [(req) => { req.headers.authorization = `Bearer ${req.query.
 
 ## CLI
 
-`arc init my-api --mongokit --better-auth --ts` scaffolds; `arc generate resource product [--mcp]`; `arc docs ./openapi.json --entry ./dist/index.js`; `arc introspect`; `arc describe <file> --json`; `arc doctor`.
+`arc init my-api --mongokit --better-auth --ts` scaffolds; `arc generate resource product [--mcp]`; `arc docs ./openapi.json --entry ./dist/index.js`; `arc introspect`; `arc describe <file> --json` (resources, plus `modules` with facts and invariant results for exported module objects; never boots); `arc doctor` (static: env vars implied by installed deps and `.env.example`, `[info]` notes for unset `trustProxy` and no readiness checks).

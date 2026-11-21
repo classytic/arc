@@ -43,7 +43,7 @@ import { EventOutbox, MemoryOutboxStore } from '@classytic/arc/events';
 const relay = new EventOutbox({ store: new MemoryOutboxStore(), transport, batchSize: 100, failurePolicy });
 // or { repository: new Repository(OutboxModel), transport }
 await relay.store(event, { session });
-await relay.relay();                         // publishes pending to the transport
+await relay.relayBatch();                    // publishes pending; returns a RelayResult
 ```
 
 ## Compensating transactions

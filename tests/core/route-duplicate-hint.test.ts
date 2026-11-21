@@ -9,7 +9,7 @@
  *   - A custom plugin pre-registered the URL
  *
  * In all of those, the operator's first instinct should be
- * `disabledRoutes: ['<op>']` — this test pins that the rewrap names that
+ * leaving `<op>` out of the `crud` allow-list — this test pins that the rewrap names that
  * fix and preserves the FST_ERR_DUPLICATED_ROUTE code for callers that
  * branch on `err.code`.
  */
@@ -19,7 +19,7 @@ import { tryRegisterRoute } from "../../src/core/routerShared.js";
 import type { FastifyWithDecorators } from "../../src/types/index.js";
 
 describe("tryRegisterRoute — duplicate route hint", () => {
-  it("rewraps FST_ERR_DUPLICATED_ROUTE with a `disabledRoutes` hint when op is a CRUD slot", async () => {
+  it("rewraps FST_ERR_DUPLICATED_ROUTE with a `crud` hint when op is a CRUD slot", async () => {
     const fastify = Fastify({ logger: false });
     fastify.route({
       method: "GET",
@@ -37,7 +37,7 @@ describe("tryRegisterRoute — duplicate route hint", () => {
         },
         { resourceName: "widget", op: "list" },
       ),
-    ).toThrow(/disabledRoutes:\s*\['list'\]/);
+    ).toThrow(/leaving 'list' out of the `crud` allow-list/);
 
     await fastify.close();
   });
@@ -87,7 +87,7 @@ describe("tryRegisterRoute — duplicate route hint", () => {
     await fastify.close();
   });
 
-  it("falls back to a generic disabledRoutes hint for non-CRUD op names", async () => {
+  it("falls back to a generic crud hint for non-CRUD op names", async () => {
     const fastify = Fastify({ logger: false });
     fastify.route({
       method: "POST",
@@ -101,7 +101,7 @@ describe("tryRegisterRoute — duplicate route hint", () => {
         { method: "POST", url: "/cart/checkout", handler: async () => ({}) },
         { resourceName: "cart", op: "checkout" },
       ),
-    ).toThrow(/disabledRoutes:\s*\['list'\s*\|\s*'get'/);
+    ).toThrow(/out of the `crud` allow-list \(`crud: \{ list: true, get: true, \.\.\. \}`\)/);
 
     await fastify.close();
   });

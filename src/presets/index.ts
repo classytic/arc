@@ -22,13 +22,17 @@
  * });
  */
 
+import { warnDeprecated } from "../logger/deprecation.js";
 import type {
   AnyRecord,
   MiddlewareConfig,
+  PresetController,
   PresetResult,
   ResourceConfig,
+  RouteDefinition,
   RouteSchemaOptions,
 } from "../types/index.js";
+import { createPresetControllerHandle, notePresetSource } from "./controllerHandle.js";
 
 // Export preset functions
 export type { AuditedPresetOptions } from "./audited.js";
@@ -166,15 +170,19 @@ interface PresetConflict {
  * Validate that preset combinations don't conflict.
  * Detects route collisions (same method + path from different presets).
  */
-function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
+function validatePresetCombination(
+  presets: PresetResult[],
+  controller: PresetController,
+): PresetConflict[] {
   const conflicts: PresetConflict[] = [];
   const routeMap = new Map<string, string>(); // "METHOD /path" -> preset name
 
   for (const preset of presets) {
     const name = preset.name ?? "unknown";
+    notePresetSource(controller, name);
     const presetRoutes = preset.routes
       ? typeof preset.routes === "function"
-        ? preset.routes({})
+        ? preset.routes({}, controller)
         : preset.routes
       : [];
 
@@ -197,11 +205,14 @@ function validatePresetCombination(presets: PresetResult[]): PresetConflict[] {
 
 /**
  * Apply presets to resource config.
- * Validates preset combinations for conflicts before merging.
+ * Validates preset combinations for conflicts before merging. `controller` is
+ * what function-form `routes(permissions, controller)` receives; `defineResource`
+ * passes a handle bound to the resolved controller.
  */
 export function applyPresets<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
   presets: PresetInput[] = [],
+  controller: PresetController = createPresetControllerHandle(config.name).controller,
 ): ResourceConfig<TDoc> {
   let result = { ...config };
 
@@ -209,7 +220,7 @@ export function applyPresets<TDoc = AnyRecord>(
   const resolved = presets.map(resolvePresetInput);
 
   // Validate combinations — fail-fast on route collisions
-  const conflicts = validatePresetCombination(resolved);
+  const conflicts = validatePresetCombination(resolved, controller);
   const errors = conflicts.filter((c) => c.severity === "error");
   if (errors.length > 0) {
     throw new Error(
@@ -219,7 +230,7 @@ export function applyPresets<TDoc = AnyRecord>(
   }
 
   for (const preset of resolved) {
-    result = mergePreset(result, preset) as ResourceConfig<TDoc>;
+    result = mergePreset(result, preset, controller) as ResourceConfig<TDoc>;
   }
 
   return result;
@@ -242,6 +253,37 @@ function resolvePresetInput(preset: PresetInput): PresetResult {
 
   // String preset name
   return resolvePreset(preset);
+}
+
+const PRESET_HANDLER_FIX =
+  "Build the routes with `routes(permissions, controller)` and return " +
+  "`handler: controller.method` (a method read this way is verified at boot).";
+
+/**
+ * Warn once about string dispatch on a preset route. The resource-level check runs on
+ * the caller's config before presets apply, so preset routes need their own. Arc's
+ * presets emit function handlers and never reach a branch here.
+ */
+function warnDeprecatedPresetRoutes(
+  presetName: string,
+  resourceName: string,
+  routes: readonly RouteDefinition[],
+): void {
+  for (const route of routes) {
+    const where = `(first seen on ${route.method} ${route.path} from preset '${presetName}' on resource '${resourceName}')`;
+    if (typeof route.handler === "string") {
+      warnDeprecated("A string `handler` on a preset route", `${PRESET_HANDLER_FIX} ${where}`);
+    }
+    if (route.controllerMethod !== undefined) {
+      warnDeprecated("`controllerMethod` on a preset route", `${PRESET_HANDLER_FIX} ${where}`);
+    }
+    if (typeof route.rawHandler === "string") {
+      warnDeprecated(
+        "A string `rawHandler` on a preset route",
+        `Return the function itself: \`rawHandler: async (request, reply) => { ... }\`. ${where}`,
+      );
+    }
+  }
 }
 
 /** Extended config with internal fields */
@@ -275,13 +317,17 @@ interface ExtendedResourceConfig<TDoc = AnyRecord> extends ResourceConfig<TDoc> 
 function mergePreset<TDoc = AnyRecord>(
   config: ResourceConfig<TDoc>,
   preset: PresetResult,
+  controller: PresetController,
 ): ResourceConfig<TDoc> {
   const result = { ...config } as ExtendedResourceConfig<TDoc>;
 
-  // Merge preset routes into config.routes (v2.8.1+)
   if (preset.routes) {
+    notePresetSource(controller, preset.name);
     const resolved =
-      typeof preset.routes === "function" ? preset.routes(config.permissions ?? {}) : preset.routes;
+      typeof preset.routes === "function"
+        ? preset.routes(config.permissions ?? {}, controller)
+        : preset.routes;
+    warnDeprecatedPresetRoutes(preset.name, config.name, resolved);
     result.routes = [...(result.routes ?? []), ...resolved];
   }
 

@@ -20,8 +20,8 @@ const uploads = createPlugin('file-upload', {
   },
   forResource: (config, { fields, maxSize, allowedTypes }) => ({
     routes: [
-      { method: 'POST', path: '/:id/upload', handler: 'handleUpload' },
-      { method: 'GET', path: '/:id/files', handler: 'listFiles' },
+      { method: 'POST', path: '/:id/upload', handler: (ctx) => uploadFiles(ctx, fields) },
+      { method: 'GET', path: '/:id/files', handler: (ctx) => listFiles(ctx) },
     ],
     middlewares: {
       create: [validateFileFields(fields, { maxSize, allowedTypes })],
@@ -50,7 +50,7 @@ const search = createPlugin('search', {
       { operation: 'delete', phase: 'after', handler: (ctx) => deindex(ctx) },
     ],
     routes: [
-      { method: 'GET', path: '/search', handler: 'search' },
+      { method: 'GET', path: '/search', handler: (ctx) => searchIndex(ctx, searchableFields) },
     ],
   }),
 });
@@ -329,7 +329,7 @@ const embeddings = createPlugin('ai-embeddings', {
       handler: (ctx) => embedAndStore(ctx.result, fields, vectorStore),
     }],
     routes: [
-      { method: 'POST', path: '/semantic-search', handler: 'semanticSearch' },
+      { method: 'POST', path: '/semantic-search', handler: (ctx) => semanticSearch(ctx, vectorStore) },
     ],
   }),
 });

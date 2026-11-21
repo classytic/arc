@@ -21,7 +21,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { corsMissingRouteMethods, resolveCorsOptions } from "./security/cors.js";
 import { loadPlugin, preflightPlugins } from "./security/pluginLoader.js";
-import { buildRateLimitOpts } from "./security/rateLimit.js";
+import { buildRateLimitOpts, installIpCeiling, resolveIpCeiling } from "./security/rateLimit.js";
 import { applyRateLimitStoreFallback } from "./security/rateLimitStore.js";
 import type { CreateAppOptions } from "./types/index.js";
 
@@ -95,11 +95,15 @@ export async function registerSecurityPlugins(
     // A shared store (Redis / custom) answers through a bounded call with an
     // in-memory fallback (`storeFallback`, security/rateLimitStore.ts): an
     // outage limits per instance instead of hanging or 500-ing every request.
+    const rateLimitInput = config.rateLimit ?? { max: 100, timeWindow: "1 minute" };
     const rateLimitOpts = await applyRateLimitStoreFallback(
-      buildRateLimitOpts(config.rateLimit ?? { max: 100, timeWindow: "1 minute" }),
+      buildRateLimitOpts(rateLimitInput),
       fastify.log,
     );
     await fastify.register(rateLimit, rateLimitOpts);
+    // Default key = per user at preHandler; the early per-IP ceiling rides on the same
+    // registration (security/rateLimit.ts says why not a second one).
+    installIpCeiling(fastify, resolveIpCeiling(rateLimitInput), rateLimitOpts);
 
     // Both of @fastify/rate-limit's shared forms count: a custom `store`
     // class, or its documented `redis: ioredisClient` shorthand (which the

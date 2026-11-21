@@ -3,6 +3,7 @@
  * validation and concrete cycle reporting.
  */
 
+import { bootError } from "../../utils/bootError.js";
 import type { ArcModule } from "./types.js";
 
 /**
@@ -24,9 +25,12 @@ export function orderModules(modules: readonly ArcModule[]): ArcModule[] {
   const byName = new Map<string, ArcModule>();
   for (const m of modules) {
     if (byName.has(m.name)) {
-      throw new Error(
-        `[arc] Duplicate module name "${m.name}" — composed twice; check your modules array.`,
-      );
+      throw bootError({
+        code: "duplicate-module",
+        module: m.name,
+        message: `[arc] Duplicate module name "${m.name}" — composed twice; check your modules array.`,
+        fix: "remove the duplicate from createApp({ modules })",
+      });
     }
     byName.set(m.name, m);
   }
@@ -34,15 +38,24 @@ export function orderModules(modules: readonly ArcModule[]): ArcModule[] {
   for (const m of modules) {
     for (const dep of m.dependsOn ?? []) {
       if (dep === m.name) {
-        throw new Error(`[arc] module "${m.name}" dependsOn itself — remove the self-reference.`);
+        throw bootError({
+          code: "self-dependency",
+          module: m.name,
+          message: `[arc] module "${m.name}" dependsOn itself — remove the self-reference.`,
+          fix: "remove the self-reference",
+        });
       }
       if (!byName.has(dep)) {
-        throw new Error(
-          `[arc] module "${m.name}" dependsOn "${dep}", which is not composed. ` +
+        throw bootError({
+          code: "missing-dependency",
+          module: m.name,
+          message:
+            `[arc] module "${m.name}" dependsOn "${dep}", which is not composed. ` +
             `Add the "${dep}" module to createApp({ modules }) (before this one is fine — ` +
             `arc orders them), or drop the dependency. ` +
             `Composed modules: ${[...byName.keys()].join(", ") || "(none)"}.`,
-        );
+          fix: `add the "${dep}" module to createApp({ modules }), or drop the dependency`,
+        });
       }
     }
   }
@@ -82,7 +95,11 @@ export function orderModules(modules: readonly ArcModule[]): ArcModule[] {
       }
     }
     if (pick === undefined) {
-      throw new Error(describeModuleCycle(remaining, edges));
+      throw bootError({
+        code: "module-cycle",
+        message: describeModuleCycle(remaining, edges),
+        fix: "break the cycle with a shared module, `requires.modules`, or an event/port",
+      });
     }
     ordered.push(pick);
     remaining.delete(pick.name);

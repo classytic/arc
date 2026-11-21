@@ -52,7 +52,7 @@ describe("aggregation-only resources (no CRUD, no user controller)", () => {
       name: "revenue-only",
       prefix: "/revenue-only",
       adapter: createMongooseAdapter(Model, repo as never),
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -98,7 +98,7 @@ describe("aggregation-only resources (no CRUD, no user controller)", () => {
       name: "materialized-only",
       prefix: "/mat-only",
       // No adapter, no controller — materialized hook owns dispatch.
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -143,7 +143,7 @@ describe("aggregation-only resources (no CRUD, no user controller)", () => {
     const resource = defineResource({
       name: "no-dispatch",
       prefix: "/no-dispatch",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),

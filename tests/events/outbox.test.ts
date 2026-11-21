@@ -48,7 +48,7 @@ describe("EventOutbox", () => {
       meta: { id: "evt-1", timestamp: new Date() },
     });
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
     expect(relayed).toBe(1);
     expect(publishSpy).toHaveBeenCalledTimes(1);
 
@@ -76,7 +76,7 @@ describe("EventOutbox", () => {
       meta: { id: "evt-2", timestamp: new Date() },
     });
 
-    await outbox.relay();
+    await outbox.relayBatch();
 
     const pending = await store.getPending(10);
     expect(pending).toHaveLength(0);
@@ -101,7 +101,7 @@ describe("EventOutbox", () => {
       meta: { id: "evt-1", timestamp: new Date() },
     });
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
     expect(relayed).toBe(0);
 
     // Event should still be pending
@@ -125,7 +125,7 @@ describe("EventOutbox", () => {
       });
     }
 
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
     expect(relayed).toBe(2);
 
     const pending = await store.getPending(10);
@@ -144,12 +144,22 @@ describe("EventOutbox", () => {
     const walAcknowledge = vi.fn().mockResolvedValue(undefined);
     const published: string[] = [];
 
+    // `wal` is deprecated (one-minor window): it warns once, naming the outbox.
+    const { resetDeprecationWarnings } = await import("../../src/logger/deprecation.js");
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const app = Fastify({ logger: false });
     await app.register(eventPlugin, {
       wal: { save: walSave, acknowledge: walAcknowledge },
       onPublish: (event) => published.push(event.type),
     });
     await app.ready();
+    const deprecations = warn.mock.calls
+      .map((c) => c.join(" "))
+      .filter((l) => l.includes("The eventPlugin `wal` option is deprecated"));
+    expect(deprecations).toHaveLength(1);
+    expect(deprecations[0]).toContain("createOutboxModule");
+    warn.mockRestore();
 
     // Internal event — should skip WAL
     await app.events.publish("arc.resource.registered", { name: "product" });

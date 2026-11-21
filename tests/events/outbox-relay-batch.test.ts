@@ -28,6 +28,7 @@ import {
   MemoryOutboxStore,
   type RelayResult,
 } from "../../src/events/outbox.js";
+import { resetDeprecationWarnings } from "../../src/logger/deprecation.js";
 
 function makeEvent(id: string, type = "test.event"): DomainEvent {
   return { type, payload: { id }, meta: { id, timestamp: new Date() } };
@@ -169,8 +170,10 @@ describe("relayBatch — rich result", () => {
 // 2. relay() backward compatibility
 // ============================================================================
 
-describe("relay — backward compatibility", () => {
-  it("relay() still returns just the relayed count", async () => {
+describe("relay — deprecated backward-compat wrapper", () => {
+  it("relay() still returns just the relayed count, and warns once naming relayBatch()", async () => {
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const store = new MemoryOutboxStore();
     const transport = new MemoryEventTransport();
     const outbox = new EventOutbox({ store, transport });
@@ -179,8 +182,14 @@ describe("relay — backward compatibility", () => {
     await outbox.store(makeEvent("e2"));
 
     const count = await outbox.relay();
+    await outbox.relay();
     expect(typeof count).toBe("number");
     expect(count).toBe(2);
+    const lines = warn.mock.calls.map((c) => c.join(" "));
+    const deprecations = lines.filter((l) => l.includes("`EventOutbox.relay()` is deprecated"));
+    expect(deprecations).toHaveLength(1);
+    expect(deprecations[0]).toContain("(await outbox.relayBatch()).relayed");
+    warn.mockRestore();
   });
 
   it("relay() returns 0 when no transport configured", async () => {

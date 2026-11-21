@@ -29,6 +29,14 @@ export type RateLimitOpts = Record<string, unknown> & {
    */
   skipPaths?: string[];
   /**
+   * Early per-IP ceiling that rides alongside arc's DEFAULT key (per signed-in user, per
+   * IP when anonymous, at `preHandler`). Counted at `onRequest`, before auth and body
+   * parsing, so floods and unmatched routes are still bounded. Default
+   * `max(2000, 20 × max)` per `timeWindow`. A number sets it; `false` drops it. Ignored
+   * when the host supplies `keyGenerator` or `plan` (no ceiling is added then).
+   */
+  ipCeiling?: number | false;
+  /**
    * Plan-aware limits (2.22) — resolve the caller's plan per request and
    * apply that plan's ceiling instead of the global `max`:
    *

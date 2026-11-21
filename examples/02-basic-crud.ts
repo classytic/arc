@@ -5,7 +5,7 @@
  */
 
 import mongoose from 'mongoose';
-import { defineResource, permissions, allowPublic } from '@classytic/arc';
+import { defineResource, publicReadAdminWrite, allowPublic } from '@classytic/arc';
 import { Repository } from '@classytic/mongokit';
 import { createMongooseAdapter } from '@classytic/mongokit/adapter';
 
@@ -69,7 +69,7 @@ export const productResource = defineResource({
   presets: ['softDelete', 'slugLookup'],
 
   // Permissions — public read, admin write
-  permissions: permissions.publicReadAdminWrite(),
+  permissions: publicReadAdminWrite(),
 
   // Custom routes
   routes: [

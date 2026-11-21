@@ -43,7 +43,7 @@ describe("Resource plugin idempotency", () => {
     // on the shared-state writes (hooks, registry, cache rules).
     const resource = defineResource({
       name: "widget",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
     });
 
@@ -80,7 +80,7 @@ describe("Resource plugin idempotency", () => {
 
     const resource = defineResource({
       name: "post",
-      disableDefaultRoutes: true,
+      crud: false,
       skipValidation: true,
       cache: {
         invalidateOn: {
@@ -106,7 +106,7 @@ describe("Resource plugin idempotency", () => {
 
       const resource = defineResource({
         name: "thing",
-        disableDefaultRoutes: true,
+        crud: false,
         skipValidation: true,
       });
       resource._pendingHooks.push({

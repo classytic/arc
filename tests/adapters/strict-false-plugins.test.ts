@@ -350,7 +350,7 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
     });
 
     expect(received).toHaveLength(0); // not yet relayed
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
     expect(relayed).toBe(1);
     expect(received).toEqual(["evt-public"]);
   });
@@ -369,7 +369,7 @@ describe("EventOutbox + mongokit Repository + strict:false", () => {
       payload: {},
       meta: { id: "evt-old", timestamp: new Date() },
     });
-    await outbox.relay(); // publishes + acks
+    await outbox.relayBatch(); // publishes + acks
 
     // Backdate deliveredAt so purge() finds it
     await OutboxModel.collection.updateOne(

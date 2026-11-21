@@ -147,7 +147,7 @@ const resources = await loadResources(import.meta.url, {
 await loadResources(import.meta.url, { logger: { warn: () => undefined } });
 
 // 4. Custom arcLog sink — routes EVERY arc warning (loadResources + others)
-import { configureArcLogger } from '@classytic/arc';
+import { configureArcLogger } from '@classytic/arc/logger';
 configureArcLogger({ writer: pinoAdapter });
 ```
 
@@ -429,6 +429,50 @@ Default `all` is the pre-2.33 behaviour, so an app that never sets `role` is unc
 
 The contradiction check is deliberate: a relay process that also served routes would take traffic no load balancer knew to send it, and the mistake is invisible until something depends on it.
 
+## Module facts and invariants
+
+A module's factory makes decisions from its own config. When two of those decisions contradict each other, the service can boot, report ready, and fail on the first request that needs both. Declare the decisions as `facts` and the rules they must satisfy as `invariants`, and the contradiction fails boot instead:
+
+```typescript
+import { defineModule } from '@classytic/arc/factory';
+
+export function createMediaModule(config: MediaConfig) {
+  const uploadReceiver = config.env !== 'production' || config.receiverEnabled;
+  return defineModule({
+    name: 'media',
+    // The decisions this factory made. Plain data only, and NEVER a secret:
+    // facts are printed by `arc describe` and by the boot error.
+    facts: { driver: config.driver, uploadReceiver },
+    invariants: [
+      {
+        code: 'media.upload-receiver',
+        fix: 'enable the upload receiver, or use a cloud storage driver',
+        check: (f) =>
+          f.driver !== 'local' || f.uploadReceiver || 'local disk driver with the upload receiver off',
+      },
+    ],
+    // plugins, bootstrap, resources ...
+  });
+}
+```
+
+- `check(facts, all)` is pure and synchronous. Return `true` to pass, `false` or a short reason string to fail. A check that throws or returns a Promise fails too.
+- `all` holds every composed module's facts by name, so a rule can span modules: `check: (_f, all) => all.media?.uploadReceiver === true || 'media receiver is off'`. A module that is not composed is `undefined` in `all`.
+- Invariants run once, after the module graph is planned and before any module's `plugins` or `bootstrap` runs. Every failure is collected, then boot throws one `ArcBootError`:
+
+```text
+[arc] module invariants failed — no module was set up (1 problem):
+  - [media.upload-receiver] module "media": local disk driver with the upload receiver off
+    fix: enable the upload receiver, or use a cloud storage driver
+```
+
+- Fatal under every preset. `planModules` runs the same check, so a dry run fails where boot would.
+- `arc describe <entry> --json` prints each module's facts and invariant results without booting anything, for the module objects the entry file exports (`export const modules = [createMediaModule(config)]`). Thunks are not run.
+
+### Boot errors carry codes
+
+Every configuration failure `createApp` detects throws `ArcBootError` (exported from `@classytic/arc/factory`): `problems` lists each failure as `{ code, message, fix, module? }`, and `code` is the single problem's code, or `boot-failed` when there are several. Match on codes, not message text. Codes include `production-runtime-undeclared`, `role-declares-resources`, `auth-jwt-secret-missing`, `distributed-requires-shared-store`, `runtime-memory-state`, the composition codes (`missing-port`, `missing-dependency`, `missing-module`, `duplicate-module`, `self-dependency`, `module-cycle`), `duplicate-health-check`, and each module's own invariant codes.
+
 ## Arc Plugins
 
 ```typescript
@@ -466,6 +510,10 @@ const app = await createApp({
   // rateLimit: false,
 });
 ```
+
+CORS always exposes arc's own response headers (`set-auth-token`, `x-request-id`), merged into any `exposedHeaders` you declare, so browser code can read the request id that error bodies quote as `correlationId`.
+
+With no `keyGenerator` and no `plan`, the rate-limit key is the signed-in user (`user:<id>`), else the client IP, checked after auth. Many users behind one office or carrier NAT address each get their own `max`; sign-in, sign-up and reset stay limited per IP. An early per-IP ceiling (`ipCeiling`, default `max(2000, 20 × max)` per window; `false` drops it) counts every request before auth. To key per IP as before: `rateLimit: { max: 100, keyGenerator: (req) => req.ip }`. One quota per organisation: `keyGenerator: createTenantKeyGenerator({ strategy: 'organization' })` from `@classytic/arc/scope`.
 
 ## Utility Plugins
 

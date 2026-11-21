@@ -26,7 +26,10 @@ import {
   resolveActionTargetFence,
 } from "../../core/defineResource/plugin.js";
 import type { ResourceDefinition } from "../../core/defineResource.js";
-import { withoutTenantInjection } from "../../permissions/tenantPreparation.js";
+import {
+  routeTenantMiddlewares,
+  withoutTenantInjection,
+} from "../../permissions/tenantPreparation.js";
 import type { PermissionCheck } from "../../permissions/types.js";
 import { getOrgId, getUserId } from "../../scope/types.js";
 import type { ResourcePermissions, RouteDefinition } from "../../types/index.js";
@@ -366,7 +369,7 @@ export function resourceToTools(
               pipeline: resource.pipe,
               fields: resource.fields,
               wiring,
-              tenantMiddlewares: route.tenantScope ? resource.middlewares?.tenantScope : undefined,
+              tenantMiddlewares: routeTenantMiddlewares(route, resource.middlewares),
               schemaOptions: resource.schemaOptions,
               idField: resource.idField,
             },

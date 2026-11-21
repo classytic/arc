@@ -8,6 +8,7 @@
 import type { FastifyInstance } from "fastify";
 import { type HealthCheck, mergeHealthChecks } from "../../plugins/health.js";
 import type { ScheduleDefinition } from "../../plugins/schedules.js";
+import { bootError } from "../../utils/bootError.js";
 import { resolveModuleArm } from "./resolve.js";
 import type { ArcModule } from "./types.js";
 
@@ -74,9 +75,12 @@ export async function collectModuleScheduledJobs(
     for (const job of jobs) {
       const prior = owner.get(job.name);
       if (prior !== undefined) {
-        throw new Error(
-          `[arc] duplicate scheduled-job name "${job.name}" — declared by module "${prior}" and module "${m.name}". Scheduled-job names must be unique across the module graph.`,
-        );
+        throw bootError({
+          code: "duplicate-scheduled-job",
+          module: m.name,
+          message: `[arc] duplicate scheduled-job name "${job.name}" — declared by module "${prior}" and module "${m.name}". Scheduled-job names must be unique across the module graph.`,
+          fix: `rename one of the "${job.name}" scheduled jobs; prefix names with the owning module`,
+        });
       }
       owner.set(job.name, m.name);
       out.push(job);

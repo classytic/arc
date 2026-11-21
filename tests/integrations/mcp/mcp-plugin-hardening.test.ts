@@ -102,8 +102,19 @@ describe("MCP hardening — per-prefix decorator registrations", () => {
     await app.register(mcpPlugin, { resources: [], auth: false });
     await app.ready();
 
+    // `toolNames` is deprecated (one-minor window): warns once, naming `get(prefix)`.
+    const { resetDeprecationWarnings } = await import("../../../src/logger/deprecation.js");
+    resetDeprecationWarnings();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(Array.isArray(app.mcp?.toolNames)).toBe(true);
     expect(Array.isArray(app.mcp?.toolNames)).toBe(true);
     expect(Array.isArray(app.mcp?.resourceNames)).toBe(true);
+    const deprecations = warn.mock.calls
+      .map((c) => c.join(" "))
+      .filter((l) => l.includes("`fastify.mcp.toolNames` is deprecated"));
+    warn.mockRestore();
+    expect(deprecations).toHaveLength(1);
+    expect(deprecations[0]).toContain("fastify.mcp.get(prefix)?.toolNames");
   });
 
   it("duplicate prefix registration is rejected (either by mcpPlugin guard or fastify's route-conflict detection)", async () => {

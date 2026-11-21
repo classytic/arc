@@ -17,7 +17,7 @@ function resource(name: string, rateLimit: Record<string, unknown>, paths = ["/h
   return defineResource({
     name,
     prefix: `/${name}`,
-    disableDefaultRoutes: true,
+    crud: false,
     routes: paths.map((path) => ({
       method: "POST" as const,
       path,

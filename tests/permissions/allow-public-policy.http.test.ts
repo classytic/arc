@@ -66,7 +66,7 @@ function resourceWith(name: string, model: mongoose.Model<unknown>, gate: Permis
     adapter: { type: "mongoose", repository: repo, model } as never,
     controller: new BaseController(repo as never, { resourceName: name, tenantField: false }),
     permissions: { list: gate, get: gate },
-    disabledRoutes: ["create", "update", "delete"],
+    crud: { list: true, get: true },
   });
 }
 

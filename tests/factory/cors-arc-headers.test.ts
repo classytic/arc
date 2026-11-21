@@ -93,6 +93,32 @@ describe("Smart CORS — arc exposed headers (set-auth-token)", () => {
     expect(exposed).toContain("set-auth-token");
   });
 
+  it("exposes x-request-id so browser code can read the id the error body quotes as correlationId", async () => {
+    const app = await buildApp({ origin: ["http://spa.test"] });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/anything",
+      headers: { origin: "http://spa.test" },
+    });
+    expect(res.headers["x-request-id"]).toBeDefined();
+    const exposed = String(res.headers["access-control-expose-headers"]).toLowerCase();
+    expect(exposed.split(",").map((h) => h.trim())).toContain("x-request-id");
+  });
+
+  it("merges x-request-id into a host-pinned list without duplicating it", async () => {
+    const app = await buildApp({ origin: true, exposedHeaders: ["X-Request-Id", "x-total-count"] });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/anything",
+      headers: { origin: "http://spa.test" },
+    });
+    const exposed = String(res.headers["access-control-expose-headers"]).toLowerCase();
+    expect(exposed.match(/x-request-id/g)).toHaveLength(1);
+    expect(exposed).toContain("x-total-count");
+  });
+
   it("merges set-auth-token into a host-declared exposedHeaders list without dropping entries", async () => {
     const app = await buildApp({
       origin: true,

@@ -64,7 +64,7 @@ const deleted = await fastify.audit.purge(new Date(Date.now() - 90 * 86_400_000)
 defineResource({
   name: 'audit-log',
   adapter: auditAdapter,                                   // adapter over the audit repository
-  disabledRoutes: ['create', 'update', 'delete'],
+  crud: { list: true, get: true },
   queryParser: new QueryParser({ allowedFilterFields: ['resource', 'documentId', 'userId', 'action', 'organizationId'] }),
   permissions: { list: requireRoles(['auditor']), get: requireRoles(['auditor']) },
 });

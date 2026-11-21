@@ -310,7 +310,16 @@ async function errorHandlerPluginFn(
       // exactly the outage that produces thousands of them.
       const deliberateUnavailable = status === 503 && wire.code !== "arc.internal_error";
       if (status >= 500 && !deliberateUnavailable) {
-        request.log.error({ err: error, status }, "Server error");
+        request.log.error(
+          {
+            err: error,
+            status,
+            code: wire.code,
+            route: request.routeOptions?.url,
+            method: request.method,
+          },
+          "Server error",
+        );
       } else if (deliberateUnavailable) {
         request.log.warn({ code: wire.code, status }, "Service unavailable");
       } else if (status >= 400) {

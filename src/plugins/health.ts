@@ -21,6 +21,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import fp from "fastify-plugin";
+import { bootError } from "../utils/bootError.js";
 import {
   DURATION_BUCKETS_SECONDS,
   MetricHistogram,
@@ -82,9 +83,11 @@ export function mergeHealthChecks(groups: readonly HealthCheckGroup[]): HealthCh
     for (const check of group.checks ?? []) {
       const prior = owners.get(check.name);
       if (prior !== undefined) {
-        throw new Error(
-          `[arc] duplicate health-check name "${check.name}" — declared by ${prior} and ${group.owner}. Health-check names must be unique.`,
-        );
+        throw bootError({
+          code: "duplicate-health-check",
+          message: `[arc] duplicate health-check name "${check.name}" — declared by ${prior} and ${group.owner}. Health-check names must be unique.`,
+          fix: `rename one of the "${check.name}" health checks`,
+        });
       }
       owners.set(check.name, group.owner);
       merged.push(check);
@@ -221,7 +224,6 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
                     name: { type: "string" },
                     healthy: { type: "boolean" },
                     duration: { type: "number" },
-                    error: { type: "string" },
                   },
                 },
               },
@@ -238,7 +240,7 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
         },
       },
     },
-    async (_, reply) => {
+    async (request, reply) => {
       // Lame duck — gracefulShutdown flipped `shutdownState.draining` before
       // closing the server. Fail readiness FIRST so the load balancer stops
       // routing here while we still answer; dependency probes are moot for an
@@ -254,10 +256,19 @@ const healthPlugin: FastifyPluginAsync<HealthOptions> = async (
         (result, index) => !result.healthy && (readinessChecks[index]?.critical ?? true),
       );
 
+      // Health registers before auth, so error text (hostnames, driver messages) goes to the
+      // log only; the response carries names and pass/fail.
+      const failed = results.filter((r) => r.error !== undefined);
+      if (failed.length > 0) {
+        request.log.warn(
+          { checks: failed.map(({ name, error }) => ({ name, error })) },
+          "[arc] readiness check failed",
+        );
+      }
       const response = {
         status: criticalFailed ? "not_ready" : "ready",
         timestamp: new Date().toISOString(),
-        checks: results,
+        checks: results.map(({ name, healthy, duration }) => ({ name, healthy, duration })),
       };
 
       if (criticalFailed) {
@@ -409,6 +420,49 @@ async function runChecks(checks: readonly HealthCheck[]): Promise<CheckResult[]>
       }
     }),
   );
+}
+
+interface BootSummaryLogger {
+  info(obj: object, msg: string): void;
+  warn(obj: object, msg: string): void;
+}
+
+/**
+ * Run every readiness check once and log ONE line: names, pass/fail, duration. Never throws
+ * and never fails boot — a dependency that is down at boot is the readiness probe's business.
+ * `production` adds a note when no check is critical (readiness can then never go not-ready).
+ */
+export async function logBootHealthSummary(
+  log: BootSummaryLogger,
+  checks: readonly HealthCheck[],
+  options: { production?: boolean } = {},
+): Promise<void> {
+  const critical = checks.filter((c) => c.critical ?? true).length;
+  const noCritical = options.production === true && critical === 0;
+  if (checks.length === 0 && !noCritical) return;
+  try {
+    const start = Date.now();
+    const results = await runChecks(checks);
+    const failed = results.filter((r) => !r.healthy);
+    const summary = results
+      .map((r) => `${r.name} ${r.healthy ? "ok" : "FAILED"} (${r.duration}ms)`)
+      .join(", ");
+    const note = noCritical
+      ? " — no critical readiness check is registered, so /ready can never report not_ready"
+      : "";
+    const line = `[arc] boot health: ${results.length - failed.length}/${results.length} passing${
+      summary ? ` — ${summary}` : ""
+    }${note}`;
+    const fields = {
+      durationMs: Date.now() - start,
+      criticalChecks: critical,
+      checks: results,
+    };
+    if (failed.length > 0) log.warn(fields, line);
+    else log.info(fields, line);
+  } catch {
+    // A summary must never become a boot failure.
+  }
 }
 
 export default fp(healthPlugin, {

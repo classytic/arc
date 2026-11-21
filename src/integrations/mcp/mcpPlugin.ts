@@ -25,6 +25,7 @@
 
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import fp from "fastify-plugin";
+import { warnDeprecated } from "../../logger/deprecation.js";
 import {
   createMemoryResourceRateLimiter,
   resolveResourceRateLimiter,
@@ -67,7 +68,12 @@ export interface McpRegistration {
 export interface McpDecorator {
   /** Map of prefix → registration info. Iterate for all endpoints. */
   registrations: Map<string, McpRegistration>;
-  /** Shortcut for the first registered prefix (back-compat for single-endpoint apps) */
+  /**
+   * Tool names of the FIRST registered prefix.
+   *
+   * @deprecated Use `get(prefix)?.toolNames` (or iterate `registrations`).
+   * Warns once per process; removed in the next minor.
+   */
   readonly toolNames: string[];
   readonly resourceNames: string[];
   /** Look up a specific prefix */
@@ -362,6 +368,10 @@ const mcpPluginImpl: FastifyPluginAsync<McpPluginOptions> = async (fastify, opti
         return registrations.get(p);
       },
       get toolNames() {
+        warnDeprecated(
+          "`fastify.mcp.toolNames`",
+          "Use `fastify.mcp.get(prefix)?.toolNames` (or iterate `fastify.mcp.registrations`).",
+        );
         return first()?.toolNames ?? [];
       },
       get resourceNames() {

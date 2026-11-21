@@ -56,16 +56,16 @@ const app = await createApp({
 });
 ```
 
-Validated route, parsed once:
+Custom route, parsed once. A function `handler` runs the full pipeline and becomes an MCP tool:
 
 ```typescript
 import { parsed, routeInput } from '@classytic/arc/core';
 const body = z.object({ title: z.string().trim().min(2), tags: z.array(z.string()).default([]) });
 routes: [{ method: 'POST', path: '/notes', permissions: requireAuth(), ...routeInput({ body }),
-  rawHandler: async (req, reply) => reply.send(await notes.create(parsed(body, req.body))) }]
+  handler: async (ctx) => ({ data: await notes.create(parsed(body, ctx.body)) }) }]
 ```
 
-Daily job: `scheduledJobs: [{ name: 'sweep', every: 600_000, daily: { hour: 2, zone: 'Asia/Dhaka', ledger }, handler: async (f, ctx) => sweep(ctx?.day) }]`.
+`rawHandler: (req, reply)` skips the pipeline: only for streams, raw-body webhooks, files, redirects.
 
 Test: `const ctx = await createTestApp({ resources: [productResource] }); expectArc(await ctx.app.inject({ method: 'GET', url: '/products' })).ok();`
 
@@ -75,8 +75,8 @@ Test: `const ctx = await createTestApp({ resources: [productResource] }); expect
 - `.default()` stays optional on the wire (zod input direction); `.refine()` needs `routeInput` or `parse: true`.
 - `request.user` is undefined on public routes: guard it.
 - Public + row filter needs `allowPublic({ policy })`, not `allow({ policy })`.
-- A non-writable field in a body is 403; an `immutable` field is silently stripped.
-- An unknown filter key is dropped (widens results): `strictFilterFields: true`.
+- A non-writable or `immutable` field in a body is 403, not stripped.
+- An unknown filter key is 400, not dropped; `strictFilterFields: false` drops.
 - `distributed` runtime needs shared stores and a schedule `lock` or `singleReplica`.
 - Own `setNotFoundHandler` needs `errorHandler: { notFound: false }`.
 - Refusing hook: `return reply.send(...)` or throw, never a bare send.

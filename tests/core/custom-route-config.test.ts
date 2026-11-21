@@ -48,7 +48,7 @@ describe("custom route config", () => {
     const resource = defineResource({
       name: "widget",
       prefix: "/widgets",
-      disableDefaultRoutes: true,
+      crud: false,
       tenantField: false,
       routes: [
         {
@@ -86,7 +86,7 @@ describe("custom route config", () => {
     const resource = defineResource({
       name: "hook",
       prefix: "/hooks",
-      disableDefaultRoutes: true,
+      crud: false,
       tenantField: false,
       routes: [
         {
@@ -138,7 +138,7 @@ describe("custom route config", () => {
     const resource = defineResource({
       name: "plain",
       prefix: "/plain",
-      disableDefaultRoutes: true,
+      crud: false,
       tenantField: false,
       routes: [
         {
@@ -197,7 +197,7 @@ describe("custom route config — merged with arc's own", () => {
     const app = await bootWith(
       defineResource({
         name: "hookext",
-        disableDefaultRoutes: true,
+        crud: false,
         extensions: { encryption: { fields: ["secret"] } } as never,
         routes: [
           {
@@ -222,7 +222,7 @@ describe("custom route config — merged with arc's own", () => {
     const app = await bootWith(
       defineResource({
         name: "hookrl",
-        disableDefaultRoutes: true,
+        crud: false,
         routes: [
           {
             method: "POST",

@@ -73,7 +73,7 @@ multiTenantPreset({ tenantFields: [
 2. `kind: 'elevated'` without an org bypasses tenant filtering: unusable for normal per-org access.
 3. Mark the tenant field `systemManaged` in `fieldRules`: `BodySanitizer` strips client values and the scope value is injected on write.
 4. The preset overwrites a body-supplied org on UPDATE (blocks tenant hopping). Elevated without an org still bypasses.
-5. `createTenantKeyGenerator()` (`@classytic/arc/scope`) keys rate limits by org for member/service/elevated, else user or IP.
+5. `createApp`'s default rate-limit key is per signed-in user, per IP when anonymous. For one quota per org: `keyGenerator: createTenantKeyGenerator({ strategy: 'organization' })` (`@classytic/arc/scope`; also the behaviour when `strategy` is omitted).
 
 ## Helpers (`@classytic/arc/scope`)
 

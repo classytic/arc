@@ -9,7 +9,6 @@
  * Three permission helpers behave differently:
  *   - `requireRoles(['admin'])` — checks BOTH platform AND org roles by default (2.7.1+)
  *   - `requireRoles(['admin'], { includeOrgRoles: false })` — explicit platform-only opt-out
- *   - `roles('admin', 'editor')` — checks both, plus elevated bypass (alias of default)
  *
  * Real-world scenarios this guards against:
  *   - Platform admin acting in an org (no org role) — should NOT lose access
@@ -23,7 +22,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defineResource } from "../../src/core/defineResource.js";
 import { createApp } from "../../src/factory/createApp.js";
-import { allowPublic, requireRoles, roles } from "../../src/permissions/index.js";
+import { allowPublic, requireRoles } from "../../src/permissions/index.js";
 import type { RequestScope } from "../../src/scope/types.js";
 
 const JWT_SECRET = "test-jwt-secret-must-be-at-least-32-chars-long!!";
@@ -113,7 +112,7 @@ async function buildApp() {
     permissions: {
       list: allowPublic(),
       get: allowPublic(),
-      create: roles("admin", "editor"), // checks both layers
+      create: requireRoles("admin", "editor"), // checks both layers
       // 2.7.1+: requireRoles defaults to includeOrgRoles: true.
       // `update` keeps the platform-only behavior via explicit opt-out so we
       // can still exercise that branch in tests.
@@ -162,7 +161,7 @@ describe("Multi-role user — platform + org role merging", () => {
     return { authorization: `Bearer ${t}` };
   }
 
-  // ── create: roles('admin', 'editor') checks BOTH layers ──
+  // ── create: requireRoles('admin', 'editor') checks BOTH layers ──
 
   it("CREATE: platform admin (no org role) → allowed", async () => {
     const t = token({ id: "u1", role: ["admin"], organizationId: ORG_A, orgRoles: [] });

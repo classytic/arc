@@ -18,8 +18,8 @@
  *     standard "Tenant context incomplete" message.
  *   - `tenantScope: true` WITHOUT the preset throws at registration
  *     (fail-closed — silent miswiring would leak rows across tenants).
- *   - A custom route WITHOUT the flag is left untouched (backwards
- *     compatibility — presets are opt-in per route).
+ *   - A RAW custom route without the flag is left untouched; `handler` routes get
+ *     the guard by default (tests/presets/multi-tenant-route-coverage.test.ts).
  */
 
 import { createMongooseAdapter } from "@classytic/mongokit/adapter";
@@ -74,7 +74,7 @@ async function buildApp(opts: {
     },
     presets: opts.presets as never,
     routes: opts.routes,
-    disableDefaultRoutes: true,
+    crud: false,
   });
 
   const app = Fastify({ logger: false });
@@ -233,10 +233,10 @@ describe("multiTenantPreset — custom-route tenantScope opt-in", () => {
   });
 
   // --------------------------------------------------------------------------
-  // Backwards compat — no tenantScope flag → no tenant mw on custom routes
+  // Raw routes — no tenantScope flag → no tenant mw
   // --------------------------------------------------------------------------
 
-  it("leaves custom routes untouched when tenantScope is omitted", async () => {
+  it("leaves raw custom routes untouched when tenantScope is omitted", async () => {
     let observed: { tenantFields?: Record<string, unknown> } = {};
 
     app = await buildApp({
@@ -246,9 +246,8 @@ describe("multiTenantPreset — custom-route tenantScope opt-in", () => {
         {
           method: "GET",
           path: "/health",
-          // tenantScope omitted — the route should NOT receive the preset's
-          // tenant middlewares. Existing public-facing routes (webhooks,
-          // health checks) stay reachable without tenant context.
+          // tenantScope omitted on a raw route — no tenant middlewares, so
+          // public raw routes (webhooks, health checks) stay reachable.
           permissions: allowPublic(),
           rawHandler: async (req: FastifyRequest, reply: FastifyReply) => {
             observed = {

@@ -319,7 +319,7 @@ describe("createApp — resources factory form", () => {
           name: "rfWebhook",
           prefix: "/rf-webhook",
           skipGlobalPrefix: true,
-          disableDefaultRoutes: true,
+          crud: false,
           routes: [
             {
               method: "POST",

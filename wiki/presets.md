@@ -2,7 +2,7 @@
 
 **Summary**: Composable resource modifiers. Attach one or more via `defineResource({ presets })`. Order matters when behaviors overlap.
 **Sources**: src/presets/.
-**Last updated**: 2026-05-18.
+**Last updated**: 2026-11-21.
 
 ---
 
@@ -24,6 +24,14 @@
 
 - Presets compose, but **order matters**. `softDelete + bulk` both modify DELETE — latest wins.
 - `tests/presets/preset-conflicts.test.ts` validates known conflicts. Always test combinations.
+
+## Preset routes reach the controller
+
+`routes(permissions, controller)` — presets apply BEFORE the controller exists (their `controllerOptions` feed the auto-built `BaseController`), so `controller` is a handle (`presets/controllerHandle.ts`) that `defineResource` binds after Phase 4; each method resolves per request (`this`-bound). Methods READ while routes are built (`handler: controller.x`, the form arc presets use) are recorded and `verify()`d after binding: missing → `ArcBootError` `preset-controller-method-missing` (deferred to registration under `skipValidation`). Arrow handlers read per request, so they are not checked. Host string dispatch warns once at merge (`warnDeprecatedPresetRoutes`).
+
+## Preset route permissions and tenancy
+
+A preset route's permission is the preset option, else the CRUD key it maps to (`presets/presetPermission.ts`); with neither it carries an unresolved marker that `resolvePresetRoutePermissions` turns into a boot error under strict (`preset-route-public-by-omission`) or `allowPublic()` + info. Under `multiTenant`, `routeTenantMiddlewares` (HTTP and MCP) picks each route's tenant middlewares: `_tenantSlot` → that CRUD slot's tagged ones; `handler` routes → filter; raw → none unless `tenantScope: true`; `false` → none. Resolved at registration, so preset order is irrelevant. Rows: `tree` reads with `queryResolver.resolve` + tenant repo options; auto-wired `search`/`similar` take `BaseCrudController.listScope` (`QueryResolver.scopeFilter` + tenant options + the `validateItemAccess` post-check, used by `search` whose contract has no filter).
 
 ## softDelete — kit responsibilities
 

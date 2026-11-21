@@ -55,7 +55,7 @@ describe("Event Outbox — Arc Integration", () => {
     expect(received).toHaveLength(0);
 
     // Relay pending events
-    const relayed = await outbox.relay();
+    const relayed = (await outbox.relayBatch()).relayed;
     expect(relayed).toBe(1);
 
     // Now delivered
@@ -79,12 +79,12 @@ describe("Event Outbox — Arc Integration", () => {
     await outbox.store({ type: "b", payload: {}, meta: { id: "e2", timestamp: new Date() } });
 
     // First relay
-    await outbox.relay();
+    await outbox.relayBatch();
     expect(publishSpy).toHaveBeenCalledTimes(2);
 
     // Second relay — nothing pending
     publishSpy.mockClear();
-    const secondRelay = await outbox.relay();
+    const secondRelay = (await outbox.relayBatch()).relayed;
     expect(secondRelay).toBe(0);
     expect(publishSpy).not.toHaveBeenCalled();
   });

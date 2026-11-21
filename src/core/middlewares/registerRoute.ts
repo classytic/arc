@@ -62,7 +62,7 @@ const groupLimits = new WeakMap<object, Map<string, string>>();
  * mounting two resources at the same prefix, custom routes that share a
  * URL with another plugin. Fastify's default message ("Method 'GET'
  * already declared for route '/'") gives no hint at the resource-shaped
- * fix — `disabledRoutes: ['list']` — so wrap it with one.
+ * fix — leave the op out of `crud` — so wrap it with one.
  */
 export function tryRegisterRoute(
   fastify: FastifyWithDecorators,
@@ -181,10 +181,10 @@ export function tryRegisterRoute(
     const opHint = context.op ? ` (op: ${context.op})` : "";
     const fixHint =
       context.op && ["list", "get", "create", "update", "delete"].includes(context.op)
-        ? ` Suppress the auto-CRUD route with \`disabledRoutes: ['${context.op}']\`.`
-        : " If a custom route in `routes:` collides with auto-CRUD, add" +
-          " `disabledRoutes: ['list' | 'get' | 'create' | 'update' | 'delete']`" +
-          " to `defineResource()` to suppress the matching auto-CRUD route.";
+        ? ` Suppress the auto-CRUD route by leaving '${context.op}' out of the \`crud\` allow-list.`
+        : " If a custom route in `routes:` collides with auto-CRUD, leave the matching op" +
+          " out of the `crud` allow-list (`crud: { list: true, get: true, ... }`) in" +
+          " `defineResource()` to suppress the auto-CRUD route.";
 
     const enhanced = new Error(
       `[arc] Duplicate route ${method} ${url} on resource "${context.resourceName}"${opHint}.${fixHint}` +

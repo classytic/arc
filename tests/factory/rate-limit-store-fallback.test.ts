@@ -116,7 +116,11 @@ describe("rateLimit.storeFallback", () => {
     const { app, statuses, warnings, recoveries } = await buildApp({ redis: fake.client });
 
     expect((await ping(app)).statusCode).toBe(200);
-    expect(fake.counts.size).toBe(1); // counted in the shared store
+    // Counted in the shared store: the request's own bucket, plus the early per-IP ceiling
+    // that rides on the same store under its own prefix.
+    const keys = [...fake.counts.keys()];
+    expect(keys.filter((k) => !k.includes("arc-ip-ceiling:"))).toHaveLength(1);
+    expect(keys.filter((k) => k.includes("arc-ip-ceiling:"))).toHaveLength(1);
 
     fake.state.mode = "error";
     const during = [];

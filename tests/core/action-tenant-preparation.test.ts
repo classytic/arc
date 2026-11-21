@@ -21,7 +21,7 @@ describe("action tenant preparation", () => {
           }),
         ],
         actions: { process: { id: false, handler } },
-        disableDefaultRoutes: true,
+        crud: false,
       });
       const app = Fastify();
       if (cached)

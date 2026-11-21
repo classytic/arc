@@ -70,7 +70,7 @@ function buildResource(opts: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     adapter: opts.adapter as any,
     permissions: { list: allowPublic(), get: allowPublic() },
-    disableDefaultRoutes: true,
+    crud: false,
     ...(opts.cascade ? { onTenantDelete: { strategy: { type: "hard" as const } } } : {}),
     ...(opts.tenantField !== undefined ? { tenantField: opts.tenantField } : {}),
   });

@@ -2,7 +2,7 @@
 import { conjoinPolicyFilters } from "../permissions/filter-merge.js";
 import type { RequestScope } from "../scope/types.js";
 import { getOrgId, getScopeContext, getTeamId, hasOrgAccess, isElevated } from "../scope/types.js";
-import type { ArcInternalMetadata, IRequestContext } from "../types/index.js";
+import type { ArcInternalMetadata, IRequestContext, RouteDefinition } from "../types/index.js";
 import { createDomainError } from "../utils/errors.js";
 
 export type TenantFieldSpec =
@@ -46,6 +46,24 @@ export function withoutTenantInjection<T>(middlewares: readonly T[] | undefined)
       preparation.mode === "inject"
     );
   });
+}
+
+/**
+ * The tenant middlewares a custom or preset route runs, per `RouteDefinition.tenantScope`.
+ * The one rule HTTP and MCP share; empty when the resource has no multiTenant preset.
+ */
+export function routeTenantMiddlewares<T>(
+  route: Pick<RouteDefinition, "tenantScope" | "_tenantSlot" | "rawHandler">,
+  middlewares: Readonly<Record<string, readonly T[] | undefined>> | undefined,
+): T[] {
+  const scoped = middlewares?.tenantScope;
+  if (!scoped?.length || route.tenantScope === false) return [];
+  if (route.tenantScope === true) return [...scoped];
+  if (route.rawHandler !== undefined) return [];
+  if (route._tenantSlot) {
+    return (middlewares?.[route._tenantSlot] ?? []).filter((mw) => isTenantPreparation(mw));
+  }
+  return withoutTenantInjection(scoped);
 }
 
 export function prepareTenancy(

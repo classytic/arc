@@ -65,14 +65,14 @@ export default { fetch: toFetchHandler(app) };
 
 - Unset `methods` → arc's verbs (`GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS`), not `@fastify/cors`'s `GET,HEAD,POST`, when `origin` is an explicit allow-list (string, array, RegExp). `origin: true` or a function keeps `GET,HEAD,POST` (boot warning with `credentials: true`). Any resolved list that omits a verb your routes use (e.g. `origin: true` without credentials vs CRUD `PATCH`/`DELETE`) logs one `onReady` warning naming the verbs.
 - Production without `cors.origin` warns. `origin: '*'` with `credentials: true` throws at boot; use an allow-list.
-- Arc merges its headers (`x-organization-id`, `x-arc-scope`, `x-request-id`) into a declared `allowedHeaders` list and always exposes its own response headers.
-- Mobile webviews (Capacitor, Ionic): add webview origins and expose the Better Auth bearer header.
+- Arc merges its headers (`x-organization-id`, `x-arc-scope`, `x-request-id`) into a declared `allowedHeaders` list and always exposes its own response headers (`set-auth-token`, `x-request-id`), so browser code can read the request id that error bodies quote as `correlationId`.
+- Mobile webviews (Capacitor, Ionic): add webview origins; arc already exposes the Better Auth bearer header.
 
 ```typescript
 cors: {
   origin: [...webOrigins, 'https://localhost', 'capacitor://localhost'],
   credentials: true,
-  exposedHeaders: ['set-auth-token'],   // Better Auth bearer plugin; without it JS cannot read the token
+  exposedHeaders: ['x-total-count'],   // your own headers; arc adds set-auth-token and x-request-id
 },
 trustProxy: true,
 ```

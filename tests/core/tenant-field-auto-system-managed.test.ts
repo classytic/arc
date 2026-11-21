@@ -39,7 +39,7 @@ describe("2.10.6 · auto-mark tenantField as systemManaged", () => {
     const resource = defineResource<Invoice>({
       name: "invoice",
       tenantField: "organizationId",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -62,7 +62,7 @@ describe("2.10.6 · auto-mark tenantField as systemManaged", () => {
     const resource = defineResource<Invoice>({
       name: "invoice-opt-out",
       tenantField: "organizationId",
-      disableDefaultRoutes: true,
+      crud: false,
       schemaOptions: {
         fieldRules: {
           organizationId: { systemManaged: false },
@@ -89,7 +89,7 @@ describe("2.10.6 · auto-mark tenantField as systemManaged", () => {
     const resource = defineResource<Widget>({
       name: "widget",
       tenantField: "accountId",
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -112,7 +112,7 @@ describe("2.10.6 · auto-mark tenantField as systemManaged", () => {
     const resource = defineResource<Widget>({
       name: "platform-widget",
       tenantField: false,
-      disableDefaultRoutes: true,
+      crud: false,
       permissions: {
         list: allowPublic(),
         get: allowPublic(),
@@ -181,7 +181,7 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
     const resource = defineResource({
       name: "probe",
       prefix: "/probe",
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
@@ -226,7 +226,7 @@ describe("2.10.6 · first-class req.scope projection on IRequestContext", () => 
     const resource = defineResource({
       name: "probe-public",
       prefix: "/probe-public",
-      disableDefaultRoutes: true,
+      crud: false,
       routes: [
         {
           method: "GET",
